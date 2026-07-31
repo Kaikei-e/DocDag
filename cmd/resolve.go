@@ -28,7 +28,7 @@ func newResolveCmd() *cobra.Command {
 			}
 			ids, err := graph.Resolve(g, id, config.EdgeSupersedes)
 			if err != nil {
-				return domainErr("resolve %s: %v", id, err)
+				return domainErr("%v", err)
 			}
 			out := cmd.OutOrStdout()
 			if format == formatJSON {

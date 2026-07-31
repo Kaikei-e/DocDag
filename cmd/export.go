@@ -48,16 +48,21 @@ func runExport(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 
-	out := cmd.OutOrStdout()
-	if target != "" && target != "-" {
-		file, err := os.Create(target)
-		if err != nil {
-			return ioErr(fmt.Errorf("create %s: %w", target, err))
-		}
-		defer func() { _ = file.Close() }()
-		out = file
+	if target == "" || target == "-" {
+		return writeGraph(cmd.OutOrStdout(), format, g, opts)
 	}
-	return writeGraph(out, format, g, opts)
+	file, err := os.Create(target)
+	if err != nil {
+		return ioErr(fmt.Errorf("create %s: %w", target, err))
+	}
+	if err := writeGraph(file, format, g, opts); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return ioErr(fmt.Errorf("close %s: %w", target, err))
+	}
+	return nil
 }
 
 func writeGraph(out io.Writer, format string, g *model.Graph, opts render.Options) error {

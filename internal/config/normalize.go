@@ -1,6 +1,11 @@
 package config
 
-import "github.com/Kaikei-e/DocDag/internal/model"
+import (
+	"regexp"
+	"strings"
+
+	"github.com/Kaikei-e/DocDag/internal/model"
+)
 
 // IDNormalizer turns raw references and filenames into node identity. Presets
 // supply the implementation; the engine treats the result as opaque.
@@ -19,12 +24,32 @@ type ADRNormalizer struct {
 	Pad int
 }
 
+var (
+	adrDigits   = regexp.MustCompile(`[0-9]+`)
+	adrFilename = regexp.MustCompile(`^[0-9]{3,6}(-[A-Za-z0-9-]+)?\.md$`)
+)
+
 // Normalize extracts the digit run from ref and pads it to the display width.
-func (n ADRNormalizer) Normalize(ref string) (model.ID, bool) { return "", false }
+// Leading zeros are stripped textually, so an identifier wider than the machine
+// integer range still normalizes.
+func (n ADRNormalizer) Normalize(ref string) (model.ID, bool) {
+	digits := adrDigits.FindString(strings.TrimSpace(ref))
+	if digits == "" {
+		return "", false
+	}
+	id := strings.TrimLeft(digits, "0")
+	if id == "" {
+		id = "0"
+	}
+	if missing := n.Pad - len(id); missing > 0 {
+		id = strings.Repeat("0", missing) + id
+	}
+	return model.ID(id), true
+}
 
 // MatchesFilename reports whether name is `NNNN.md` or `NNNN-kebab-title.md`
 // with a digit run of width 3 to 6.
-func (n ADRNormalizer) MatchesFilename(name string) bool { return false }
+func (n ADRNormalizer) MatchesFilename(name string) bool { return adrFilename.MatchString(name) }
 
 // Width reports the display width used when padding identifiers.
 func (n ADRNormalizer) Width() int { return n.Pad }

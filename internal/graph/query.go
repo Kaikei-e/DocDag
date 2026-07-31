@@ -1,6 +1,10 @@
 package graph
 
 import (
+	"fmt"
+	"slices"
+	"strings"
+
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
 )
@@ -40,33 +44,170 @@ type QueryResult struct {
 // documents. A document with no successors resolves to itself. It reports
 // model.ErrUnknownID for an absent id and model.ErrCycle on a cyclic walk.
 func Resolve(g *model.Graph, id model.ID, t model.EdgeType) ([]model.ID, error) {
-	return nil, model.ErrNotImplemented
+	if _, ok := g.Nodes[id]; !ok {
+		return nil, fmt.Errorf("resolve %s: %w", id, model.ErrUnknownID)
+	}
+
+	successors := Reverse(g, t)
+	color := make(map[model.ID]int, len(successors))
+	sinks := make(map[model.ID]bool)
+	color[id] = colorGray
+	stack := []visitFrame{{id: id}}
+	for len(stack) > 0 {
+		frame := &stack[len(stack)-1]
+		neighbors := successors[frame.id]
+		if frame.next >= len(neighbors) {
+			if len(neighbors) == 0 {
+				sinks[frame.id] = true
+			}
+			color[frame.id] = colorBlack
+			stack = stack[:len(stack)-1]
+			continue
+		}
+		next := neighbors[frame.next]
+		frame.next++
+		switch color[next] {
+		case colorGray:
+			return nil, fmt.Errorf("resolve %s through %s: %w", id, next, model.ErrCycle)
+		case colorWhite:
+			color[next] = colorGray
+			stack = append(stack, visitFrame{id: next})
+		}
+	}
+
+	resolved := make([]model.ID, 0, len(sinks))
+	for sink := range sinks {
+		resolved = append(resolved, sink)
+	}
+	slices.Sort(resolved)
+	return resolved, nil
 }
 
 // Ancestors returns every document reachable from id by walking typed edges
 // backwards, sorted and excluding id itself.
 func Ancestors(g *model.Graph, id model.ID, types ...model.EdgeType) ([]model.ID, error) {
-	return nil, model.ErrNotImplemented
+	return reachable(g, id, Reverse(g, types...), DirectionAncestors)
 }
 
 // Descendants returns every document reachable from id by walking typed edges
 // forwards, sorted and excluding id itself.
 func Descendants(g *model.Graph, id model.ID, types ...model.EdgeType) ([]model.ID, error) {
-	return nil, model.ErrNotImplemented
+	return reachable(g, id, Adjacency(g, types...), DirectionDescendants)
+}
+
+func reachable(g *model.Graph, id model.ID, adj map[model.ID][]model.ID, direction Direction) ([]model.ID, error) {
+	if _, ok := g.Nodes[id]; !ok {
+		return nil, fmt.Errorf("%s of %s: %w", direction, id, model.ErrUnknownID)
+	}
+
+	seen := map[model.ID]bool{id: true}
+	found := []model.ID{}
+	stack := []model.ID{id}
+	for len(stack) > 0 {
+		current := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		for _, next := range adj[current] {
+			if seen[next] {
+				continue
+			}
+			seen[next] = true
+			stack = append(stack, next)
+			if _, known := g.Nodes[next]; known {
+				found = append(found, next)
+			}
+		}
+	}
+	slices.Sort(found)
+	return found, nil
 }
 
 // ReferenceNeighbors returns the reference-layer neighbours of id, sorted.
-func ReferenceNeighbors(g *model.Graph, id model.ID) []model.ID { return nil }
+func ReferenceNeighbors(g *model.Graph, id model.ID) []model.ID {
+	neighbors := []model.ID{}
+	for _, e := range g.RefEdges {
+		switch {
+		case e.From == id && e.To != id:
+			neighbors = append(neighbors, e.To)
+		case e.To == id && e.From != id:
+			neighbors = append(neighbors, e.From)
+		}
+	}
+	slices.Sort(neighbors)
+	return slices.Compact(neighbors)
+}
 
 // Query runs a reachability query and overlays reference-layer neighbours when
 // asked for them.
 func Query(g *model.Graph, id model.ID, opts QueryOptions) ([]QueryResult, error) {
-	return nil, model.ErrNotImplemented
+	var (
+		reached []model.ID
+		err     error
+	)
+	switch opts.Direction {
+	case DirectionAncestors:
+		reached, err = Ancestors(g, id, opts.Types...)
+	case DirectionDescendants:
+		reached, err = Descendants(g, id, opts.Types...)
+	default:
+		return nil, fmt.Errorf("query %s: direction %q is neither %s nor %s", id, opts.Direction, DirectionAncestors, DirectionDescendants)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("query %s: %w", id, err)
+	}
+
+	results := make([]QueryResult, 0, len(reached))
+	seen := map[model.ID]bool{id: true}
+	for _, r := range reached {
+		seen[r] = true
+		results = append(results, QueryResult{ID: r, Layer: LayerTyped})
+	}
+	if !opts.IncludeRefs {
+		return results, nil
+	}
+	for _, r := range ReferenceNeighbors(g, id) {
+		if seen[r] {
+			continue
+		}
+		seen[r] = true
+		results = append(results, QueryResult{ID: r, Layer: LayerReference})
+	}
+	return results, nil
 }
 
 // Binding reports whether a document is currently binding: its status is the
 // configured accepted value and no document supersedes it.
-func Binding(g *model.Graph, cfg config.Config, id model.ID) bool { return false }
+func Binding(g *model.Graph, cfg config.Config, id model.ID) bool {
+	n, ok := g.Nodes[id]
+	if !ok {
+		return false
+	}
+	for _, e := range g.EdgesOfType(config.EdgeSupersedes) {
+		if e.To == id {
+			return false
+		}
+	}
+	return isAccepted(cfg, n)
+}
 
 // BindingSet lists every binding document, sorted.
-func BindingSet(g *model.Graph, cfg config.Config) []model.ID { return nil }
+func BindingSet(g *model.Graph, cfg config.Config) []model.ID {
+	superseded := make(map[model.ID]bool)
+	for _, e := range g.EdgesOfType(config.EdgeSupersedes) {
+		superseded[e.To] = true
+	}
+	binding := []model.ID{}
+	for _, id := range g.NodeIDs() {
+		if superseded[id] {
+			continue
+		}
+		if isAccepted(cfg, g.Nodes[id]) {
+			binding = append(binding, id)
+		}
+	}
+	return binding
+}
+
+func isAccepted(cfg config.Config, n *model.Node) bool {
+	status, _ := canonicalStatus(cfg, n.Status)
+	return strings.EqualFold(status, config.StatusAccepted)
+}

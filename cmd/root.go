@@ -127,7 +127,7 @@ func loadGraph(cmd *cobra.Command) (*model.Graph, config.Config, error) {
 	}
 	docs, err := parse.Dir(cfg.Dir, cfg)
 	if err != nil {
-		return nil, cfg, ioErr(fmt.Errorf("read %s: %w", cfg.Dir, err))
+		return nil, cfg, ioErr(err)
 	}
 	g, err := graph.Build(docs, cfg)
 	if err != nil {

@@ -2,6 +2,11 @@
 // identity, the typed constraint graph, and validation findings.
 package model
 
+import (
+	"fmt"
+	"slices"
+)
+
 // ID is a normalized, opaque document identifier. Presets decide how a raw
 // reference or filename token becomes an ID; the engine only compares them.
 type ID string
@@ -35,7 +40,15 @@ const (
 )
 
 // Rank orders severities for deterministic output, errors first.
-func (s Severity) Rank() int { return 0 }
+func (s Severity) Rank() int {
+	switch s {
+	case SeverityError:
+		return 0
+	case SeverityWarn:
+		return 1
+	}
+	return 2
+}
 
 // Built-in structural check names and the preset rule names.
 const (
@@ -61,8 +74,21 @@ type Node struct {
 	Attrs  map[string]any `json:"-"`
 }
 
-// Attr reports the scalar frontmatter value stored under key.
-func (n *Node) Attr(key string) (string, bool) { return "", false }
+// Attr reports the scalar frontmatter value stored under key. A list or mapping
+// value is not scalar and reports absent, so rules never match on it.
+func (n *Node) Attr(key string) (string, bool) {
+	raw, ok := n.Attrs[key]
+	if !ok || raw == nil {
+		return "", false
+	}
+	switch value := raw.(type) {
+	case string:
+		return value, true
+	case bool, int, int64, uint64, float64:
+		return fmt.Sprint(value), true
+	}
+	return "", false
+}
 
 // Edge is one directed relation between two nodes. Reference-layer edges carry
 // an empty Type and OriginReference.
@@ -100,14 +126,37 @@ type Graph struct {
 }
 
 // NewGraph returns an empty graph ready for population.
-func NewGraph() *Graph { return nil }
+func NewGraph() *Graph {
+	return &Graph{Nodes: make(map[ID]*Node)}
+}
 
 // Node looks up a node by identifier.
-func (g *Graph) Node(id ID) (*Node, bool) { return nil, false }
+func (g *Graph) Node(id ID) (*Node, bool) {
+	n, ok := g.Nodes[id]
+	return n, ok
+}
 
 // NodeIDs returns every node identifier in ascending order.
-func (g *Graph) NodeIDs() []ID { return nil }
+func (g *Graph) NodeIDs() []ID {
+	ids := make([]ID, 0, len(g.Nodes))
+	for id := range g.Nodes {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	return ids
+}
 
 // EdgesOfType returns the typed edges of one type, or every typed edge when t
-// is empty.
-func (g *Graph) EdgesOfType(t EdgeType) []Edge { return nil }
+// is empty. Edges keep the order they hold on the graph.
+func (g *Graph) EdgesOfType(t EdgeType) []Edge {
+	if t == "" {
+		return slices.Clone(g.Edges)
+	}
+	edges := make([]Edge, 0, len(g.Edges))
+	for _, e := range g.Edges {
+		if e.Type == t {
+			edges = append(edges, e)
+		}
+	}
+	return edges
+}

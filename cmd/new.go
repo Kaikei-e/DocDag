@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Kaikei-e/DocDag/internal/model"
 	"github.com/Kaikei-e/DocDag/internal/newdoc"
 )
 
@@ -42,6 +44,9 @@ func runNew(cmd *cobra.Command, args []string) error {
 	req := newdoc.Request{Title: args[0], Supersedes: supersedes, DependsOn: dependsOn}
 	path, err := newdoc.Create(g, cfg, req)
 	if err != nil {
+		if errors.Is(err, model.ErrUnknownID) {
+			return domainErr("%v", err)
+		}
 		return ioErr(fmt.Errorf("create document: %w", err))
 	}
 	fmt.Fprintln(cmd.OutOrStdout(), path)
