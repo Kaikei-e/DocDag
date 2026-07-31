@@ -1,5 +1,8 @@
 # DocDag
 
+[![CI](https://github.com/Kaikei-e/DocDag/actions/workflows/ci.yml/badge.svg)](https://github.com/Kaikei-e/DocDag/actions/workflows/ci.yml)
+[![Release](https://github.com/Kaikei-e/DocDag/actions/workflows/release.yml/badge.svg)](https://github.com/Kaikei-e/DocDag/actions/workflows/release.yml)
+
 DocDag reads a directory of Markdown documents with YAML frontmatter, extracts a **typed directed
 graph** from it, enforces DAG invariants on that graph, and answers queries about it. It ships one
 preset, `adr`, for Architecture Decision Records.
