@@ -159,12 +159,16 @@ func normalize(g *model.Graph, cfg config.Config, ref string) (model.ID, error) 
 	return id, nil
 }
 
+// version is stamped by the release build via -ldflags "-X ...cmd.version=".
+var version = "dev"
+
 // newRootCmd builds a fresh command tree, so every test gets an isolated one.
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "docdag",
 		Short:         "Extract, validate and query a typed graph of Markdown documents",
 		Long:          "docdag builds a typed directed graph from Markdown documents with YAML\nfrontmatter, enforces DAG invariants on it and answers graph queries.",
+		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
