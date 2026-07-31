@@ -214,6 +214,28 @@ func TestBuildTypedEdges(t *testing.T) {
 		}
 	})
 
+	t.Run("an edge entry that is not a reference at all is recorded as dangling", func(t *testing.T) {
+		// An unquoted wikilink decodes as a nested sequence rather than a string.
+		docs := []*parse.Document{
+			testDoc("0002", map[string]any{
+				"status":     "accepted",
+				"supersedes": []any{[]any{uint64(1)}},
+			}, ""),
+		}
+
+		g, err := Build(docs, cfg)
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		if len(g.Edges) != 0 {
+			t.Fatalf("edges = %+v, want none", g.Edges)
+		}
+		f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingRef, model.SeverityError, "0002")
+		if !strings.Contains(f.Detail, config.EdgeSupersedes.String()) {
+			t.Errorf("detail = %q, want it to name the edge type", f.Detail)
+		}
+	})
+
 	t.Run("typed edges are sorted deterministically whatever the document order", func(t *testing.T) {
 		frontmatter := map[string]map[string]any{
 			"0001": {"status": "superseded"},

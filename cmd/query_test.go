@@ -159,6 +159,9 @@ func TestQueryArgumentErrors(t *testing.T) {
 		{name: "binding with a reference", args: []string{"query", "--binding", "0001"}, want: "binding"},
 		{name: "both directions", args: []string{"query", "0001", "--ancestors", "--descendants"}, want: "mutually exclusive"},
 		{name: "unknown edge type", args: []string{"query", "0001", "--edge", "relates-to"}, want: "unknown edge type"},
+		{name: "binding with a direction", args: []string{"query", "--binding", "--ancestors"}, want: "binding"},
+		{name: "binding with an edge filter", args: []string{"query", "--binding", "--edge", "supersedes"}, want: "binding"},
+		{name: "binding with the reference layer", args: []string{"query", "--binding", "--include-refs"}, want: "binding"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

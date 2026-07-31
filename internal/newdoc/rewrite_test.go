@@ -125,6 +125,27 @@ func TestRewriteStatus(t *testing.T) {
 			status:  config.StatusSuperseded,
 			wantErr: true,
 		},
+		{
+			name:   "an empty frontmatter block takes the status the parser accepts",
+			src:    "---\n---\nBody only.\n",
+			field:  config.DefaultStatusField,
+			status: config.StatusSuperseded,
+			want:   "---\nstatus: superseded\n---\nBody only.\n",
+		},
+		{
+			name:   "windows line endings survive the rewrite",
+			src:    "---\r\ntitle: Serve images from a CDN\r\nstatus: accepted\r\n---\r\n\r\nBody.\r\n",
+			field:  config.DefaultStatusField,
+			status: config.StatusSuperseded,
+			want:   "---\r\ntitle: Serve images from a CDN\r\nstatus: superseded\r\n---\r\n\r\nBody.\r\n",
+		},
+		{
+			name:   "an absent field on a windows document is appended with its line ending",
+			src:    "---\r\ntitle: Serve images from a CDN\r\n---\r\n\r\nBody.\r\n",
+			field:  config.DefaultStatusField,
+			status: config.StatusSuperseded,
+			want:   "---\r\ntitle: Serve images from a CDN\r\nstatus: superseded\r\n---\r\n\r\nBody.\r\n",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -415,5 +436,49 @@ func TestCreateWithoutADateUsesToday(t *testing.T) {
 	}
 	if _, err := time.Parse(DateLayout, date); err != nil {
 		t.Errorf("date = %q, want a %s date: %v", date, DateLayout, err)
+	}
+}
+
+func TestCreateLeavesNothingHalfApplied(t *testing.T) {
+	dir, g, cfg := testCorpus(t)
+	first := filepath.Join(dir, "0001-authenticate-with-session-cookies.md")
+	broken := filepath.Join(dir, "0002-authenticate-with-api-keys.md")
+	if err := os.WriteFile(broken, []byte("---\ntitle: Authenticate integrations with API keys\nstatus: accepted\n\nBody.\n"), 0o644); err != nil {
+		t.Fatalf("write malformed document: %v", err)
+	}
+
+	path, err := Create(g, cfg, Request{
+		Title:      "Rotate signing keys weekly",
+		Supersedes: []string{"0001", "0002"},
+		Date:       testFixedDate(),
+	})
+
+	if err == nil {
+		t.Fatalf("Create = %q, want an error: one of the superseded documents cannot be rewritten", path)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "0003-rotate-signing-keys-weekly.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("Create wrote the new document even though a rewrite failed")
+	}
+	kept, err := os.ReadFile(first)
+	if err != nil {
+		t.Fatalf("read first document: %v", err)
+	}
+	if string(kept) != corpusFirst {
+		t.Errorf("a document was rewritten before the failure:\ngot:\n%s\nwant:\n%s", kept, corpusFirst)
+	}
+}
+
+func TestRewriteStatusRefusesADocumentRatherThanAConfiguration(t *testing.T) {
+	for _, src := range []string{"# No frontmatter\n", "---\ntitle: Unterminated\n"} {
+		err := func() error {
+			_, err := RewriteStatus([]byte(src), config.DefaultStatusField, config.StatusSuperseded)
+			return err
+		}()
+		if !errors.Is(err, model.ErrInvalidDocument) {
+			t.Errorf("RewriteStatus(%q) = %v, want it to wrap model.ErrInvalidDocument", src, err)
+		}
+		if errors.Is(err, model.ErrInvalidConfig) {
+			t.Errorf("RewriteStatus(%q) = %v, want a malformed document not to read as a broken configuration", src, err)
+		}
 	}
 }

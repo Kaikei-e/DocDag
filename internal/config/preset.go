@@ -7,8 +7,8 @@ import (
 )
 
 // DerivedSupersededPattern matches the MADR status string "superseded by <ref>"
-// (and the hyphenated spelling) and captures the referenced document.
-const DerivedSupersededPattern = `(?i)^superseded[ -]by\s+(\S+)`
+// (and the hyphenated spellings) and captures the referenced document.
+const DerivedSupersededPattern = `(?i)^superseded[\s-]+by[\s-]+(\S+)`
 
 // ADRPreset returns the built-in Architecture Decision Record configuration.
 func ADRPreset() Config {

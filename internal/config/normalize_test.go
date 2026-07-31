@@ -22,6 +22,8 @@ func TestADRNormalizerNormalize(t *testing.T) {
 		{name: "a relative link target", pad: 4, ref: "../adr/0339-use-postgres.md", want: "0339", ok: true},
 		{name: "a link target with a fragment", pad: 4, ref: "0339-use-postgres.md#decision-outcome", want: "0339", ok: true},
 		{name: "the first digit run is the identity", pad: 4, ref: "0007-use-http2.md", want: "0007", ok: true},
+		{name: "a digit in a directory component is not the identity", pad: 4, ref: "docs/2024/0339-use-postgres.md", want: "0339", ok: true},
+		{name: "a version-qualified reference", pad: 4, ref: "v2/0003", want: "0003", ok: true},
 		{name: "a lowercase prefix", pad: 4, ref: "adr-339", want: "0339", ok: true},
 		{name: "a spaced prefix", pad: 4, ref: "ADR 339", want: "0339", ok: true},
 		{name: "surrounding whitespace", pad: 4, ref: "  339  ", want: "0339", ok: true},

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -527,4 +528,79 @@ func TestResolve(t *testing.T) {
 			t.Fatalf("err = %v, want it to wrap model.ErrInvalidConfig", err)
 		}
 	})
+
+	t.Run("a config file that does not decode is an invalid configuration", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml":                 "id_width: [not, a, number\n",
+			"docs/adr/0001-a-decision.md": testDocument,
+		})
+
+		_, err := Resolve(Options{Root: root})
+
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("err = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+}
+
+func TestMergeRetargetsThePresetOntoARenamedStatusField(t *testing.T) {
+	// A one-line "status_field: state" override has to carry the preset rules
+	// and derived edges with it, or they inspect an attribute nothing writes.
+	got := Merge(ADRPreset(), Config{StatusField: "state"})
+
+	for _, rule := range got.Rules {
+		if _, ok := rule.When.Attr["state"]; !ok {
+			t.Errorf("rule %q inspects %v, want the configured status field", rule.Name, rule.When.Attr)
+		}
+	}
+	for _, spec := range got.DerivedEdges {
+		if spec.Field != "state" {
+			t.Errorf("derived edge reads field %q, want the configured status field", spec.Field)
+		}
+	}
+	if base := ADRPreset(); base.Rules[0].When.Attr[DefaultStatusField].Not == nil {
+		t.Error("Merge rewrote the preset it was given rather than a copy")
+	}
+}
+
+func TestMergeKeepsAnExplicitRuleOverrideOnARenamedStatusField(t *testing.T) {
+	override := Config{
+		StatusField: "state",
+		Rules: []Rule{{
+			Name:     "custom",
+			Severity: model.SeverityWarn,
+			When:     Condition{Attr: map[string]AttrCondition{"lifecycle": {Eq: ptr("done")}}},
+			Message:  "the author's own rule",
+		}},
+	}
+
+	got := Merge(ADRPreset(), override)
+
+	if len(got.Rules) != 1 {
+		t.Fatalf("rules = %+v, want only the override", got.Rules)
+	}
+	if _, ok := got.Rules[0].When.Attr["lifecycle"]; !ok {
+		t.Fatalf("rule attr = %v, want the override's own key untouched", got.Rules[0].When.Attr)
+	}
+}
+
+func ptr(v string) *string { return &v }
+
+func TestDiscoverReportsAnUnreadableCandidate(t *testing.T) {
+	// A candidate that exists but cannot be read must not be mistaken for one
+	// that is absent: silently validating a later directory answers a question
+	// nobody asked.
+	root := testTree(t, map[string]string{
+		"docs/adr":               "not a directory\n",
+		"adr/0001-a-decision.md": testDocument,
+	})
+
+	got, err := Discover(root, ADRPreset().Normalizer())
+
+	if err == nil {
+		t.Fatalf("Discover = %q, want an error naming the unreadable candidate", got)
+	}
+	if !strings.Contains(err.Error(), filepath.Join("docs", "adr")) {
+		t.Errorf("err = %v, want it to name docs/adr", err)
+	}
 }

@@ -48,7 +48,10 @@ func Resolve(g *model.Graph, id model.ID, t model.EdgeType) ([]model.ID, error) 
 		return nil, fmt.Errorf("resolve %s: %w", id, model.ErrUnknownID)
 	}
 
-	successors := Reverse(g, t)
+	// A successor the corpus does not hold is a dangling reference, reported by
+	// the structural checks: resolution stops there rather than answering with
+	// an identifier that names no document.
+	successors := retainKnown(g, Reverse(g, t))
 	color := make(map[model.ID]int, len(successors))
 	sinks := make(map[model.ID]bool)
 	color[id] = colorGray

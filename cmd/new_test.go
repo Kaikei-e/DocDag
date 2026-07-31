@@ -169,6 +169,30 @@ func TestNewLeavesTheCorpusValid(t *testing.T) {
 	}
 }
 
+func TestNewJSONReportsTheCreatedPath(t *testing.T) {
+	dir := copyFixture(t, "fan-in")
+
+	got := run(t, "new", "Rotate signing keys weekly", "--format", "json", "--dir", dir)
+
+	assertExit(t, got, 0)
+	payload := decodeJSON[map[string]string](t, got.stdout)
+	want := filepath.Join(dir, "0004-rotate-signing-keys-weekly.md")
+	if payload["path"] != want {
+		t.Errorf("payload = %v, want the created path %q", payload, want)
+	}
+}
+
+func TestNewRejectsAnUnknownFormat(t *testing.T) {
+	dir := copyFixture(t, "fan-in")
+
+	got := run(t, "new", "Rotate signing keys weekly", "--format", "yaml", "--dir", dir)
+
+	assertExit(t, got, 2)
+	if _, err := os.Stat(filepath.Join(dir, "0004-rotate-signing-keys-weekly.md")); !os.IsNotExist(err) {
+		t.Error("new created a document despite a usage error")
+	}
+}
+
 func TestNewResolvesToTheCreatedDocument(t *testing.T) {
 	dir := copyFixture(t, "ok-basic")
 

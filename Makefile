@@ -7,7 +7,7 @@ build:
 	go build -o $(BINARY) .
 
 test:
-	go test $(PKGS)
+	go test -race -shuffle=on -count=1 $(PKGS)
 
 vet:
 	go vet $(PKGS)
@@ -25,4 +25,3 @@ check: fmt-check vet test
 
 clean:
 	rm -f $(BINARY)
-	rm -rf dist

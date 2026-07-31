@@ -3,9 +3,29 @@ package parse
 import (
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 )
+
+// patterns caches compiled derived-edge patterns: a corpus applies the same
+// handful of patterns once per document, and compiling dominates matching.
+var patterns sync.Map
+
+// pattern compiles a derived-edge pattern once per process.
+func pattern(expr string) (*regexp.Regexp, bool) {
+	if cached, ok := patterns.Load(expr); ok {
+		compiled, ok := cached.(*regexp.Regexp)
+		return compiled, ok
+	}
+	compiled, err := regexp.Compile(expr)
+	if err != nil {
+		patterns.Store(expr, nil)
+		return nil, false
+	}
+	patterns.Store(expr, compiled)
+	return compiled, true
+}
 
 // DerivedEdge is an edge inferred from a frontmatter field value instead of a
 // declared edge key, such as the MADR status string "superseded by 0003".
@@ -22,11 +42,11 @@ func MatchDerived(value string, spec config.DerivedEdgeSpec) (string, bool) {
 	if value == "" || spec.Pattern == "" {
 		return "", false
 	}
-	pattern, err := regexp.Compile(spec.Pattern)
-	if err != nil {
+	compiled, ok := pattern(spec.Pattern)
+	if !ok {
 		return "", false
 	}
-	match := pattern.FindStringSubmatch(value)
+	match := compiled.FindStringSubmatch(value)
 	if len(match) < 2 {
 		return "", false
 	}

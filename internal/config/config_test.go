@@ -203,6 +203,13 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			// Without a capture group the pattern has nothing to point at, and
+			// every match would be dropped at parse time without a word.
+			name:    "a derived edge whose pattern captures nothing",
+			mutate:  func(c *Config) { c.DerivedEdges[0].Pattern = "(?i)^superseded by" },
+			wantErr: true,
+		},
+		{
 			name:    "a negative identifier width",
 			mutate:  func(c *Config) { c.IDWidth = -1 },
 			wantErr: true,

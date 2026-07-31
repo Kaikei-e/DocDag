@@ -51,11 +51,25 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	if ancestors && descendants {
 		return usageErr("--%s and --%s are mutually exclusive", flagAncestors, flagDescendants)
 	}
+	includeRefs, err := flags.GetBool(flagIncludeRefs)
+	if err != nil {
+		return usageErr("%v", err)
+	}
+	edge, err := flags.GetString(flagEdge)
+	if err != nil {
+		return usageErr("%v", err)
+	}
 	if binding && len(args) > 0 {
 		return usageErr("--%s takes no reference", flagBinding)
 	}
 	if !binding && len(args) == 0 {
 		return usageErr("query needs a reference or --%s", flagBinding)
+	}
+	// The binding set is not a walk, so a walk flag alongside it asks for
+	// something the command cannot do.
+	if binding && (ancestors || descendants || includeRefs || edge != "") {
+		return usageErr("--%s takes none of --%s, --%s, --%s and --%s",
+			flagBinding, flagAncestors, flagDescendants, flagEdge, flagIncludeRefs)
 	}
 
 	g, cfg, err := loadGraph(cmd)
@@ -65,6 +79,9 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
 
 	if binding {
+		if err := requireSupersedes(cfg); err != nil {
+			return err
+		}
 		ids := graph.BindingSet(g, cfg)
 		if format == formatJSON {
 			err = render.IDsJSON(out, ids)
@@ -77,16 +94,9 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	opts := graph.QueryOptions{Direction: graph.DirectionDescendants}
+	opts := graph.QueryOptions{Direction: graph.DirectionDescendants, IncludeRefs: includeRefs}
 	if ancestors {
 		opts.Direction = graph.DirectionAncestors
-	}
-	if opts.IncludeRefs, err = flags.GetBool(flagIncludeRefs); err != nil {
-		return usageErr("%v", err)
-	}
-	edge, err := flags.GetString(flagEdge)
-	if err != nil {
-		return usageErr("%v", err)
 	}
 	if edge != "" {
 		if _, ok := cfg.Edge(model.EdgeType(edge)); !ok {

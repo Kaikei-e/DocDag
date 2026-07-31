@@ -55,6 +55,20 @@ func TestLabel(t *testing.T) {
 			want:  "0001 Adopt the 'strangler fig' patter...",
 		},
 		{
+			name:  "a title spanning lines collapses onto one",
+			id:    "0001",
+			title: "Use a message queue\nfor ingestion\n",
+			limit: LabelLimit,
+			want:  "0001 Use a message queue for ingestion",
+		},
+		{
+			name:  "runs of whitespace collapse to single spaces",
+			id:    "0001",
+			title: "Adopt   the\tstrangler fig",
+			limit: LabelLimit,
+			want:  "0001 Adopt the strangler fig",
+		},
+		{
 			name:  "the limit counts runes rather than bytes",
 			id:    "0001",
 			title: "メッセージキューを採用して取り込みを分離する案について",

@@ -1,7 +1,10 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -36,8 +39,13 @@ func Discover(root string, norm IDNormalizer) (string, error) {
 	for _, candidate := range DiscoveryPaths() {
 		dir := filepath.Join(root, filepath.FromSlash(candidate))
 		entries, err := os.ReadDir(dir)
-		if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
 			continue
+		}
+		// A candidate that exists but cannot be read is not the same as an
+		// absent one: falling through would validate a directory nobody named.
+		if err != nil {
+			return "", fmt.Errorf("read documents directory %s: %w", dir, err)
 		}
 		for _, entry := range entries {
 			if entry.IsDir() || !norm.MatchesFilename(entry.Name()) {
@@ -57,7 +65,7 @@ func Load(path string) (Config, error) {
 	}
 	var cfg Config
 	if err := yaml.Unmarshal(src, &cfg); err != nil {
-		return Config{}, fmt.Errorf("decode configuration %s: %w", path, err)
+		return Config{}, fmt.Errorf("decode configuration %s: %v: %w", path, err, model.ErrInvalidConfig)
 	}
 	return cfg, nil
 }
@@ -93,7 +101,47 @@ func Merge(base, override Config) Config {
 	if len(override.Rules) > 0 {
 		merged.Rules = slices.Clone(override.Rules)
 	}
+	if merged.StatusField != base.StatusField {
+		if len(override.Rules) == 0 {
+			merged.Rules = retargetRules(base.Rules, base.StatusField, merged.StatusField)
+		}
+		if len(override.DerivedEdges) == 0 {
+			merged.DerivedEdges = retargetDerivedEdges(base.DerivedEdges, base.StatusField, merged.StatusField)
+		}
+	}
 	return merged
+}
+
+// retargetRules moves the inherited rules onto a renamed status field. A rule
+// that keeps inspecting the old attribute would silently pass, because a
+// missing attribute satisfies every "not" clause.
+func retargetRules(rules []Rule, from, to string) []Rule {
+	out := make([]Rule, 0, len(rules))
+	for _, rule := range rules {
+		cond, ok := rule.When.Attr[from]
+		if ok {
+			attr := make(map[string]AttrCondition, len(rule.When.Attr))
+			maps.Copy(attr, rule.When.Attr)
+			delete(attr, from)
+			attr[to] = cond
+			rule.When.Attr = attr
+		}
+		out = append(out, rule)
+	}
+	return out
+}
+
+// retargetDerivedEdges moves the inherited derived edges onto a renamed status
+// field, so a MADR status string keeps deriving its edge.
+func retargetDerivedEdges(specs []DerivedEdgeSpec, from, to string) []DerivedEdgeSpec {
+	out := make([]DerivedEdgeSpec, 0, len(specs))
+	for _, spec := range specs {
+		if spec.Field == from {
+			spec.Field = to
+		}
+		out = append(out, spec)
+	}
+	return out
 }
 
 // Resolve produces the effective configuration for one CLI invocation,

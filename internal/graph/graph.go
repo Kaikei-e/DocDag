@@ -39,7 +39,11 @@ func Build(docs []*parse.Document, cfg config.Config) (*model.Graph, error) {
 	for _, doc := range docs {
 		for _, spec := range cfg.Edges {
 			t := model.EdgeType(spec.Name)
-			for _, ref := range parse.Refs(doc.Frontmatter, spec.Key) {
+			refs, invalid := parse.Refs(doc.Frontmatter, spec.Key)
+			for _, entry := range invalid {
+				findings = append(findings, unresolvableRef(doc.ID, t, entry))
+			}
+			for _, ref := range refs {
 				target, ok := normalizer.Normalize(ref)
 				if !ok {
 					findings = append(findings, unresolvableRef(doc.ID, t, ref))
@@ -196,6 +200,21 @@ func ReferenceAdjacency(g *model.Graph) map[model.ID][]model.ID {
 	return sortNeighbors(adj)
 }
 
+// retainKnown drops neighbours the corpus does not hold, in place. A walk over
+// the result can only ever name documents that exist.
+func retainKnown(g *model.Graph, adj map[model.ID][]model.ID) map[model.ID][]model.ID {
+	for id, neighbors := range adj {
+		known := make([]model.ID, 0, len(neighbors))
+		for _, next := range neighbors {
+			if _, ok := g.Nodes[next]; ok {
+				known = append(known, next)
+			}
+		}
+		adj[id] = known
+	}
+	return adj
+}
+
 func sortNeighbors(adj map[model.ID][]model.ID) map[model.ID][]model.ID {
 	for id, list := range adj {
 		if len(list) < 2 {
@@ -219,8 +238,10 @@ func statusField(cfg config.Config) string {
 }
 
 // canonicalStatus collapses a status onto the configured vocabulary: a MADR
-// "superseded by 0003" string becomes "superseded". A value the vocabulary does
-// not cover comes back unchanged and unknown.
+// "superseded by 0003" string becomes "superseded". Only a value a configured
+// derived-edge pattern claims may collapse, so prose that merely opens with a
+// vocabulary word stays unknown. A value the vocabulary does not cover comes
+// back unchanged and unknown.
 func canonicalStatus(cfg config.Config, raw string) (string, bool) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
@@ -231,6 +252,9 @@ func canonicalStatus(cfg config.Config, raw string) (string, bool) {
 			return value, true
 		}
 	}
+	if !derivesEdge(cfg, value) {
+		return value, false
+	}
 	for _, known := range cfg.StatusValues {
 		if len(value) <= len(known) || !strings.EqualFold(value[:len(known)], known) {
 			continue
@@ -240,4 +264,19 @@ func canonicalStatus(cfg config.Config, raw string) (string, bool) {
 		}
 	}
 	return value, false
+}
+
+// derivesEdge reports whether a status value produces a derived edge, which is
+// what earns it the right to project onto the vocabulary word it opens with.
+func derivesEdge(cfg config.Config, value string) bool {
+	field := statusField(cfg)
+	for _, spec := range cfg.DerivedEdges {
+		if spec.Field != field {
+			continue
+		}
+		if _, ok := parse.MatchDerived(value, spec); ok {
+			return true
+		}
+	}
+	return false
 }

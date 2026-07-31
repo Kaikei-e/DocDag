@@ -5,6 +5,7 @@ package newdoc
 import (
 	"bytes"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/internal/parse"
 )
 
 // DefaultTemplate is the built-in minimal MADR document template.
@@ -39,8 +41,6 @@ date: {{ .Date }}
 
 // DateLayout is the frontmatter date format.
 const DateLayout = "2006-01-02"
-
-const frontmatterDelimiter = "---\n"
 
 // Request describes the document to create. A zero Date means today.
 type Request struct {
@@ -66,7 +66,7 @@ func NextID(g *model.Graph, cfg config.Config) (model.ID, error) {
 	for _, id := range slices.Sorted(maps.Keys(g.Nodes)) {
 		n, err := strconv.Atoi(id.String())
 		if err != nil {
-			return "", fmt.Errorf("identifier %q is not a number: %w", id, model.ErrInvalidConfig)
+			return "", fmt.Errorf("identifier %q is not a number: %w", id, model.ErrInvalidDocument)
 		}
 		highest = max(highest, n)
 	}
@@ -162,55 +162,106 @@ func Render(tmpl string, data TemplateData) ([]byte, error) {
 }
 
 // RewriteStatus replaces only the status value in a document's frontmatter and
-// leaves every other byte, body included, untouched.
+// leaves every other byte, body included, untouched. It reads the block with
+// the engine's own parser, so what `new` rewrites is exactly what `validate`
+// manages, line endings included.
 func RewriteStatus(src []byte, field, status string) ([]byte, error) {
-	text := string(src)
-	if !strings.HasPrefix(text, frontmatterDelimiter) {
-		return nil, fmt.Errorf("document does not open with a frontmatter block: %w", model.ErrInvalidConfig)
-	}
-	rest := text[len(frontmatterDelimiter):]
-	end := strings.Index(rest, "\n"+frontmatterDelimiter)
-	if end < 0 {
-		return nil, fmt.Errorf("frontmatter block is not terminated: %w", model.ErrInvalidConfig)
+	start, end, ok := parse.FrontmatterSpan(src)
+	if !ok {
+		return nil, fmt.Errorf("document carries no terminated frontmatter block: %w", model.ErrInvalidDocument)
 	}
 
-	var block []string
-	if end > 0 {
-		block = strings.Split(rest[:end], "\n")
-	}
-	entry := field + ": " + status
+	entry := []byte(field + ": " + status)
+	out := make([]byte, 0, len(src)+len(entry)+2)
+	out = append(out, src[:start]...)
+	block := src[start:end]
 	rewritten := false
-	for i, line := range block {
-		if strings.HasPrefix(line, field+":") {
-			block[i] = entry
-			rewritten = true
-			break
+	for offset := 0; offset < len(block); {
+		next := len(block)
+		if cut := bytes.IndexByte(block[offset:], '\n'); cut >= 0 {
+			next = offset + cut + 1
 		}
+		content, ending := splitLineEnding(block[offset:next])
+		if !rewritten && bytes.HasPrefix(content, []byte(field+":")) {
+			out = append(out, entry...)
+			out = append(out, ending...)
+			rewritten = true
+		} else {
+			out = append(out, block[offset:next]...)
+		}
+		offset = next
 	}
 	if !rewritten {
-		block = append(block, entry)
+		out = append(out, entry...)
+		out = append(out, blockLineEnding(src[:start], block)...)
 	}
-	return []byte(frontmatterDelimiter + strings.Join(block, "\n") + rest[end:]), nil
+	return append(out, src[end:]...), nil
+}
+
+// splitLineEnding separates a line from the ending it was written with, so a
+// rewritten line keeps the file's own line ending.
+func splitLineEnding(line []byte) (content, ending []byte) {
+	switch {
+	case bytes.HasSuffix(line, []byte("\r\n")):
+		return line[:len(line)-2], line[len(line)-2:]
+	case bytes.HasSuffix(line, []byte("\n")):
+		return line[:len(line)-1], line[len(line)-1:]
+	}
+	return line, nil
+}
+
+// blockLineEnding reports the line ending an appended entry should carry: the
+// block's own, or the opening delimiter's when the block is empty.
+func blockLineEnding(opening, block []byte) []byte {
+	source := block
+	if len(source) == 0 {
+		source = opening
+	}
+	if bytes.HasSuffix(source, []byte("\r\n")) {
+		return []byte("\r\n")
+	}
+	return []byte("\n")
+}
+
+// rewrite is a status rewrite that has been computed but not yet written.
+type rewrite struct {
+	path    string
+	content []byte
+	mode    fs.FileMode
+}
+
+// planRewrite reads a document and computes its rewritten form without
+// touching the file.
+func planRewrite(path, field, status string) (rewrite, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return rewrite{}, fmt.Errorf("stat %s: %w", path, err)
+	}
+	src, err := os.ReadFile(path)
+	if err != nil {
+		return rewrite{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	content, err := RewriteStatus(src, field, status)
+	if err != nil {
+		return rewrite{}, fmt.Errorf("rewrite %s: %w", path, err)
+	}
+	return rewrite{path: path, content: content, mode: info.Mode().Perm()}, nil
+}
+
+func (r rewrite) apply() error {
+	if err := os.WriteFile(r.path, r.content, r.mode); err != nil {
+		return fmt.Errorf("write %s: %w", r.path, err)
+	}
+	return nil
 }
 
 // RewriteStatusFile applies RewriteStatus to a file in place.
 func RewriteStatusFile(path, field, status string) error {
-	info, err := os.Stat(path)
+	planned, err := planRewrite(path, field, status)
 	if err != nil {
-		return fmt.Errorf("stat %s: %w", path, err)
+		return err
 	}
-	src, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-	out, err := RewriteStatus(src, field, status)
-	if err != nil {
-		return fmt.Errorf("rewrite %s: %w", path, err)
-	}
-	if err := os.WriteFile(path, out, info.Mode().Perm()); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
-	}
-	return nil
+	return planned.apply()
 }
 
 // Create writes the new document and rewrites the status of every document it
@@ -250,12 +301,24 @@ func Create(g *model.Graph, cfg config.Config, req Request) (string, error) {
 		return "", err
 	}
 
+	// Every rewrite is computed before anything is written: creating the new
+	// document and then failing half way through the old ones would leave a
+	// corpus nobody asked for.
+	rewrites := make([]rewrite, 0, len(superseded))
+	for _, n := range superseded {
+		planned, err := planRewrite(documentPath(cfg, n), cfg.StatusField, config.StatusSuperseded)
+		if err != nil {
+			return "", err
+		}
+		rewrites = append(rewrites, planned)
+	}
+
 	path := filepath.Join(cfg.Dir, Filename(id, req.Title))
 	if err := writeNew(path, doc); err != nil {
 		return "", err
 	}
-	for _, n := range superseded {
-		if err := RewriteStatusFile(documentPath(cfg, n), cfg.StatusField, config.StatusSuperseded); err != nil {
+	for _, planned := range rewrites {
+		if err := planned.apply(); err != nil {
 			return "", err
 		}
 	}

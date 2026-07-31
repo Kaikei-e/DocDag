@@ -38,29 +38,56 @@ type Document struct {
 // The parser already rejects duplicate keys, so strictness needs no option.
 func DecodeOptions() []yaml.DecodeOption { return nil }
 
+// byteOrderMark is what a Windows editor may write in front of the opening
+// delimiter. It belongs to neither the frontmatter block nor the body.
+var byteOrderMark = []byte{0xEF, 0xBB, 0xBF}
+
+// FrontmatterSpan reports the byte range of the frontmatter block inside src:
+// start is the first byte after the opening delimiter line, end the first byte
+// of the closing delimiter line. ok is false when src carries no terminated
+// block. Both CRLF and LF line endings delimit a block, so a document authored
+// on Windows is managed like any other.
+func FrontmatterSpan(src []byte) (start, end int, ok bool) {
+	offset := 0
+	if bytes.HasPrefix(src, byteOrderMark) {
+		offset = len(byteOrderMark)
+	}
+	opening, next := readLine(src[offset:])
+	if !isDelimiter(opening) {
+		return 0, 0, false
+	}
+	start = offset + next
+	for pos := start; pos < len(src); {
+		line, advance := readLine(src[pos:])
+		if isDelimiter(line) {
+			return start, pos, true
+		}
+		pos += advance
+	}
+	return 0, 0, false
+}
+
 // SplitFrontmatter separates a leading delimited YAML block from the body. ok
 // is false when the file does not open with a frontmatter delimiter.
 func SplitFrontmatter(src []byte) (frontmatter, body []byte, ok bool) {
-	opening := []byte(Delimiter + "\n")
-	if !bytes.HasPrefix(src, opening) {
+	start, end, ok := FrontmatterSpan(src)
+	if !ok {
 		return nil, src, false
 	}
-	rest := src[len(opening):]
-	for offset := 0; offset <= len(rest); {
-		line, next := rest[offset:], len(rest)
-		if end := bytes.IndexByte(rest[offset:], '\n'); end >= 0 {
-			line, next = rest[offset:offset+end], offset+end+1
-		}
-		if string(line) == Delimiter {
-			return rest[:offset], rest[next:], true
-		}
-		if next == len(rest) {
-			break
-		}
-		offset = next
-	}
-	return nil, src, false
+	_, next := readLine(src[end:])
+	return src[start:end], src[end+next:], true
 }
+
+// readLine splits the first line off src, returning it without its line ending
+// and the offset the next line starts at.
+func readLine(src []byte) (line []byte, next int) {
+	if end := bytes.IndexByte(src, '\n'); end >= 0 {
+		return bytes.TrimSuffix(src[:end], []byte("\r")), end + 1
+	}
+	return src, len(src)
+}
+
+func isDelimiter(line []byte) bool { return string(line) == Delimiter }
 
 // UnmarshalFrontmatter decodes a frontmatter block with a strict YAML parser.
 func UnmarshalFrontmatter(src []byte) (map[string]any, error) {
@@ -103,9 +130,9 @@ func File(path string, cfg config.Config) (*Document, error) {
 	return doc, nil
 }
 
-// Dir parses the Markdown files directly in dir that carry frontmatter or are
-// named like a managed document. A file whose name holds no identifier is not a
-// managed document, whatever its frontmatter says.
+// Dir parses the Markdown files directly in dir whose name matches the preset
+// filename pattern. The name carries the identity, so a file named anything
+// else is not a managed document, whatever its frontmatter says.
 func Dir(dir string, cfg config.Config) ([]*Document, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -120,7 +147,7 @@ func Dir(dir string, cfg config.Config) ([]*Document, error) {
 		if err != nil {
 			return nil, err
 		}
-		if doc.ID == "" || (!doc.HasFrontmatter && !doc.MatchesPattern) {
+		if !doc.MatchesPattern || doc.ID == "" {
 			continue
 		}
 		docs = append(docs, doc)
@@ -138,20 +165,24 @@ func Attr(fm map[string]any, key string) (string, bool) {
 }
 
 // Refs reads a list-valued frontmatter key as raw, un-normalized references. A
-// scalar value is accepted as a single-element list.
-func Refs(fm map[string]any, key string) []string {
+// scalar value is accepted as a single-element list. invalid holds the entries
+// that are not scalars at all, rendered as written: an unquoted wikilink
+// decodes as a nested sequence, and dropping it silently would hide the very
+// link the tool exists to find.
+func Refs(fm map[string]any, key string) (refs, invalid []string) {
 	value, ok := fm[key]
 	if !ok || value == nil {
-		return nil
+		return nil, nil
 	}
 	items, isList := value.([]any)
 	if !isList {
 		items = []any{value}
 	}
-	refs := make([]string, 0, len(items))
+	refs = make([]string, 0, len(items))
 	for _, item := range items {
 		ref, ok := scalar(item)
 		if !ok {
+			invalid = append(invalid, fmt.Sprint(item))
 			continue
 		}
 		if ref = strings.TrimSpace(ref); ref == "" {
@@ -159,7 +190,7 @@ func Refs(fm map[string]any, key string) []string {
 		}
 		refs = append(refs, ref)
 	}
-	return refs
+	return refs, invalid
 }
 
 // scalar renders a decoded YAML scalar as the string it was written as. A

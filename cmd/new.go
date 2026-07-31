@@ -8,6 +8,7 @@ import (
 
 	"github.com/Kaikei-e/DocDag/internal/model"
 	"github.com/Kaikei-e/DocDag/internal/newdoc"
+	"github.com/Kaikei-e/DocDag/internal/render"
 )
 
 const (
@@ -28,6 +29,10 @@ func newNewCmd() *cobra.Command {
 }
 
 func runNew(cmd *cobra.Command, args []string) error {
+	format, err := outputFormat(cmd)
+	if err != nil {
+		return err
+	}
 	flags := cmd.Flags()
 	supersedes, err := flags.GetStringArray(flagSupersedes)
 	if err != nil {
@@ -49,6 +54,8 @@ func runNew(cmd *cobra.Command, args []string) error {
 		}
 		return ioErr(fmt.Errorf("create document: %w", err))
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), path)
+	if err := render.CreatedPath(cmd.OutOrStdout(), path, format == formatJSON); err != nil {
+		return ioErr(err)
+	}
 	return nil
 }

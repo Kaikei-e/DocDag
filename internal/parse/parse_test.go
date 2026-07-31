@@ -350,7 +350,7 @@ func TestRefs(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Refs(tt.fm, tt.key); !slices.Equal(got, tt.want) {
+			if got, _ := Refs(tt.fm, tt.key); !slices.Equal(got, tt.want) {
 				t.Fatalf("Refs(%q) = %#v, want %#v", tt.key, got, tt.want)
 			}
 		})
@@ -392,10 +392,10 @@ func TestFile(t *testing.T) {
 				t.Errorf("attr %s = %q (ok=%v), want %q", key, got, ok, want)
 			}
 		}
-		if got := Refs(doc.Frontmatter, "supersedes"); !slices.Equal(got, []string{"2"}) {
+		if got, _ := Refs(doc.Frontmatter, "supersedes"); !slices.Equal(got, []string{"2"}) {
 			t.Errorf("supersedes = %#v, want the raw un-normalized reference", got)
 		}
-		if got := Refs(doc.Frontmatter, "depends-on"); !slices.Equal(got, []string{"3"}) {
+		if got, _ := Refs(doc.Frontmatter, "depends-on"); !slices.Equal(got, []string{"3"}) {
 			t.Errorf("depends-on = %#v, want the raw un-normalized reference", got)
 		}
 		if !strings.HasPrefix(doc.Body, "\n# Schedule feed polling from the ingestion queue\n") {
@@ -607,4 +607,145 @@ func TestDir(t *testing.T) {
 			t.Errorf("err = %v, want it to wrap fs.ErrNotExist", err)
 		}
 	})
+
+	t.Run("a filename that does not match the pattern is not a managed document", func(t *testing.T) {
+		dir := testWriteDocs(t, map[string]string{
+			"0001-keep-this.md": "---\nstatus: accepted\n---\n\n# Keep this\n",
+			"template-v2.md":    "---\nstatus: proposed\n---\n\n# Template\n",
+			"notes-2024.md":     "---\nstatus: accepted\n---\n\n# Notes\n",
+		})
+
+		docs, err := Dir(dir, cfg)
+		if err != nil {
+			t.Fatalf("Dir: %v", err)
+		}
+		if got := testNames(docs); !slices.Equal(got, []string{"0001-keep-this.md"}) {
+			t.Fatalf("names = %v, want only the document whose name matches the pattern", got)
+		}
+	})
+}
+
+// testBOM is the byte order mark a Windows editor may write in front of the
+// opening delimiter.
+var testBOM = string([]byte{0xEF, 0xBB, 0xBF})
+
+func TestFrontmatterSpan(t *testing.T) {
+	tests := []struct {
+		name  string
+		src   string
+		block string
+		body  string
+	}{
+		{
+			name:  "unix line endings",
+			src:   "---\ntitle: Unix\n---\n\n# Unix\n",
+			block: "title: Unix\n",
+			body:  "\n# Unix\n",
+		},
+		{
+			name:  "windows line endings",
+			src:   "---\r\ntitle: Windows\r\n---\r\n\r\n# Windows\r\n",
+			block: "title: Windows\r\n",
+			body:  "\r\n# Windows\r\n",
+		},
+		{
+			name:  "a byte order mark in front of the delimiter",
+			src:   testBOM + "---\ntitle: Marked\n---\n\n# Marked\n",
+			block: "title: Marked\n",
+			body:  "\n# Marked\n",
+		},
+		{
+			name:  "an empty block",
+			src:   "---\n---\nBody only\n",
+			block: "",
+			body:  "Body only\n",
+		},
+		{
+			name:  "a closing delimiter without a trailing newline",
+			src:   "---\ntitle: Terse\n---",
+			block: "title: Terse\n",
+			body:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			start, end, ok := FrontmatterSpan([]byte(tt.src))
+			if !ok {
+				t.Fatalf("FrontmatterSpan(%q) reported no block", tt.src)
+			}
+			if got := tt.src[start:end]; got != tt.block {
+				t.Errorf("block = %q, want %q", got, tt.block)
+			}
+			frontmatter, body, ok := SplitFrontmatter([]byte(tt.src))
+			if !ok {
+				t.Fatalf("SplitFrontmatter(%q) reported no block", tt.src)
+			}
+			if string(frontmatter) != tt.block {
+				t.Errorf("frontmatter = %q, want %q", frontmatter, tt.block)
+			}
+			if string(body) != tt.body {
+				t.Errorf("body = %q, want %q", body, tt.body)
+			}
+		})
+	}
+
+	t.Run("a document without a block reports none", func(t *testing.T) {
+		for _, src := range []string{"# No frontmatter\n", "---\ntitle: Unterminated\n", "", "---\n"} {
+			if _, _, ok := FrontmatterSpan([]byte(src)); ok {
+				t.Errorf("FrontmatterSpan(%q) reported a block", src)
+			}
+		}
+	})
+}
+
+func TestFileParsesAWindowsAuthoredDocument(t *testing.T) {
+	cfg := config.ADRPreset()
+	dir := testWriteDocs(t, map[string]string{
+		"0002-ship-logs.md": "---\r\ntitle: Ship logs\r\nstatus: accepted\r\nsupersedes:\r\n  - \"0001\"\r\n---\r\n\r\n# Ship logs\r\n",
+	})
+
+	doc, err := File(filepath.Join(dir, "0002-ship-logs.md"), cfg)
+	if err != nil {
+		t.Fatalf("File: %v", err)
+	}
+	if !doc.HasFrontmatter {
+		t.Fatal("hasFrontmatter = false, want true: CRLF is a line ending, not a missing block")
+	}
+	if doc.Err != nil {
+		t.Fatalf("err = %v, want none", doc.Err)
+	}
+	for key, want := range map[string]string{"title": "Ship logs", "status": "accepted"} {
+		if got, ok := Attr(doc.Frontmatter, key); !ok || got != want {
+			t.Errorf("attr %s = %q (ok=%v), want %q", key, got, ok, want)
+		}
+	}
+	refs, invalid := Refs(doc.Frontmatter, "supersedes")
+	if !slices.Equal(refs, []string{"0001"}) {
+		t.Errorf("supersedes = %#v, want the declared reference", refs)
+	}
+	if len(invalid) != 0 {
+		t.Errorf("invalid = %#v, want none", invalid)
+	}
+}
+
+func TestRefsReportsEntriesThatAreNotReferences(t *testing.T) {
+	// An unquoted Obsidian wikilink decodes as a nested sequence, and a mapping
+	// value is just as wrong: a tool for finding missing links must not drop a
+	// malformed reference without saying so.
+	fm := map[string]any{"supersedes": []any{"0001", []any{uint64(2)}, map[string]any{"k": "v"}}}
+
+	refs, invalid := Refs(fm, "supersedes")
+
+	if !slices.Equal(refs, []string{"0001"}) {
+		t.Errorf("refs = %#v, want only the scalar entry", refs)
+	}
+	if len(invalid) != 2 {
+		t.Fatalf("invalid = %#v, want both malformed entries", invalid)
+	}
+	for _, entry := range invalid {
+		if strings.TrimSpace(entry) == "" {
+			t.Errorf("invalid entry = %q, want a rendering of the offending value", entry)
+		}
+	}
 }

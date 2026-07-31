@@ -435,6 +435,45 @@ func TestBinding(t *testing.T) {
 
 		testAssertIDs(t, "BindingSet", BindingSet(none, cfg), nil)
 	})
+
+	t.Run("a status that only opens with a vocabulary word is not binding", func(t *testing.T) {
+		prose := testGraph([]*model.Node{testNode("0001", "accepted by the architecture board")}, nil, nil)
+
+		testAssertIDs(t, "BindingSet", BindingSet(prose, cfg), nil)
+	})
+}
+
+func TestResolveNeverNamesADocumentTheCorpusDoesNotHold(t *testing.T) {
+	t.Run("a reference to an unknown successor resolves to the document itself", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0007", config.StatusSuperseded)},
+			[]model.Edge{testDerivedEdge("0099", "0007", config.EdgeSupersedes)},
+			nil,
+		)
+
+		got, err := Resolve(g, "0007", config.EdgeSupersedes)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		testAssertIDs(t, "Resolve(0007)", got, testIDs("0007"))
+	})
+
+	t.Run("a chain stops at its last known document", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0001", config.StatusSuperseded), testNode("0002", config.StatusSuperseded)},
+			[]model.Edge{
+				testEdge("0002", "0001", config.EdgeSupersedes),
+				testDerivedEdge("0099", "0002", config.EdgeSupersedes),
+			},
+			nil,
+		)
+
+		got, err := Resolve(g, "0001", config.EdgeSupersedes)
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		testAssertIDs(t, "Resolve(0001)", got, testIDs("0002"))
+	})
 }
 
 func testSupersedesChain() *model.Graph {

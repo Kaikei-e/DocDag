@@ -209,6 +209,54 @@ func TestCheckDangling(t *testing.T) {
 		testAssertSortedFindings(t, got)
 		testAssertIDs(t, "dangling ids", testFindingIDs(got, model.RuleDanglingRef), testIDs("0002", "0003"))
 	})
+
+	t.Run("a reverse edge from an unknown document is an error on its owner", func(t *testing.T) {
+		// A MADR "status: superseded by 0099" with no 0099 in the corpus puts
+		// the unknown document at the source of the edge, not at its target.
+		g := testGraph(
+			[]*model.Node{testNode("0007", config.StatusSuperseded)},
+			[]model.Edge{testDerivedEdge("0099", "0007", config.EdgeSupersedes)},
+			nil,
+		)
+
+		f := testAssertSingleFinding(t, CheckDangling(g, cfg), model.RuleDanglingRef, model.SeverityError, "0007")
+		if !strings.Contains(f.Detail, "0099") {
+			t.Errorf("detail = %q, want it to name the missing document", f.Detail)
+		}
+		if !strings.Contains(f.Detail, config.EdgeSupersedes.String()) {
+			t.Errorf("detail = %q, want it to name the edge type", f.Detail)
+		}
+	})
+
+	t.Run("a structured edge declared in the reverse direction is checked too", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0007", config.StatusSuperseded)},
+			[]model.Edge{testEdge("0099", "0007", "superseded-by")},
+			nil,
+		)
+
+		testAssertSingleFinding(t, CheckDangling(g, cfg), model.RuleDanglingRef, model.SeverityError, "0007")
+	})
+}
+
+func TestCheckStatusVocabularyRejectsProseAroundAVocabularyWord(t *testing.T) {
+	cfg := config.ADRPreset()
+	// Only a status that a derived-edge pattern claims may project onto a
+	// vocabulary word; everything else outside the vocabulary is an error.
+	for _, status := range []string{
+		"accepted by the architecture board",
+		"proposed - pending review",
+		"rejected-in-favour-of-0004",
+	} {
+		t.Run(status, func(t *testing.T) {
+			g := testGraph([]*model.Node{testNode("0001", status)}, nil, nil)
+
+			f := testAssertSingleFinding(t, CheckStatusVocabulary(g, cfg), model.RuleUnknownStatus, model.SeverityError, "0001")
+			if !strings.Contains(f.Detail, status) {
+				t.Errorf("detail = %q, want it to quote the offending status", f.Detail)
+			}
+		})
+	}
 }
 
 func TestCheckStatusVocabulary(t *testing.T) {

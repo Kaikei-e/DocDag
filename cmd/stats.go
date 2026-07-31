@@ -21,6 +21,11 @@ func newStatsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			// The binding count and the chain-depth distribution are supersedes
+			// statistics; without that edge type they would be fiction.
+			if err := requireSupersedes(cfg); err != nil {
+				return err
+			}
 			stats := graph.ComputeStats(g, cfg)
 			out := cmd.OutOrStdout()
 			if format == formatJSON {

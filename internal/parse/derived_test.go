@@ -18,6 +18,7 @@ func TestMatchDerived(t *testing.T) {
 		{name: "the MADR spelling", value: "superseded by 0003", want: "0003", ok: true},
 		{name: "the match is case-insensitive", value: "Superseded By 0003", want: "0003", ok: true},
 		{name: "the hyphenated spelling", value: "superseded-by 0003", want: "0003", ok: true},
+		{name: "the fully hyphenated spelling", value: "superseded-by-0003", want: "0003", ok: true},
 		{name: "a prefixed reference is captured as written", value: "SUPERSEDED-BY ADR-0003", want: "ADR-0003", ok: true},
 		{name: "only the first token is the reference", value: "superseded by 0003 (see also 0004)", want: "0003", ok: true},
 		{name: "a plain status does not match", value: "superseded"},

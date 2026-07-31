@@ -57,6 +57,81 @@ func TestResolveJSON(t *testing.T) {
 	}
 }
 
+func TestResolveNeverPrintsADocumentTheCorpusDoesNotHold(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-a-decision.md": "---\ntitle: A decision\nstatus: superseded by 0099\ndate: 2025-01-01\n---\n\n# A decision\n",
+	})
+
+	got := run(t, "resolve", "0001", "--dir", dir)
+
+	assertExit(t, got, 0)
+	assertLines(t, "resolve", lines(got.stdout), []string{"0001"})
+}
+
+const testReplacesConfig = `edges:
+  - name: replaces
+    key: replaces
+    acyclic: true
+    direction: forward
+rules:
+  - name: replaced_must_not_be_accepted
+    severity: error
+    when:
+      inbound: replaces
+      attr:
+        status:
+          eq: accepted
+    message: "a replaced decision cannot stay accepted"
+derived_edges:
+  - field: status
+    pattern: "(?i)^replaced by\\s+(\\S+)"
+    edge: replaces
+    direction: reverse
+`
+
+// testReplacesCorpus configures a corpus whose only edge type is "replaces",
+// so the commands defined over supersedes have nothing to walk.
+func testReplacesCorpus(t *testing.T) string {
+	t.Helper()
+	dir := writeDocs(t, map[string]string{
+		"docdag.yaml":                     testReplacesConfig,
+		"docs/adr/0001-first.md":          "---\ntitle: First\nstatus: superseded\ndate: 2025-01-01\n---\n\n# First\n",
+		"docs/adr/0002-replacement.md":    "---\ntitle: Replacement\nstatus: accepted\nreplaces:\n  - \"0001\"\ndate: 2025-02-01\n---\n\n# Replacement\n",
+		"docs/adr/0003-independent.md":    "---\ntitle: Independent\nstatus: accepted\ndate: 2025-03-01\n---\n\n# Independent\n",
+		"docs/adr/0004-also-accepted.md":  "---\ntitle: Also accepted\nstatus: accepted\ndate: 2025-04-01\n---\n\n# Also accepted\n",
+		"docs/adr/0005-still-proposed.md": "---\ntitle: Still proposed\nstatus: proposed\ndate: 2025-05-01\n---\n\n# Still proposed\n",
+	})
+	t.Chdir(dir)
+	return dir
+}
+
+func TestSupersedesCommandsRefuseAConfigurationWithoutThatEdgeType(t *testing.T) {
+	// Walking an edge type nobody declared would answer "current" for every
+	// document, at exit 0. That is worse than refusing.
+	testReplacesCorpus(t)
+
+	if got := run(t, "validate"); got.code != 0 {
+		t.Fatalf("validate exit = %d, want 0 (stdout=%q stderr=%q)", got.code, got.stdout, got.stderr)
+	}
+	for _, args := range [][]string{
+		{"resolve", "0001"},
+		{"query", "--binding"},
+		{"stats"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			got := run(t, args...)
+
+			assertExit(t, got, 3)
+			if !strings.Contains(got.stderr, "supersedes") {
+				t.Errorf("stderr = %q, want it to name the missing edge type", got.stderr)
+			}
+			if got.stdout != "" {
+				t.Errorf("stdout = %q, want empty", got.stdout)
+			}
+		})
+	}
+}
+
 func TestResolveFailures(t *testing.T) {
 	tests := []struct {
 		name    string

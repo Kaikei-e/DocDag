@@ -31,9 +31,14 @@ var (
 
 // Normalize extracts the digit run from ref and pads it to the display width.
 // Leading zeros are stripped textually, so an identifier wider than the machine
-// integer range still normalizes.
+// integer range still normalizes. Directory components are dropped first: a
+// digit in a path prefix names no document.
 func (n ADRNormalizer) Normalize(ref string) (model.ID, bool) {
-	digits := adrDigits.FindString(strings.TrimSpace(ref))
+	token := strings.TrimSpace(ref)
+	if cut := strings.LastIndexAny(token, `/\`); cut >= 0 {
+		token = token[cut+1:]
+	}
+	digits := adrDigits.FindString(token)
 	if digits == "" {
 		return "", false
 	}

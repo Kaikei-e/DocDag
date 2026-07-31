@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -233,6 +234,53 @@ func TestConfigFileOverridesThePreset(t *testing.T) {
 	got := run(t, "resolve", "1", "--dir", fixture(t, "ok-basic"), "--config", filepath.Join(dir, "docdag.yaml"))
 	assertExit(t, got, 0)
 	assertLines(t, "resolve", lines(got.stdout), []string{"000004"})
+}
+
+func TestTheCommandSetIsExactlyTheDocumentedOne(t *testing.T) {
+	want := []string{"validate", "resolve", "query", "export", "stats", "new", "help"}
+
+	for _, cmd := range newRootCmd().Commands() {
+		if !slices.Contains(want, cmd.Name()) {
+			t.Errorf("the command tree carries %q, want only %v", cmd.Name(), want)
+		}
+	}
+	got := run(t, "completion", "bash")
+	assertExit(t, got, 2)
+}
+
+func TestAWindowsAuthoredCorpusIsManagedLikeAnyOther(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-store-blobs-on-disk.md": "---\r\ntitle: Store blobs on disk\r\nstatus: superseded\r\ndate: 2025-01-01\r\n---\r\n\r\n# Store blobs on disk\r\n",
+		"0002-store-blobs-in-s3.md":   "---\r\ntitle: Store blobs in S3\r\nstatus: accepted\r\nsupersedes:\r\n  - \"0001\"\r\ndate: 2025-02-01\r\n---\r\n\r\n# Store blobs in S3\r\n",
+	})
+
+	got := run(t, "validate", "--dir", dir)
+
+	assertExit(t, got, 0)
+	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	want := "OK: 2 docs, 1 typed edges, no cycles"
+	if ls := lines(got.stdout); len(ls) == 0 || ls[len(ls)-1] != want {
+		t.Errorf("summary line = %q, want %q", got.stdout, want)
+	}
+}
+
+func TestARenamedStatusFieldCarriesThePresetRules(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"docdag.yaml":              "status_field: state\n",
+		"docs/adr/0001-first.md":   "---\ntitle: First\nstate: superseded\ndate: 2025-01-01\n---\n\n# First\n",
+		"docs/adr/0002-second.md":  "---\ntitle: Second\nstate: accepted\nsupersedes:\n  - \"0001\"\ndate: 2025-02-01\n---\n\n# Second\n",
+		"docs/adr/0003-derived.md": "---\ntitle: Derived\nstate: superseded by 0002\ndate: 2025-03-01\n---\n\n# Derived\n",
+	})
+	t.Chdir(dir)
+
+	got := run(t, "validate")
+
+	assertExit(t, got, 0)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{"WARN unstructured_supersedes 0003:"})
+	want := "OK: 3 docs, 2 typed edges, no cycles"
+	if ls := lines(got.stdout); len(ls) == 0 || ls[len(ls)-1] != want {
+		t.Errorf("summary line = %q, want %q", got.stdout, want)
+	}
 }
 
 func TestDirFlagBeatsTheConfigFile(t *testing.T) {

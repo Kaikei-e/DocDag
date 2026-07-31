@@ -136,6 +136,17 @@ func loadGraph(cmd *cobra.Command) (*model.Graph, config.Config, error) {
 	return g, cfg, nil
 }
 
+// requireSupersedes refuses the commands that are defined over the supersedes
+// edge type when the configuration does not declare it. Walking an edge set
+// that cannot exist would report every document as current, at exit 0.
+func requireSupersedes(cfg config.Config) error {
+	if _, ok := cfg.Edge(config.EdgeSupersedes); ok {
+		return nil
+	}
+	return ioErr(fmt.Errorf("this command needs the %q edge type, which the configuration does not declare: %w",
+		config.EdgeSupersedes, model.ErrInvalidConfig))
+}
+
 // normalize maps a raw reference onto a node identifier that exists.
 func normalize(g *model.Graph, cfg config.Config, ref string) (model.ID, error) {
 	id, ok := cfg.Normalizer().Normalize(ref)
@@ -157,6 +168,9 @@ func newRootCmd() *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
+	// The command set is the contract; cobra's generated completion command is
+	// not part of it.
+	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().String(flagDir, "", "documents directory (overrides config and discovery)")
 	root.PersistentFlags().String(flagConfig, "", "path to docdag.yaml")
 	root.PersistentFlags().String(flagFormat, formatText, "output format: text|json")

@@ -67,6 +67,23 @@ func IDsJSON(w io.Writer, ids []model.ID) error {
 	return nil
 }
 
+// CreatedPath writes the path of a created document, as a bare line or as the
+// JSON object every command answers with under --format json.
+func CreatedPath(w io.Writer, path string, asJSON bool) error {
+	if asJSON {
+		if err := writeJSON(w, map[string]string{"path": path}); err != nil {
+			return fmt.Errorf("write created path: %w", err)
+		}
+		return nil
+	}
+	out := &errWriter{w: w}
+	out.printf("%s\n", path)
+	if out.err != nil {
+		return fmt.Errorf("write created path: %w", out.err)
+	}
+	return nil
+}
+
 // QueryText writes one query result per line, marking reference-layer hits.
 func QueryText(w io.Writer, results []graph.QueryResult) error {
 	out := &errWriter{w: w}

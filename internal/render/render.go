@@ -58,6 +58,9 @@ func Label(n *model.Node, limit int) string {
 	if n.Title != "" {
 		text += " " + n.Title
 	}
+	// A title written as a YAML block scalar carries line breaks, and a label
+	// spanning lines is not valid mermaid.
+	text = strings.Join(strings.Fields(text), " ")
 	text = strings.ReplaceAll(text, `"`, "'")
 
 	runes := []rune(text)

@@ -83,16 +83,7 @@ func edgeCounts(g *model.Graph, cfg config.Config) []EdgeCount {
 // chainDepths counts documents by the length of the longest supersedes chain
 // starting at them. A cyclic edge contributes nothing rather than looping.
 func chainDepths(g *model.Graph) []DepthCount {
-	adj := Adjacency(g, config.EdgeSupersedes)
-	for id, neighbors := range adj {
-		known := make([]model.ID, 0, len(neighbors))
-		for _, next := range neighbors {
-			if _, ok := g.Nodes[next]; ok {
-				known = append(known, next)
-			}
-		}
-		adj[id] = known
-	}
+	adj := retainKnown(g, Adjacency(g, config.EdgeSupersedes))
 
 	depth := make(map[model.ID]int, len(g.Nodes))
 	color := make(map[model.ID]int, len(g.Nodes))

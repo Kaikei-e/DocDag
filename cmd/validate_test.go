@@ -112,6 +112,52 @@ func TestValidateDanglingReferenceNamesTheMissingDocument(t *testing.T) {
 	}
 }
 
+func TestValidateReportsAStatusStringNamingAnUnknownDocument(t *testing.T) {
+	// The most likely MADR authoring slip: a successor that does not exist yet.
+	dir := writeDocs(t, map[string]string{
+		"0001-a-decision.md": "---\ntitle: A decision\nstatus: superseded by 0099\ndate: 2025-01-01\n---\n\n# A decision\n",
+		"0002-another.md":    "---\ntitle: Another decision\nstatus: accepted\ndate: 2025-02-01\n---\n\n# Another decision\n",
+	})
+
+	got := run(t, "validate", "--dir", dir)
+
+	assertExit(t, got, 1)
+	detail := strings.Join(findingLines(got.stdout), "\n")
+	if !strings.Contains(detail, "ERROR dangling_ref 0001") {
+		t.Errorf("findings = %q, want a dangling reference on 0001", detail)
+	}
+	if !strings.Contains(detail, "0099") {
+		t.Errorf("findings = %q, want the missing document named", detail)
+	}
+}
+
+func TestValidateRejectsAStatusThatOnlyOpensWithAVocabularyWord(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted by the architecture board\ndate: 2025-01-01\n---\n\n# A decision\n",
+	})
+
+	got := run(t, "validate", "--dir", dir)
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{"ERROR unknown_status 0001:"})
+}
+
+func TestValidateIgnoresFilesThatAreNotManagedDocuments(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n",
+		"template-v2.md":     "---\ntitle: Template\nstatus: proposed\n---\n\n# Template\n",
+		"notes-2024.md":      "---\ntitle: Notes\nstatus: accepted\n---\n\n# Notes\n",
+	})
+
+	got := run(t, "validate", "--dir", dir)
+
+	assertExit(t, got, 0)
+	want := "OK: 1 docs, 0 typed edges, no cycles"
+	if ls := lines(got.stdout); len(ls) == 0 || ls[len(ls)-1] != want {
+		t.Errorf("summary line = %q, want %q", got.stdout, want)
+	}
+}
+
 func TestValidateCycleReportsThePath(t *testing.T) {
 	got := run(t, "validate", "--dir", fixture(t, "cycle"))
 	assertExit(t, got, 1)

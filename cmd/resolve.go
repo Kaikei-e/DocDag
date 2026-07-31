@@ -22,6 +22,9 @@ func newResolveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := requireSupersedes(cfg); err != nil {
+				return err
+			}
 			id, err := normalize(g, cfg, args[0])
 			if err != nil {
 				return err

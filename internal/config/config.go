@@ -179,7 +179,7 @@ func (c Config) validateRules() error {
 				continue
 			}
 			if _, ok := c.Edge(model.EdgeType(edge)); !ok {
-				return fmt.Errorf("rule %q: undeclared edge type %q: %w", rule.Name, edge, model.ErrInvalidConfig)
+				return fmt.Errorf("rule %q: undeclared edge type %q, declare it under edges or replace rules: %w", rule.Name, edge, model.ErrInvalidConfig)
 			}
 		}
 		for _, key := range slices.Sorted(maps.Keys(rule.When.Attr)) {
@@ -200,8 +200,12 @@ func (c Config) validateDerivedEdges() error {
 		if _, ok := c.Edge(model.EdgeType(spec.Edge)); !ok {
 			return fmt.Errorf("derived edge on %q: undeclared edge type %q: %w", spec.Field, spec.Edge, model.ErrInvalidConfig)
 		}
-		if _, err := regexp.Compile(spec.Pattern); err != nil {
+		compiled, err := regexp.Compile(spec.Pattern)
+		if err != nil {
 			return fmt.Errorf("derived edge on %q: pattern %q: %v: %w", spec.Field, spec.Pattern, err, model.ErrInvalidConfig)
+		}
+		if compiled.NumSubexp() < 1 {
+			return fmt.Errorf("derived edge on %q: pattern %q captures no reference: %w", spec.Field, spec.Pattern, model.ErrInvalidConfig)
 		}
 		if err := validDirection(spec.Direction); err != nil {
 			return fmt.Errorf("derived edge on %q: %w", spec.Field, err)

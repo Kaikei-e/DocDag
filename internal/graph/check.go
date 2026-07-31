@@ -56,11 +56,7 @@ func CheckDocuments(docs []*parse.Document, cfg config.Config) []model.Finding {
 // CheckCycles reports one finding per cycle found in an acyclic edge type.
 func CheckCycles(g *model.Graph, cfg config.Config) []model.Finding {
 	findings := []model.Finding{}
-	for _, spec := range cfg.Edges {
-		if !spec.Acyclic {
-			continue
-		}
-		t := model.EdgeType(spec.Name)
+	for _, t := range cfg.AcyclicEdgeTypes() {
 		for _, cycle := range FindCycles(Adjacency(g, t)) {
 			findings = append(findings, model.Finding{
 				Severity: model.SeverityError,
@@ -74,22 +70,33 @@ func CheckCycles(g *model.Graph, cfg config.Config) []model.Finding {
 	return findings
 }
 
-// CheckDangling reports typed edges whose target is not a known document.
+// CheckDangling reports typed edges with an endpoint that is not a known
+// document. Either endpoint can be the unknown one: a reverse-direction edge,
+// such as the MADR "superseded by <ref>" status, puts the referenced document
+// at the source. The finding is filed against the document that declared it.
 func CheckDangling(g *model.Graph, cfg config.Config) []model.Finding {
 	findings := []model.Finding{}
 	for _, e := range g.Edges {
-		if _, known := g.Nodes[e.To]; known {
-			continue
+		_, fromKnown := g.Nodes[e.From]
+		_, toKnown := g.Nodes[e.To]
+		switch {
+		case fromKnown && !toKnown:
+			findings = append(findings, danglingRef(e.From, e.Type, e.To))
+		case toKnown && !fromKnown:
+			findings = append(findings, danglingRef(e.To, e.Type, e.From))
 		}
-		findings = append(findings, model.Finding{
-			Severity: model.SeverityError,
-			Rule:     model.RuleDanglingRef,
-			ID:       e.From,
-			Detail:   fmt.Sprintf("%s reference %s is not a known document", e.Type, e.To),
-		})
 	}
 	SortFindings(findings)
 	return findings
+}
+
+func danglingRef(owner model.ID, t model.EdgeType, missing model.ID) model.Finding {
+	return model.Finding{
+		Severity: model.SeverityError,
+		Rule:     model.RuleDanglingRef,
+		ID:       owner,
+		Detail:   fmt.Sprintf("%s reference %s is not a known document", t, missing),
+	}
 }
 
 // CheckStatusVocabulary reports statuses outside the configured vocabulary.
@@ -246,7 +253,21 @@ func MatchCondition(g *model.Graph, cond config.Condition, id model.ID) bool {
 
 // EvalRule evaluates one declarative rule over every node.
 func EvalRule(g *model.Graph, rule config.Rule) []model.Finding {
+	return evalRule(g, newEdgeIndex(g), rule)
+}
+
+// EvalRules evaluates every configured rule over every node. The edge index is
+// built once: it is linear in the graph, and rebuilding it per rule is not.
+func EvalRules(g *model.Graph, cfg config.Config) []model.Finding {
 	ix := newEdgeIndex(g)
+	findings := []model.Finding{}
+	for _, rule := range cfg.Rules {
+		findings = append(findings, evalRule(g, ix, rule)...)
+	}
+	return findings
+}
+
+func evalRule(g *model.Graph, ix edgeIndex, rule config.Rule) []model.Finding {
 	findings := []model.Finding{}
 	for _, id := range g.NodeIDs() {
 		if !ix.match(g, rule.When, id) {
@@ -258,15 +279,6 @@ func EvalRule(g *model.Graph, rule config.Rule) []model.Finding {
 			ID:       id,
 			Detail:   rule.Message,
 		})
-	}
-	return findings
-}
-
-// EvalRules evaluates every configured rule over every node.
-func EvalRules(g *model.Graph, cfg config.Config) []model.Finding {
-	findings := []model.Finding{}
-	for _, rule := range cfg.Rules {
-		findings = append(findings, EvalRule(g, rule)...)
 	}
 	return findings
 }
