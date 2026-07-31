@@ -24,7 +24,11 @@ archives:
 checksum:
   name_template: checksums.txt
 
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
 changelog:
+  use: github
   sort: asc
   filters:
     exclude: ["^Merge "]
