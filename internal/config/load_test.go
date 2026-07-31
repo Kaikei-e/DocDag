@@ -604,3 +604,39 @@ func TestDiscoverReportsAnUnreadableCandidate(t *testing.T) {
 		t.Errorf("err = %v, want it to name docs/adr", err)
 	}
 }
+
+func TestDiscoverHonorsOnDiskCasing(t *testing.T) {
+	// On a case-insensitive filesystem a stat of docs/adr also answers for a
+	// directory spelled docs/ADR; discovery must match the on-disk spelling.
+	root := testTree(t, map[string]string{
+		"docs/ADR/0001-a-decision.md": testDocument,
+	})
+
+	for name, tc := range map[string]struct {
+		candidate string
+		want      bool
+	}{
+		"the on-disk spelling matches":     {candidate: "docs/ADR", want: true},
+		"a differently-cased spelling":     {candidate: "docs/adr", want: false},
+		"an absent path does not match":    {candidate: "docs/decisions", want: false},
+		"a parent component is case-exact": {candidate: "DOCS/ADR", want: false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			got, err := matchesOnDiskCase(root, tc.candidate)
+			if err != nil {
+				t.Fatalf("matchesOnDiskCase: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("matchesOnDiskCase(root, %q) = %v, want %v", tc.candidate, got, tc.want)
+			}
+		})
+	}
+
+	got, err := Discover(root, ADRPreset().Normalizer())
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if want := filepath.Join(root, "docs", "ADR"); got != want {
+		t.Errorf("Discover = %q, want %q", got, want)
+	}
+}
