@@ -34,12 +34,11 @@ a derived `supersedes` edge, so the invariants hold as the files already are.
 ## Install
 
 ```sh
-go install github.com/Kaikei-e/DocDag@latest
+go install github.com/Kaikei-e/DocDag/cmd/docdag@latest
 ```
 
-Go names an installed binary after the last element of the module path, so this lands in
-`$(go env GOPATH)/bin` as `DocDag`; rename or symlink it to `docdag`, the name used below. Prebuilt
-binaries for tagged versions are attached to the repository's Releases page.
+This installs `docdag` into `$(go env GOPATH)/bin`. Prebuilt binaries for tagged versions are
+attached to the repository's Releases page.
 
 ## Quickstart
 
@@ -161,8 +160,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26'
-      - run: go install github.com/Kaikei-e/DocDag@latest
-      - run: $(go env GOPATH)/bin/DocDag validate
+      - run: go install github.com/Kaikei-e/DocDag/cmd/docdag@latest
+      - run: docdag validate
 ```
 
 ## MADR compatibility
