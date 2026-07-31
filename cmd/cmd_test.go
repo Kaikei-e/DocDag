@@ -292,3 +292,12 @@ func TestDirFlagBeatsTheConfigFile(t *testing.T) {
 		t.Errorf("summary = %q, want %q", got.stdout, want)
 	}
 }
+
+func TestVersionFlagReportsTheBuiltVersion(t *testing.T) {
+	got := run(t, "--version")
+
+	assertExit(t, got, 0)
+	if !strings.Contains(got.stdout, "docdag version dev") {
+		t.Errorf("version output = %q, want it to contain %q", got.stdout, "docdag version dev")
+	}
+}
