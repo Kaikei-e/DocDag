@@ -1,0 +1,530 @@
+package config
+
+import (
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"testing"
+
+	"github.com/Kaikei-e/DocDag/internal/model"
+)
+
+const testDocument = "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n"
+
+func testTree(t *testing.T, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	for name, content := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatalf("mkdir for %s: %v", name, err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	return root
+}
+
+func TestDiscoveryPaths(t *testing.T) {
+	want := []string{"docs/adr", "doc/adr", "docs/decisions", "docs/ADR", "adr"}
+
+	if got := DiscoveryPaths(); !slices.Equal(got, want) {
+		t.Fatalf("DiscoveryPaths = %v, want %v (priority order)", got, want)
+	}
+}
+
+func TestDiscover(t *testing.T) {
+	norm := ADRPreset().Normalizer()
+
+	t.Run("a well-known directory holding a managed document", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docs/adr/0001-a-decision.md": testDocument})
+
+		got, err := Discover(root, norm)
+		if err != nil {
+			t.Fatalf("Discover: %v", err)
+		}
+		if want := filepath.Join(root, "docs", "adr"); got != want {
+			t.Fatalf("Discover = %q, want %q", got, want)
+		}
+	})
+
+	order := []struct {
+		name   string
+		files  map[string]string
+		expect string
+	}{
+		{
+			name: "docs/adr beats every later candidate",
+			files: map[string]string{
+				"docs/adr/0001-a-decision.md":       testDocument,
+				"doc/adr/0002-a-decision.md":        testDocument,
+				"docs/decisions/0003-a-decision.md": testDocument,
+				"adr/0004-a-decision.md":            testDocument,
+			},
+			expect: "docs/adr",
+		},
+		{
+			name: "doc/adr beats docs/decisions",
+			files: map[string]string{
+				"doc/adr/0002-a-decision.md":        testDocument,
+				"docs/decisions/0003-a-decision.md": testDocument,
+			},
+			expect: "doc/adr",
+		},
+		{
+			name: "docs/decisions beats docs/ADR",
+			files: map[string]string{
+				"docs/decisions/0003-a-decision.md": testDocument,
+				"docs/ADR/0004-a-decision.md":       testDocument,
+			},
+			expect: "docs/decisions",
+		},
+		{
+			name: "docs/ADR beats adr",
+			files: map[string]string{
+				"docs/ADR/0004-a-decision.md": testDocument,
+				"adr/0005-a-decision.md":      testDocument,
+			},
+			expect: "docs/ADR",
+		},
+		{
+			name:   "adr is the last candidate",
+			files:  map[string]string{"adr/0005-a-decision.md": testDocument},
+			expect: "adr",
+		},
+		{
+			name: "a candidate without a managed document is passed over",
+			files: map[string]string{
+				"docs/adr/README.md":     "# Index of decisions\n",
+				"adr/0005-a-decision.md": testDocument,
+			},
+			expect: "adr",
+		},
+	}
+	for _, tt := range order {
+		t.Run(tt.name, func(t *testing.T) {
+			root := testTree(t, tt.files)
+
+			got, err := Discover(root, norm)
+			if err != nil {
+				t.Fatalf("Discover: %v", err)
+			}
+			if want := filepath.Join(root, filepath.FromSlash(tt.expect)); got != want {
+				t.Fatalf("Discover = %q, want %q", got, want)
+			}
+		})
+	}
+
+	failures := []struct {
+		name  string
+		files map[string]string
+	}{
+		{name: "no well-known directory exists", files: map[string]string{"notes.md": "# Notes\n"}},
+		{name: "a well-known directory holds no managed document", files: map[string]string{"docs/adr/README.md": "# Index\n"}},
+		{name: "a well-known directory is empty of markdown", files: map[string]string{"docs/adr/.keep": ""}},
+	}
+	for _, tt := range failures {
+		t.Run(tt.name, func(t *testing.T) {
+			root := testTree(t, tt.files)
+
+			got, err := Discover(root, norm)
+
+			if !errors.Is(err, model.ErrNoDocuments) {
+				t.Fatalf("Discover = %q, %v, want it to wrap model.ErrNoDocuments", got, err)
+			}
+			if got != "" {
+				t.Errorf("Discover = %q, want an empty path on failure", got)
+			}
+		})
+	}
+
+	t.Run("a root that does not exist finds nothing", func(t *testing.T) {
+		_, err := Discover(filepath.Join(t.TempDir(), "absent"), norm)
+
+		if err == nil {
+			t.Fatal("Discover succeeded, want an error")
+		}
+	})
+}
+
+func TestLoad(t *testing.T) {
+	t.Run("a partial file sets only what it names", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docdag.yaml": "id_width: 6\n"})
+
+		got, err := Load(filepath.Join(root, "docdag.yaml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		want := Config{IDWidth: 6}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("Load = %+v, want %+v (everything else stays unset for the merge)", got, want)
+		}
+	})
+
+	t.Run("every key decodes", func(t *testing.T) {
+		file := `preset: adr
+dir: docs/decisions
+id_width: 6
+status_field: state
+status_values:
+  - draft
+  - final
+edges:
+  - name: supersedes
+    key: replaces
+    acyclic: true
+    direction: reverse
+derived_edges:
+  - field: state
+    pattern: '(?i)^replaced by (\S+)'
+    edge: supersedes
+    direction: reverse
+rules:
+  - name: state_drift
+    severity: error
+    when:
+      inbound: supersedes
+      attr:
+        state:
+          not: replaced
+    message: inbound replaces but the state disagrees
+template: templates/decision.md
+`
+		root := testTree(t, map[string]string{"docdag.yaml": file})
+
+		got, err := Load(filepath.Join(root, "docdag.yaml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if got.Preset != "adr" || got.Dir != "docs/decisions" || got.IDWidth != 6 {
+			t.Errorf("preset/dir/id_width = %q/%q/%d", got.Preset, got.Dir, got.IDWidth)
+		}
+		if got.StatusField != "state" || !slices.Equal(got.StatusValues, []string{"draft", "final"}) {
+			t.Errorf("status field = %q, values = %v", got.StatusField, got.StatusValues)
+		}
+		if got.Template != "templates/decision.md" {
+			t.Errorf("template = %q", got.Template)
+		}
+		wantEdges := []EdgeSpec{{Name: "supersedes", Key: "replaces", Acyclic: true, Direction: DirectionReverse}}
+		if !slices.Equal(got.Edges, wantEdges) {
+			t.Errorf("edges = %+v, want %+v", got.Edges, wantEdges)
+		}
+		wantDerived := []DerivedEdgeSpec{{Field: "state", Pattern: `(?i)^replaced by (\S+)`, Edge: "supersedes", Direction: DirectionReverse}}
+		if !slices.Equal(got.DerivedEdges, wantDerived) {
+			t.Errorf("derived edges = %+v, want %+v", got.DerivedEdges, wantDerived)
+		}
+		if len(got.Rules) != 1 {
+			t.Fatalf("rules = %+v, want one", got.Rules)
+		}
+		rule := got.Rules[0]
+		if rule.Name != "state_drift" || rule.Severity != model.SeverityError || rule.When.Inbound != "supersedes" {
+			t.Errorf("rule = %+v", rule)
+		}
+		if got := testDeref(t, "rule attr not", rule.When.Attr["state"].Not); got != "replaced" {
+			t.Errorf("rule attr not = %q, want replaced", got)
+		}
+		if rule.Message == "" {
+			t.Error("rule message is empty, want the configured text")
+		}
+	})
+
+	t.Run("an empty file is an empty configuration", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docdag.yaml": ""})
+
+		got, err := Load(filepath.Join(root, "docdag.yaml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if !reflect.DeepEqual(got, Config{}) {
+			t.Fatalf("Load = %+v, want a zero configuration", got)
+		}
+	})
+
+	t.Run("a missing file is an error", func(t *testing.T) {
+		_, err := Load(filepath.Join(t.TempDir(), "docdag.yaml"))
+
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("err = %v, want it to wrap fs.ErrNotExist", err)
+		}
+	})
+
+	t.Run("invalid YAML is an error", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docdag.yaml": "id_width: 6\n\tdir: docs/adr\n"})
+
+		if _, err := Load(filepath.Join(root, "docdag.yaml")); err == nil {
+			t.Fatal("Load succeeded, want a decode error")
+		}
+	})
+}
+
+func TestMerge(t *testing.T) {
+	t.Run("an empty override changes nothing", func(t *testing.T) {
+		base := ADRPreset()
+
+		if got := Merge(base, Config{}); !reflect.DeepEqual(got, base) {
+			t.Fatalf("Merge = %+v, want %+v", got, base)
+		}
+	})
+
+	t.Run("a set width wins over the preset", func(t *testing.T) {
+		if got := Merge(ADRPreset(), Config{IDWidth: 6}); got.IDWidth != 6 {
+			t.Fatalf("id_width = %d, want 6", got.IDWidth)
+		}
+	})
+
+	t.Run("an unset width keeps the preset width", func(t *testing.T) {
+		if got := Merge(ADRPreset(), Config{Dir: "docs/adr"}); got.IDWidth != 4 {
+			t.Fatalf("id_width = %d, want 4", got.IDWidth)
+		}
+	})
+
+	t.Run("scalar overrides replace their base", func(t *testing.T) {
+		override := Config{Preset: "adr", Dir: "docs/decisions", StatusField: "state", Template: "templates/decision.md"}
+
+		got := Merge(ADRPreset(), override)
+
+		if got.Dir != "docs/decisions" || got.StatusField != "state" || got.Template != "templates/decision.md" {
+			t.Fatalf("Merge = %+v, want the override values", got)
+		}
+	})
+
+	t.Run("an empty scalar keeps the base value", func(t *testing.T) {
+		got := Merge(ADRPreset(), Config{IDWidth: 6})
+
+		if got.StatusField != DefaultStatusField {
+			t.Fatalf("status_field = %q, want %q", got.StatusField, DefaultStatusField)
+		}
+	})
+
+	lists := []struct {
+		name     string
+		override Config
+		check    func(t *testing.T, got Config)
+	}{
+		{
+			name:     "status values replace rather than append",
+			override: Config{StatusValues: []string{"draft", "final"}},
+			check: func(t *testing.T, got Config) {
+				if !slices.Equal(got.StatusValues, []string{"draft", "final"}) {
+					t.Fatalf("status_values = %v, want exactly the override", got.StatusValues)
+				}
+			},
+		},
+		{
+			name:     "edges replace rather than merge",
+			override: Config{Edges: []EdgeSpec{{Name: "supersedes", Key: "replaces", Acyclic: true, Direction: DirectionForward}}},
+			check: func(t *testing.T, got Config) {
+				if len(got.Edges) != 1 || got.Edges[0].Key != "replaces" {
+					t.Fatalf("edges = %+v, want exactly the override", got.Edges)
+				}
+			},
+		},
+		{
+			name: "rules replace the preset rules",
+			override: Config{Rules: []Rule{{
+				Name:     "accepted_with_dependencies",
+				Severity: model.SeverityWarn,
+				When:     Condition{Outbound: "depends-on"},
+				Message:  "an accepted decision still depends on another",
+			}}},
+			check: func(t *testing.T, got Config) {
+				if len(got.Rules) != 1 || got.Rules[0].Name != "accepted_with_dependencies" {
+					t.Fatalf("rules = %+v, want exactly the override", got.Rules)
+				}
+			},
+		},
+		{
+			name:     "derived edges replace the preset ones",
+			override: Config{DerivedEdges: []DerivedEdgeSpec{{Field: "state", Pattern: `^replaced by (\S+)`, Edge: "supersedes", Direction: DirectionReverse}}},
+			check: func(t *testing.T, got Config) {
+				if len(got.DerivedEdges) != 1 || got.DerivedEdges[0].Field != "state" {
+					t.Fatalf("derived_edges = %+v, want exactly the override", got.DerivedEdges)
+				}
+			},
+		},
+	}
+	for _, tt := range lists {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.check(t, Merge(ADRPreset(), tt.override))
+		})
+	}
+
+	t.Run("an empty list keeps the base list", func(t *testing.T) {
+		got := Merge(ADRPreset(), Config{Edges: []EdgeSpec{}, Rules: []Rule{}})
+
+		if len(got.Edges) != 2 || len(got.Rules) != 2 {
+			t.Fatalf("edges = %+v, rules = %+v, want the preset lists", got.Edges, got.Rules)
+		}
+	})
+
+	t.Run("the base is left unchanged", func(t *testing.T) {
+		base := ADRPreset()
+
+		Merge(base, Config{IDWidth: 6, StatusValues: []string{"draft"}, Rules: nil})
+
+		if base.IDWidth != 4 || len(base.StatusValues) != 5 || len(base.Rules) != 2 {
+			t.Fatalf("base = %+v, want it untouched", base)
+		}
+	})
+}
+
+func TestResolve(t *testing.T) {
+	t.Run("zero configuration is the preset plus discovery", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docs/adr/0001-a-decision.md": testDocument})
+
+		got, err := Resolve(Options{Root: root})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if want := filepath.Join(root, "docs", "adr"); got.Dir != want {
+			t.Errorf("dir = %q, want %q", got.Dir, want)
+		}
+		if got.Preset != PresetADR || got.IDWidth != DefaultIDWidth {
+			t.Errorf("preset = %q, id_width = %d, want the ADR defaults", got.Preset, got.IDWidth)
+		}
+		if len(got.Edges) != 2 || len(got.Rules) != 2 {
+			t.Errorf("edges = %+v, rules = %+v, want the preset defaults", got.Edges, got.Rules)
+		}
+	})
+
+	t.Run("a directory option skips discovery", func(t *testing.T) {
+		docs := testTree(t, map[string]string{"0001-a-decision.md": testDocument})
+		root := testTree(t, nil)
+
+		got, err := Resolve(Options{Root: root, Dir: docs})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if got.Dir != docs {
+			t.Fatalf("dir = %q, want %q", got.Dir, docs)
+		}
+	})
+
+	t.Run("docdag.yaml at the root is loaded without an option", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml":                 "id_width: 6\n",
+			"docs/adr/0001-a-decision.md": testDocument,
+		})
+
+		got, err := Resolve(Options{Root: root})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if got.IDWidth != 6 {
+			t.Errorf("id_width = %d, want 6 (the file overrides the preset)", got.IDWidth)
+		}
+		if want := filepath.Join(root, "docs", "adr"); got.Dir != want {
+			t.Errorf("dir = %q, want %q", got.Dir, want)
+		}
+	})
+
+	t.Run("a root without docdag.yaml is not an error", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docs/adr/0001-a-decision.md": testDocument})
+
+		if _, err := Resolve(Options{Root: root}); err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+	})
+
+	t.Run("an explicit config path is loaded from anywhere", func(t *testing.T) {
+		docs := testTree(t, map[string]string{"0001-a-decision.md": testDocument})
+		elsewhere := testTree(t, map[string]string{"docdag.yaml": "id_width: 6\ndir: " + docs + "\n"})
+		root := testTree(t, nil)
+
+		got, err := Resolve(Options{Root: root, ConfigPath: filepath.Join(elsewhere, "docdag.yaml")})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if got.IDWidth != 6 {
+			t.Errorf("id_width = %d, want 6", got.IDWidth)
+		}
+		if got.Dir != docs {
+			t.Errorf("dir = %q, want %q", got.Dir, docs)
+		}
+	})
+
+	t.Run("the directory option beats the config file", func(t *testing.T) {
+		docs := testTree(t, map[string]string{"0001-a-decision.md": testDocument})
+		absent := filepath.Join(t.TempDir(), "absent")
+		root := testTree(t, map[string]string{"docdag.yaml": "dir: " + absent + "\n"})
+
+		got, err := Resolve(Options{Root: root, Dir: docs})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if got.Dir != docs {
+			t.Fatalf("dir = %q, want the flag value %q", got.Dir, docs)
+		}
+	})
+
+	t.Run("the config file merges over the preset it names", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml":                 "preset: adr\nid_width: 6\nstatus_values:\n  - draft\n  - final\n",
+			"docs/adr/0001-a-decision.md": testDocument,
+		})
+
+		got, err := Resolve(Options{Root: root})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if got.IDWidth != 6 {
+			t.Errorf("id_width = %d, want 6", got.IDWidth)
+		}
+		if !slices.Equal(got.StatusValues, []string{"draft", "final"}) {
+			t.Errorf("status_values = %v, want exactly the file's", got.StatusValues)
+		}
+		if len(got.Edges) != 2 || len(got.Rules) != 2 {
+			t.Errorf("edges = %+v, rules = %+v, want the preset's", got.Edges, got.Rules)
+		}
+	})
+
+	t.Run("a missing config path is an error", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docs/adr/0001-a-decision.md": testDocument})
+
+		_, err := Resolve(Options{Root: root, ConfigPath: filepath.Join(root, "absent.yaml")})
+
+		if !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("err = %v, want it to wrap fs.ErrNotExist", err)
+		}
+	})
+
+	t.Run("nothing to discover is an error", func(t *testing.T) {
+		root := testTree(t, map[string]string{"notes.md": "# Notes\n"})
+
+		_, err := Resolve(Options{Root: root})
+
+		if !errors.Is(err, model.ErrNoDocuments) {
+			t.Fatalf("err = %v, want it to wrap model.ErrNoDocuments", err)
+		}
+	})
+
+	t.Run("an unknown preset in the config file is an error", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml":                 "preset: mkdocs\n",
+			"docs/adr/0001-a-decision.md": testDocument,
+		})
+
+		_, err := Resolve(Options{Root: root})
+
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("err = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("an invalid merged configuration is rejected", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml":                 "edges:\n  - name: supersedes\n    key: supersedes\n    direction: sideways\n",
+			"docs/adr/0001-a-decision.md": testDocument,
+		})
+
+		_, err := Resolve(Options{Root: root})
+
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("err = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+}

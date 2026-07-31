@@ -1,0 +1,36 @@
+{
+  "nodes": [
+    {
+      "id": "0001",
+      "title": "Authenticate browsers with session cookies",
+      "status": "superseded",
+      "path": "0001-authenticate-with-session-cookies.md"
+    },
+    {
+      "id": "0002",
+      "title": "Authenticate integrations with API keys",
+      "status": "superseded",
+      "path": "0002-authenticate-with-api-keys.md"
+    },
+    {
+      "id": "0003",
+      "title": "Authenticate every client with short-lived signed tokens",
+      "status": "accepted",
+      "path": "0003-authenticate-with-signed-tokens.md"
+    }
+  ],
+  "links": [
+    {
+      "source": "0003",
+      "target": "0001",
+      "type": "supersedes",
+      "origin": "structured"
+    },
+    {
+      "source": "0003",
+      "target": "0002",
+      "type": "supersedes",
+      "origin": "structured"
+    }
+  ]
+}

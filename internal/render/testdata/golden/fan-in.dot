@@ -1,0 +1,8 @@
+digraph docdag {
+  rankdir=LR;
+  "0001" [label="0001 Authenticate browsers with sessi..."];
+  "0002" [label="0002 Authenticate integrations with A..."];
+  "0003" [label="0003 Authenticate every client with s..."];
+  "0003" -> "0001" [label="supersedes"];
+  "0003" -> "0002" [label="supersedes"];
+}
