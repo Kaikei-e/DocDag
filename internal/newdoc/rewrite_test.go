@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -203,7 +204,8 @@ func TestRewriteStatusFile(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stat document: %v", err)
 		}
-		if info.Mode().Perm() != 0o640 {
+		// Windows only models a read-only bit, not POSIX permission sets.
+		if runtime.GOOS != "windows" && info.Mode().Perm() != 0o640 {
 			t.Errorf("mode = %v, want %v", info.Mode().Perm(), os.FileMode(0o640))
 		}
 	})

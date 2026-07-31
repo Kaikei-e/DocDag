@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/goccy/go-yaml"
 
@@ -38,12 +39,26 @@ func DiscoveryPaths() []string {
 func Discover(root string, norm IDNormalizer) (string, error) {
 	for _, candidate := range DiscoveryPaths() {
 		dir := filepath.Join(root, filepath.FromSlash(candidate))
-		entries, err := os.ReadDir(dir)
+		info, err := os.Stat(dir)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		// A candidate that exists but cannot be read is not the same as an
 		// absent one: falling through would validate a directory nobody named.
+		if err != nil {
+			return "", fmt.Errorf("read documents directory %s: %w", dir, err)
+		}
+		if !info.IsDir() {
+			return "", fmt.Errorf("documents candidate %s is not a directory", dir)
+		}
+		exact, err := matchesOnDiskCase(root, candidate)
+		if err != nil {
+			return "", fmt.Errorf("read documents directory %s: %w", dir, err)
+		}
+		if !exact {
+			continue
+		}
+		entries, err := os.ReadDir(dir)
 		if err != nil {
 			return "", fmt.Errorf("read documents directory %s: %w", dir, err)
 		}
@@ -55,6 +70,25 @@ func Discover(root string, norm IDNormalizer) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no well-known documents directory under %s: %w", root, model.ErrNoDocuments)
+}
+
+// matchesOnDiskCase reports whether every component of the slash-separated
+// candidate exists under root spelled exactly this way. A plain stat cannot
+// tell: on a case-insensitive filesystem it also answers for docs/ADR when
+// asked about docs/adr.
+func matchesOnDiskCase(root, candidate string) (bool, error) {
+	parent := root
+	for component := range strings.SplitSeq(candidate, "/") {
+		entries, err := os.ReadDir(parent)
+		if err != nil {
+			return false, err
+		}
+		if !slices.ContainsFunc(entries, func(e fs.DirEntry) bool { return e.Name() == component }) {
+			return false, nil
+		}
+		parent = filepath.Join(parent, component)
+	}
+	return true, nil
 }
 
 // Load reads a docdag.yaml file into a partial configuration.
