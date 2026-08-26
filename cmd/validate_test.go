@@ -463,6 +463,41 @@ func TestValidateReferenceLayerIsOptIn(t *testing.T) {
 	})
 }
 
+func TestValidateHonoursAnEmptyDerivedEdgeList(t *testing.T) {
+	corpus := func(extra map[string]string) map[string]string {
+		files := map[string]string{
+			"docs/adr/0001-a-decision.md": "---\ntitle: A decision\nstatus: superseded by 0002\ndate: 2025-01-01\n---\n\n# A decision\n",
+			"docs/adr/0002-another.md":    "---\ntitle: Another decision\nstatus: accepted\ndate: 2025-02-01\n---\n\n# Another decision\n",
+		}
+		for name, content := range extra {
+			files[name] = content
+		}
+		return files
+	}
+
+	t.Run("the preset derives the edge from the status string", func(t *testing.T) {
+		t.Chdir(writeDocs(t, corpus(nil)))
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+			"0001-a-decision.md:3: WARN unstructured_supersedes 0001:",
+		})
+	})
+
+	t.Run("an empty list clears it", func(t *testing.T) {
+		t.Chdir(writeDocs(t, corpus(map[string]string{"docdag.yaml": "derived_edges: []\n"})))
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+			"0001-a-decision.md:3: ERROR unknown_status 0001:",
+		})
+	})
+}
+
 func TestValidateReportsARepeatedDanglingReferenceOnce(t *testing.T) {
 	dir := writeDocs(t, map[string]string{
 		"docdag.yaml": "references:\n  dangling: error\n",
