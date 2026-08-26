@@ -467,6 +467,16 @@ func TestBuildReportsDanglingReferences(t *testing.T) {
 		}
 	})
 
+	t.Run("one link written twice on a line is one finding", func(t *testing.T) {
+		docs := []*parse.Document{
+			testDoc("0001", map[string]any{"status": "accepted"}, "See [[0099]] and [[0099]] again.\n"),
+		}
+
+		g := Build(docs, withDangling(string(model.SeverityError)))
+
+		testAssertSingleFinding(t, g.Findings, model.RuleDanglingReference, model.SeverityError, "0001")
+	})
+
 	t.Run("prose that names no identity is never dangling", func(t *testing.T) {
 		docs := []*parse.Document{
 			testDoc("0001", map[string]any{"status": "accepted"},
