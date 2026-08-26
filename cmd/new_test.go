@@ -62,7 +62,7 @@ func TestNewCreatesTheNextDocument(t *testing.T) {
 	got := run(t, "new", title, "--supersedes", "0004", "--depends-on", "0003", "--dir", dir)
 	assertExit(t, got, 0)
 
-	wantPath := filepath.Join(dir, "0007-adopt-content-addressed-cache-keys.md")
+	wantPath := docPath(dir, "0007-adopt-content-addressed-cache-keys.md")
 	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
 
 	created, err := os.ReadFile(wantPath)
@@ -102,7 +102,7 @@ func TestNewCreatesTheNextDocument(t *testing.T) {
 
 func TestNewRewritesOnlyTheStatusOfTheSupersededDocument(t *testing.T) {
 	dir := copyFixture(t, "ok-basic")
-	superseded := filepath.Join(dir, "000004.md")
+	superseded := docPath(dir, "000004.md")
 	untouched := filepath.Join(dir, "000003.md")
 
 	before, err := os.ReadFile(superseded)
@@ -141,7 +141,7 @@ func TestNewWithoutEdgesOmitsTheEdgeKeys(t *testing.T) {
 	got := run(t, "new", "Rotate signing keys weekly", "--dir", dir)
 	assertExit(t, got, 0)
 
-	wantPath := filepath.Join(dir, "0004-rotate-signing-keys-weekly.md")
+	wantPath := docPath(dir, "0004-rotate-signing-keys-weekly.md")
 	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
 
 	created, err := os.ReadFile(wantPath)
@@ -178,7 +178,7 @@ func TestNewJSONReportsTheCreatedPath(t *testing.T) {
 
 	assertExit(t, got, 0)
 	payload := decodeJSON[map[string]string](t, got.stdout)
-	want := filepath.Join(dir, "0004-rotate-signing-keys-weekly.md")
+	want := docPath(dir, "0004-rotate-signing-keys-weekly.md")
 	if payload["path"] != want {
 		t.Errorf("payload = %v, want the created path %q", payload, want)
 	}
@@ -201,7 +201,7 @@ func TestNewWithAnExplicitIdentifier(t *testing.T) {
 	got := run(t, "new", "Adopt content addressed cache keys", "--id", "42", "--dir", dir)
 
 	assertExit(t, got, 0)
-	wantPath := filepath.Join(dir, "0042-adopt-content-addressed-cache-keys.md")
+	wantPath := docPath(dir, "0042-adopt-content-addressed-cache-keys.md")
 	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
 	if _, err := os.Stat(wantPath); err != nil {
 		t.Errorf("stat created document: %v", err)
@@ -210,7 +210,7 @@ func TestNewWithAnExplicitIdentifier(t *testing.T) {
 
 func TestNewWithAnExistingIdentifierAndTitleIsIdempotent(t *testing.T) {
 	dir := copyFixture(t, "ok-basic")
-	existing := filepath.Join(dir, "000004.md")
+	existing := docPath(dir, "000004.md")
 	before, err := os.ReadFile(existing)
 	if err != nil {
 		t.Fatalf("read %s: %v", existing, err)
@@ -267,7 +267,7 @@ func TestNewRefusesACorpusWithAnIdentifierCollision(t *testing.T) {
 
 func TestNewDryRunOfAnExistingDocumentPlansNoWrite(t *testing.T) {
 	dir := copyFixture(t, "ok-basic")
-	existing := filepath.Join(dir, "000004.md")
+	existing := docPath(dir, "000004.md")
 
 	got := run(t, "new", "Schedule feed polling from the ingestion queue", "--id", "0004", "--dry-run", "--dir", dir)
 
@@ -277,7 +277,7 @@ func TestNewDryRunOfAnExistingDocumentPlansNoWrite(t *testing.T) {
 
 func TestNewDryRunPrintsThePlanAndWritesNothing(t *testing.T) {
 	dir := copyFixture(t, "ok-basic")
-	superseded := filepath.Join(dir, "000004.md")
+	superseded := docPath(dir, "000004.md")
 	before, err := os.ReadFile(superseded)
 	if err != nil {
 		t.Fatalf("read %s: %v", superseded, err)
@@ -286,7 +286,7 @@ func TestNewDryRunPrintsThePlanAndWritesNothing(t *testing.T) {
 	got := run(t, "new", "Adopt content addressed cache keys", "--supersedes", "0004", "--dry-run", "--dir", dir)
 
 	assertExit(t, got, 0)
-	created := filepath.Join(dir, "0007-adopt-content-addressed-cache-keys.md")
+	created := docPath(dir, "0007-adopt-content-addressed-cache-keys.md")
 	assertLines(t, "plan", lines(got.stdout), []string{
 		"create 0007 " + created,
 		"rewrite " + superseded + " status: superseded",
@@ -313,9 +313,9 @@ func TestNewDryRunJSONPlan(t *testing.T) {
 	want := render.Plan{
 		SchemaVersion: render.PlanSchemaVersion,
 		ID:            "0007",
-		Path:          filepath.Join(dir, "0007-adopt-content-addressed-cache-keys.md"),
+		Path:          docPath(dir, "0007-adopt-content-addressed-cache-keys.md"),
 		Rewrites: []render.PlanRewrite{
-			{Path: filepath.Join(dir, "000004.md"), Status: "superseded"},
+			{Path: docPath(dir, "000004.md"), Status: "superseded"},
 		},
 	}
 	if !reflect.DeepEqual(plan, want) {
@@ -371,7 +371,7 @@ func TestNewHonoursTheConfiguredFilenameTemplate(t *testing.T) {
 	got := run(t, "new", "Adopt content addressed cache keys", "--config", filepath.Join(cfg, "docdag.yaml"), "--dir", dir)
 
 	assertExit(t, got, 0)
-	wantPath := filepath.Join(dir, "000007.md")
+	wantPath := docPath(dir, "000007.md")
 	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
 	if _, err := os.Stat(wantPath); err != nil {
 		t.Errorf("stat created document: %v", err)

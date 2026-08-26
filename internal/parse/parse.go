@@ -233,11 +233,12 @@ func File(path string, cfg config.Config) (*Document, error) {
 // slashes, and relative to base when the document lives under it.
 func Localize(docs []*Document, base string) {
 	for _, doc := range docs {
-		doc.Path = localPath(base, doc.Path)
+		doc.Path = LocalPath(base, doc.Path)
 	}
 }
 
-func localPath(base, path string) string {
+// LocalPath rewrites one path the way a caller standing in base would type it.
+func LocalPath(base, path string) string {
 	if !filepath.IsAbs(path) {
 		return filepath.ToSlash(path)
 	}

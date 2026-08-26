@@ -3,11 +3,13 @@ package cmd
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
 	"github.com/Kaikei-e/DocDag/internal/model"
 	"github.com/Kaikei-e/DocDag/internal/newdoc"
+	"github.com/Kaikei-e/DocDag/internal/parse"
 	"github.com/Kaikei-e/DocDag/internal/render"
 )
 
@@ -58,6 +60,10 @@ func runNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	root, err := os.Getwd()
+	if err != nil {
+		return ioErr(fmt.Errorf("working directory: %w", err))
+	}
 	req := newdoc.Request{ID: id, Title: args[0], Supersedes: supersedes, DependsOn: dependsOn}
 	plan, err := newdoc.NewPlan(g, cfg, req)
 	if err != nil {
@@ -66,7 +72,7 @@ func runNew(cmd *cobra.Command, args []string) error {
 	out := cmd.OutOrStdout()
 
 	if dryRun {
-		if err := render.CreationPlan(out, planReport(plan), cfg.StatusField, format == formatJSON); err != nil {
+		if err := render.CreationPlan(out, planReport(plan, root), cfg.StatusField, format == formatJSON); err != nil {
 			return ioErr(err)
 		}
 		return nil
@@ -75,7 +81,7 @@ func runNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return creationErr(err)
 	}
-	if err := render.CreatedPath(out, path, format == formatJSON); err != nil {
+	if err := render.CreatedPath(out, parse.LocalPath(root, path), format == formatJSON); err != nil {
 		return ioErr(err)
 	}
 	return nil
@@ -90,15 +96,17 @@ func creationErr(err error) error {
 	return ioErr(fmt.Errorf("create document: %w", err))
 }
 
-func planReport(plan newdoc.Plan) render.Plan {
+// planReport names every file a plan touches the way a caller standing in root
+// would type it, so a plan reads like the findings a validation prints.
+func planReport(plan newdoc.Plan, root string) render.Plan {
 	out := render.Plan{
 		ID:       plan.ID,
-		Path:     plan.Path,
+		Path:     parse.LocalPath(root, plan.Path),
 		Exists:   plan.Exists,
 		Rewrites: make([]render.PlanRewrite, 0, len(plan.Rewrites)),
 	}
 	for _, r := range plan.Rewrites {
-		out.Rewrites = append(out.Rewrites, render.PlanRewrite{Path: r.Path, Status: r.Status})
+		out.Rewrites = append(out.Rewrites, render.PlanRewrite{Path: parse.LocalPath(root, r.Path), Status: r.Status})
 	}
 	return out
 }
