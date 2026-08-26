@@ -1,0 +1,228 @@
+// Package brief assembles the reading a caller needs about one document: where
+// it resolves to, its typed-edge neighbourhood, and one section of each of
+// those documents, inside a token budget.
+package brief
+
+import (
+	"fmt"
+	"os"
+	"slices"
+
+	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/internal/graph"
+	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/internal/parse"
+)
+
+// SchemaVersion is the version of the JSON brief.
+const SchemaVersion = 1
+
+// Defaults a caller applies when the user asks for nothing in particular.
+const (
+	DefaultDepth   = 1
+	DefaultBudget  = 2000
+	DefaultSection = "Decision"
+)
+
+// charsPerToken is the tokens-per-character approximation the budget counts in.
+// It is deliberately crude: the budget bounds how much prose a reader is handed,
+// not what a particular tokenizer would charge for it.
+const charsPerToken = 4
+
+// Options parameterise a brief. A Budget of zero or less is unbounded; a Depth
+// of zero reports the reference and its resolution alone.
+type Options struct {
+	Depth   int
+	Types   []model.EdgeType
+	Budget  int
+	Section string
+	All     bool
+}
+
+// Entry is one document in a brief. Excerpt is the first paragraph of the
+// requested section, empty when the document has no such section or when the
+// budget left no room for it.
+type Entry struct {
+	ID      model.ID `json:"id"`
+	Title   string   `json:"title"`
+	Status  string   `json:"status"`
+	Path    string   `json:"path"`
+	Excerpt string   `json:"excerpt,omitempty"`
+}
+
+// Line is the one-line form of an entry: what a reader is left with when the
+// budget has no room for prose.
+func (e Entry) Line() string {
+	return fmt.Sprintf("%s  %s  [%s]  %s", e.ID, e.Title, e.Status, e.Path)
+}
+
+// Budget records what a brief was allowed to cost and what it did cost.
+type Budget struct {
+	Limit    int `json:"limit"`
+	Used     int `json:"used"`
+	Degraded int `json:"degraded"`
+}
+
+// Brief is the assembled context of one document.
+type Brief struct {
+	SchemaVersion int     `json:"schema_version"`
+	Ref           Entry   `json:"ref"`
+	ResolvesTo    []Entry `json:"resolves_to"`
+	Ancestors     []Entry `json:"ancestors"`
+	Descendants   []Entry `json:"descendants"`
+	Budget        Budget  `json:"budget"`
+}
+
+// entries flattens a brief into the order it is read and the budget is spent in.
+func (b *Brief) entries() []*Entry {
+	out := []*Entry{&b.Ref}
+	for i := range b.ResolvesTo {
+		out = append(out, &b.ResolvesTo[i])
+	}
+	for i := range b.Ancestors {
+		out = append(out, &b.Ancestors[i])
+	}
+	for i := range b.Descendants {
+		out = append(out, &b.Descendants[i])
+	}
+	return out
+}
+
+// Build assembles the brief of one document. It reports model.ErrUnknownID for
+// a reference the corpus does not hold.
+func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief, error) {
+	if _, ok := g.Node(id); !ok {
+		return nil, fmt.Errorf("context of %s: %w", id, model.ErrUnknownID)
+	}
+	if opts.Section == "" {
+		opts.Section = DefaultSection
+	}
+
+	b := &Brief{SchemaVersion: SchemaVersion, ResolvesTo: []Entry{}, Ancestors: []Entry{}, Descendants: []Entry{}}
+	ref, err := entry(g, opts.Section, id)
+	if err != nil {
+		return nil, err
+	}
+	b.Ref = ref
+
+	taken := map[model.ID]bool{id: true}
+	if b.ResolvesTo, err = entries(g, cfg, opts, taken, resolution(g, cfg, id), true); err != nil {
+		return nil, err
+	}
+	ancestors := within(g, graph.Reverse(g, opts.Types...), id, opts.Depth)
+	if b.Ancestors, err = entries(g, cfg, opts, taken, ancestors, false); err != nil {
+		return nil, err
+	}
+	descendants := within(g, graph.Adjacency(g, opts.Types...), id, opts.Depth)
+	if b.Descendants, err = entries(g, cfg, opts, taken, descendants, false); err != nil {
+		return nil, err
+	}
+
+	applyBudget(b, opts.Budget)
+	return b, nil
+}
+
+// resolution names the documents that currently stand in for a superseded
+// reference.
+func resolution(g *model.Graph, cfg config.Config, id model.ID) []model.ID {
+	if _, ok := cfg.Edge(config.EdgeSupersedes); !ok {
+		return nil
+	}
+	resolved, err := graph.Resolve(g, id, config.EdgeSupersedes)
+	if err != nil {
+		// A supersedes cycle is a validation finding; a brief still reports the
+		// document the caller asked about.
+		return nil
+	}
+	return resolved
+}
+
+// within returns the documents reachable over adj in at most depth hops, sorted
+// and excluding the starting document.
+func within(g *model.Graph, adj map[model.ID][]model.ID, id model.ID, depth int) []model.ID {
+	seen := map[model.ID]bool{id: true}
+	found := []model.ID{}
+	frontier := []model.ID{id}
+	for hop := 0; hop < depth && len(frontier) > 0; hop++ {
+		next := []model.ID{}
+		for _, current := range frontier {
+			for _, neighbor := range adj[current] {
+				if seen[neighbor] {
+					continue
+				}
+				seen[neighbor] = true
+				if _, known := g.Node(neighbor); !known {
+					continue
+				}
+				next = append(next, neighbor)
+				found = append(found, neighbor)
+			}
+		}
+		frontier = next
+	}
+	slices.Sort(found)
+	return found
+}
+
+// entries builds the entries of one group, skipping the documents an earlier
+// group already reported. Binding documents alone are kept unless the caller
+// asked for all of them; the resolution is always kept.
+func entries(g *model.Graph, cfg config.Config, opts Options, taken map[model.ID]bool, ids []model.ID, always bool) ([]Entry, error) {
+	out := []Entry{}
+	for _, id := range ids {
+		if taken[id] {
+			continue
+		}
+		if !always && !opts.All && !graph.Binding(g, cfg, id) {
+			continue
+		}
+		taken[id] = true
+		e, err := entry(g, opts.Section, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+func entry(g *model.Graph, section string, id model.ID) (Entry, error) {
+	n := g.Nodes[id]
+	src, err := os.ReadFile(n.Path)
+	if err != nil {
+		return Entry{}, fmt.Errorf("read document %s: %w", n.Path, err)
+	}
+	_, body, _ := parse.SplitFrontmatter(src)
+	return Entry{ID: n.ID, Title: n.Title, Status: n.Status, Path: n.Path, Excerpt: Section(string(body), section)}, nil
+}
+
+// applyBudget charges every one-line entry, then buys excerpts in reading order
+// while they fit. An excerpt is dropped whole: a half sentence is worse than a
+// one-line entry, and once one entry degrades every later one does too.
+func applyBudget(b *Brief, limit int) {
+	all := b.entries()
+	used := 0
+	for _, e := range all {
+		used += tokens(e.Line())
+	}
+	degraded := 0
+	spent := false
+	for _, e := range all {
+		if e.Excerpt == "" {
+			continue
+		}
+		cost := tokens(e.Excerpt)
+		if limit > 0 && (spent || used+cost > limit) {
+			spent = true
+			e.Excerpt = ""
+			degraded++
+			continue
+		}
+		used += cost
+	}
+	b.Budget = Budget{Limit: limit, Used: used, Degraded: degraded}
+}
+
+func tokens(s string) int {
+	return (len(s) + charsPerToken - 1) / charsPerToken
+}

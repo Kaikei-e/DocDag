@@ -13,7 +13,7 @@ func newStatsCmd() *cobra.Command {
 		Short: "Report degree-based statistics for the document corpus",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			format, err := outputFormat(cmd)
+			format, err := outputFormat(cmd, formatText, formatJSON)
 			if err != nil {
 				return err
 			}
@@ -28,9 +28,10 @@ func newStatsCmd() *cobra.Command {
 			}
 			stats := graph.ComputeStats(g, cfg)
 			out := cmd.OutOrStdout()
-			if format == formatJSON {
+			switch format {
+			case formatJSON:
 				err = render.StatsJSON(out, stats)
-			} else {
+			default:
 				err = render.StatsText(out, stats)
 			}
 			if err != nil {

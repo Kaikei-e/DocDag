@@ -1,0 +1,10 @@
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+    max_inbound: 1
+  - name: depends-on
+    key: depends-on
+    acyclic: true
+    direction: forward

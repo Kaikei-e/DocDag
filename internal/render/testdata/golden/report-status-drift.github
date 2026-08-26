@@ -1,0 +1,1 @@
+::error file=../../testdata/fixtures/status-drift/0001-serve-images-from-the-application-server.md,line=3,title=status_drift::0001: has inbound supersedes but status is not superseded

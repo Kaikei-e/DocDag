@@ -1,10 +1,12 @@
 package cmd
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/internal/render"
 )
 
 func TestResolveWalksToTheCurrentDocument(t *testing.T) {
@@ -49,12 +51,33 @@ func TestResolvePrintsEverySuccessorSorted(t *testing.T) {
 }
 
 func TestResolveJSON(t *testing.T) {
-	got := run(t, "resolve", "0001", "--format", "json", "--dir", fixture(t, "ok-basic"))
+	got := run(t, "resolve", "0002", "--format", "json", "--dir", fixture(t, "ok-madr"))
+
 	assertExit(t, got, 0)
-	ids := decodeJSON[[]model.ID](t, got.stdout)
-	if len(ids) != 1 || ids[0] != model.ID("0004") {
-		t.Errorf("ids = %v, want [0004]", ids)
+	records := decodeJSON[[]render.Record](t, got.stdout)
+	if len(records) != 1 {
+		t.Fatalf("records = %+v, want one successor", records)
 	}
+	r := records[0]
+	if r.ID != model.ID("0003") || r.Title != "Store thumbnails in object storage" || r.Status != "accepted" {
+		t.Errorf("record = %+v, want the successor described", r)
+	}
+	if filepath.Base(r.Path) != "0003-store-thumbnails-in-object-storage.md" {
+		t.Errorf("path = %q, want the successor's file", r.Path)
+	}
+}
+
+func TestResolveFieldsSelectTheTextColumns(t *testing.T) {
+	dir := fixture(t, "ok-madr")
+
+	bare := run(t, "resolve", "0002", "--dir", dir)
+	assertExit(t, bare, 0)
+	assertLines(t, "resolve", lines(bare.stdout), []string{"0003"})
+
+	got := run(t, "resolve", "0002", "--fields", "id,status,title", "--dir", dir)
+
+	assertExit(t, got, 0)
+	assertLines(t, "resolve", lines(got.stdout), []string{"0003\taccepted\tStore thumbnails in object storage"})
 }
 
 func TestResolveNeverPrintsADocumentTheCorpusDoesNotHold(t *testing.T) {

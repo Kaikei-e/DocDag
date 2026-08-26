@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,8 +43,10 @@ date: {{ .Date }}
 // DateLayout is the frontmatter date format.
 const DateLayout = "2006-01-02"
 
-// Request describes the document to create. A zero Date means today.
+// Request describes the document to create. A zero Date means today, and an
+// empty ID takes the next free identifier.
 type Request struct {
+	ID         string
 	Title      string
 	Supersedes []string
 	DependsOn  []string
@@ -91,13 +94,20 @@ func Kebab(title string) string {
 	return b.String()
 }
 
-// Filename builds the `<id>-<kebab-title>.md` file name.
-func Filename(id model.ID, title string) string {
+// separatedSlug matches the slug placeholder together with the separator that
+// joins it to the identifier, so a title yielding no slug leaves no orphan
+// separator behind.
+var separatedSlug = regexp.MustCompile(`[-_]?\{slug\}[-_]?`)
+
+// Filename builds a document name from the configured name template.
+func Filename(cfg config.Config, id model.ID, title string) string {
+	name := cfg.FilenameTemplate()
 	slug := Kebab(title)
 	if slug == "" {
-		return id.String() + ".md"
+		name = separatedSlug.ReplaceAllString(name, "")
 	}
-	return id.String() + "-" + slug + ".md"
+	name = strings.ReplaceAll(name, "{slug}", slug)
+	return strings.ReplaceAll(name, "{id}", id.String())
 }
 
 // LoadTemplate reads the configured template file, falling back to
@@ -223,34 +233,35 @@ func blockLineEnding(opening, block []byte) []byte {
 	return []byte("\n")
 }
 
-// rewrite is a status rewrite that has been computed but not yet written.
-type rewrite struct {
-	path    string
-	content []byte
-	mode    fs.FileMode
+// Rewrite is a status change that has been computed but not yet written.
+type Rewrite struct {
+	Path    string
+	Status  string
+	Content []byte
+	Mode    fs.FileMode
 }
 
 // planRewrite reads a document and computes its rewritten form without
 // touching the file.
-func planRewrite(path, field, status string) (rewrite, error) {
+func planRewrite(path, field, status string) (Rewrite, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return rewrite{}, fmt.Errorf("stat %s: %w", path, err)
+		return Rewrite{}, fmt.Errorf("stat %s: %w", path, err)
 	}
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return rewrite{}, fmt.Errorf("read %s: %w", path, err)
+		return Rewrite{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	content, err := RewriteStatus(src, field, status)
 	if err != nil {
-		return rewrite{}, fmt.Errorf("rewrite %s: %w", path, err)
+		return Rewrite{}, fmt.Errorf("rewrite %s: %w", path, err)
 	}
-	return rewrite{path: path, content: content, mode: info.Mode().Perm()}, nil
+	return Rewrite{Path: path, Status: status, Content: content, Mode: info.Mode().Perm()}, nil
 }
 
-func (r rewrite) apply() error {
-	if err := os.WriteFile(r.path, r.content, r.mode); err != nil {
-		return fmt.Errorf("write %s: %w", r.path, err)
+func (r Rewrite) apply() error {
+	if err := os.WriteFile(r.Path, r.Content, r.Mode); err != nil {
+		return fmt.Errorf("write %s: %w", r.Path, err)
 	}
 	return nil
 }
@@ -264,27 +275,49 @@ func RewriteStatusFile(path, field, status string) error {
 	return planned.apply()
 }
 
-// Create writes the new document and rewrites the status of every document it
-// supersedes. It returns the path of the created file.
-func Create(g *model.Graph, cfg config.Config, req Request) (string, error) {
+// Plan is the document Create would write and the status rewrites it would
+// apply, all computed without touching the disk. An Exists plan names a
+// document the corpus already holds under the requested identifier and title:
+// there is nothing left to write.
+type Plan struct {
+	ID       model.ID
+	Path     string
+	Content  []byte
+	Rewrites []Rewrite
+	Exists   bool
+}
+
+// NewPlan computes what creating the requested document takes. Every rewrite
+// is computed before anything is written: creating the new document and then
+// failing half way through the old ones would leave a corpus nobody asked for.
+func NewPlan(g *model.Graph, cfg config.Config, req Request) (Plan, error) {
+	if err := noCollision(g); err != nil {
+		return Plan{}, err
+	}
 	superseded, err := documents(g, cfg, req.Supersedes)
 	if err != nil {
-		return "", err
+		return Plan{}, err
 	}
 	if _, err := documents(g, cfg, req.DependsOn); err != nil {
-		return "", err
+		return Plan{}, err
 	}
-	id, err := NextID(g, cfg)
+	id, err := identifier(g, cfg, req)
 	if err != nil {
-		return "", err
+		return Plan{}, err
+	}
+	if n, ok := g.Node(id); ok {
+		if !sameTitle(n.Title, req.Title) {
+			return Plan{}, fmt.Errorf("document %s is titled %q, not %q: %w", id, n.Title, req.Title, model.ErrIDConflict)
+		}
+		return Plan{ID: id, Path: documentPath(cfg, n), Exists: true}, nil
 	}
 	edges, err := EdgeBlock(cfg, req)
 	if err != nil {
-		return "", err
+		return Plan{}, err
 	}
 	tmpl, err := LoadTemplate(cfg)
 	if err != nil {
-		return "", err
+		return Plan{}, err
 	}
 	date := req.Date
 	if date.IsZero() {
@@ -298,31 +331,66 @@ func Create(g *model.Graph, cfg config.Config, req Request) (string, error) {
 		EdgeBlock: edges,
 	})
 	if err != nil {
-		return "", err
+		return Plan{}, err
 	}
 
-	// Every rewrite is computed before anything is written: creating the new
-	// document and then failing half way through the old ones would leave a
-	// corpus nobody asked for.
-	rewrites := make([]rewrite, 0, len(superseded))
+	plan := Plan{
+		ID:       id,
+		Path:     filepath.Join(cfg.Dir, Filename(cfg, id, req.Title)),
+		Content:  doc,
+		Rewrites: make([]Rewrite, 0, len(superseded)),
+	}
 	for _, n := range superseded {
 		planned, err := planRewrite(documentPath(cfg, n), cfg.StatusField, config.StatusSuperseded)
 		if err != nil {
-			return "", err
+			return Plan{}, err
 		}
-		rewrites = append(rewrites, planned)
+		plan.Rewrites = append(plan.Rewrites, planned)
 	}
+	return plan, nil
+}
 
-	path := filepath.Join(cfg.Dir, Filename(id, req.Title))
-	if err := writeNew(path, doc); err != nil {
+// noCollision refuses a corpus in which two files claim one identifier: the
+// next identifier is not knowable, and neither is which file a reference names.
+func noCollision(g *model.Graph) error {
+	for _, f := range g.Findings {
+		if f.Rule == model.RuleIDCollision {
+			return fmt.Errorf("document %s %s: %w", f.ID, f.Detail, model.ErrIDConflict)
+		}
+	}
+	return nil
+}
+
+// identifier resolves the identifier a request asks for, or the next free one
+// when it asks for none.
+func identifier(g *model.Graph, cfg config.Config, req Request) (model.ID, error) {
+	if req.ID == "" {
+		return NextID(g, cfg)
+	}
+	id, ok := cfg.Normalizer().Normalize(req.ID)
+	if !ok {
+		return "", fmt.Errorf("unrecognized reference %q: %w", req.ID, model.ErrUnknownID)
+	}
+	return id, nil
+}
+
+func sameTitle(a, b string) bool { return strings.TrimSpace(a) == strings.TrimSpace(b) }
+
+// Apply writes the planned document and then the planned rewrites, returning
+// the path of the created file.
+func (p Plan) Apply() (string, error) {
+	if p.Exists {
+		return p.Path, nil
+	}
+	if err := writeNew(p.Path, p.Content); err != nil {
 		return "", err
 	}
-	for _, planned := range rewrites {
+	for _, planned := range p.Rewrites {
 		if err := planned.apply(); err != nil {
 			return "", err
 		}
 	}
-	return path, nil
+	return p.Path, nil
 }
 
 // writeNew refuses to touch an existing document: creating a decision must

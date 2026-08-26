@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/goccy/go-yaml"
 
 	"github.com/Kaikei-e/DocDag/internal/newdoc"
+	"github.com/Kaikei-e/DocDag/internal/render"
 )
 
 func splitDocument(t *testing.T, src []byte) (map[string]any, string) {
@@ -60,7 +62,7 @@ func TestNewCreatesTheNextDocument(t *testing.T) {
 	got := run(t, "new", title, "--supersedes", "0004", "--depends-on", "0003", "--dir", dir)
 	assertExit(t, got, 0)
 
-	wantPath := filepath.Join(dir, "0007-adopt-content-addressed-cache-keys.md")
+	wantPath := docPath(dir, "0007-adopt-content-addressed-cache-keys.md")
 	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
 
 	created, err := os.ReadFile(wantPath)
@@ -100,7 +102,7 @@ func TestNewCreatesTheNextDocument(t *testing.T) {
 
 func TestNewRewritesOnlyTheStatusOfTheSupersededDocument(t *testing.T) {
 	dir := copyFixture(t, "ok-basic")
-	superseded := filepath.Join(dir, "000004.md")
+	superseded := docPath(dir, "000004.md")
 	untouched := filepath.Join(dir, "000003.md")
 
 	before, err := os.ReadFile(superseded)
@@ -139,7 +141,7 @@ func TestNewWithoutEdgesOmitsTheEdgeKeys(t *testing.T) {
 	got := run(t, "new", "Rotate signing keys weekly", "--dir", dir)
 	assertExit(t, got, 0)
 
-	wantPath := filepath.Join(dir, "0004-rotate-signing-keys-weekly.md")
+	wantPath := docPath(dir, "0004-rotate-signing-keys-weekly.md")
 	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
 
 	created, err := os.ReadFile(wantPath)
@@ -176,7 +178,7 @@ func TestNewJSONReportsTheCreatedPath(t *testing.T) {
 
 	assertExit(t, got, 0)
 	payload := decodeJSON[map[string]string](t, got.stdout)
-	want := filepath.Join(dir, "0004-rotate-signing-keys-weekly.md")
+	want := docPath(dir, "0004-rotate-signing-keys-weekly.md")
 	if payload["path"] != want {
 		t.Errorf("payload = %v, want the created path %q", payload, want)
 	}
@@ -190,6 +192,226 @@ func TestNewRejectsAnUnknownFormat(t *testing.T) {
 	assertExit(t, got, 2)
 	if _, err := os.Stat(filepath.Join(dir, "0004-rotate-signing-keys-weekly.md")); !os.IsNotExist(err) {
 		t.Error("new created a document despite a usage error")
+	}
+}
+
+func TestNewWithAnExplicitIdentifier(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--id", "42", "--dir", dir)
+
+	assertExit(t, got, 0)
+	wantPath := docPath(dir, "0042-adopt-content-addressed-cache-keys.md")
+	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Errorf("stat created document: %v", err)
+	}
+}
+
+func TestNewWithAnExistingIdentifierAndTitleIsIdempotent(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+	existing := docPath(dir, "000004.md")
+	before, err := os.ReadFile(existing)
+	if err != nil {
+		t.Fatalf("read %s: %v", existing, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+
+	got := run(t, "new", "Schedule feed polling from the ingestion queue", "--id", "0004", "--dir", dir)
+
+	assertExit(t, got, 0)
+	assertLines(t, "existing path", lines(got.stdout), []string{existing})
+	after, err := os.ReadFile(existing)
+	if err != nil {
+		t.Fatalf("read %s: %v", existing, err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("the existing document was rewritten:\ngot:\n%s\nwant:\n%s", after, before)
+	}
+	now, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	if len(now) != len(entries) {
+		t.Errorf("the corpus holds %d documents, want the %d it started with", len(now), len(entries))
+	}
+}
+
+func TestNewWithAnExistingIdentifierAndADifferentTitleFails(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--id", "0004", "--dir", dir)
+
+	assertExit(t, got, 1)
+	if !strings.Contains(got.stderr, "Schedule feed polling from the ingestion queue") {
+		t.Errorf("stderr = %q, want it to name the title already under the identifier", got.stderr)
+	}
+}
+
+func TestNewRefusesACorpusWithAnIdentifierCollision(t *testing.T) {
+	dir := copyFixture(t, "id-collision")
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--dir", dir)
+
+	assertExit(t, got, 1)
+	if !strings.Contains(got.stderr, "0004") {
+		t.Errorf("stderr = %q, want it to name the colliding identifier", got.stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "0005-adopt-content-addressed-cache-keys.md")); !os.IsNotExist(err) {
+		t.Error("new wrote a document into a corpus with an identifier collision")
+	}
+}
+
+func TestNewDryRunOfAnExistingDocumentPlansNoWrite(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+	existing := docPath(dir, "000004.md")
+
+	got := run(t, "new", "Schedule feed polling from the ingestion queue", "--id", "0004", "--dry-run", "--dir", dir)
+
+	assertExit(t, got, 0)
+	assertLines(t, "plan", lines(got.stdout), []string{"exists 0004 " + existing})
+}
+
+func TestNewDryRunPrintsThePlanAndWritesNothing(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+	superseded := docPath(dir, "000004.md")
+	before, err := os.ReadFile(superseded)
+	if err != nil {
+		t.Fatalf("read %s: %v", superseded, err)
+	}
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--supersedes", "0004", "--dry-run", "--dir", dir)
+
+	assertExit(t, got, 0)
+	created := docPath(dir, "0007-adopt-content-addressed-cache-keys.md")
+	assertLines(t, "plan", lines(got.stdout), []string{
+		"create 0007 " + created,
+		"rewrite " + superseded + " status: superseded",
+	})
+	if _, err := os.Stat(created); !os.IsNotExist(err) {
+		t.Error("--dry-run created the document it only planned")
+	}
+	after, err := os.ReadFile(superseded)
+	if err != nil {
+		t.Fatalf("read %s: %v", superseded, err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("--dry-run rewrote a document:\ngot:\n%s\nwant:\n%s", after, before)
+	}
+}
+
+func TestNewDryRunJSONPlan(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--supersedes", "0004", "--dry-run", "--format", "json", "--dir", dir)
+
+	assertExit(t, got, 0)
+	plan := decodeJSON[render.Plan](t, got.stdout)
+	want := render.Plan{
+		SchemaVersion: render.PlanSchemaVersion,
+		ID:            "0007",
+		Path:          docPath(dir, "0007-adopt-content-addressed-cache-keys.md"),
+		Rewrites: []render.PlanRewrite{
+			{Path: docPath(dir, "000004.md"), Status: "superseded"},
+		},
+	}
+	if !reflect.DeepEqual(plan, want) {
+		t.Errorf("plan = %+v, want %+v", plan, want)
+	}
+}
+
+func TestNewNamesFilesTheWayTheCallerWouldTypeThem(t *testing.T) {
+	corpus := map[string]string{
+		"docs/adr/0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n",
+	}
+
+	t.Run("the plan is relative to the working directory", func(t *testing.T) {
+		t.Chdir(writeDocs(t, corpus))
+
+		got := run(t, "new", "Another decision", "--supersedes", "0001", "--dry-run", "--format", "json")
+
+		assertExit(t, got, 0)
+		plan := decodeJSON[render.Plan](t, got.stdout)
+		want := render.Plan{
+			SchemaVersion: render.PlanSchemaVersion,
+			ID:            "0002",
+			Path:          "docs/adr/0002-another-decision.md",
+			Rewrites:      []render.PlanRewrite{{Path: "docs/adr/0001-a-decision.md", Status: "superseded"}},
+		}
+		if !reflect.DeepEqual(plan, want) {
+			t.Errorf("plan = %+v, want %+v", plan, want)
+		}
+	})
+
+	t.Run("the created path is relative to the working directory", func(t *testing.T) {
+		t.Chdir(writeDocs(t, corpus))
+
+		got := run(t, "new", "Another decision")
+
+		assertExit(t, got, 0)
+		assertLines(t, "created path", lines(got.stdout), []string{"docs/adr/0002-another-decision.md"})
+	})
+}
+
+func TestNewDryRunJSONSaysWhetherTheDocumentIsAlreadyThere(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+
+	t.Run("an identifier the corpus already holds", func(t *testing.T) {
+		got := run(t, "new", "Schedule feed polling from the ingestion queue", "--id", "0004", "--dry-run", "--format", "json", "--dir", dir)
+
+		assertExit(t, got, 0)
+		payload := decodeJSON[map[string]any](t, got.stdout)
+		if payload["exists"] != true {
+			t.Errorf("payload = %v, want \"exists\": true", payload)
+		}
+	})
+
+	t.Run("a document that would be written", func(t *testing.T) {
+		got := run(t, "new", "Adopt content addressed cache keys", "--dry-run", "--format", "json", "--dir", dir)
+
+		assertExit(t, got, 0)
+		payload := decodeJSON[map[string]any](t, got.stdout)
+		exists, present := payload["exists"]
+		if !present || exists != false {
+			t.Errorf("payload = %v, want \"exists\": false, which is always there", payload)
+		}
+	})
+}
+
+func TestNewDryRunKeepsTheExitCodesOfARealRun(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--supersedes", "0009", "--dry-run", "--dir", dir)
+
+	assertExit(t, got, 1)
+}
+
+func TestNewHonoursTheConfiguredFilenameTemplate(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+	cfg := writeDocs(t, map[string]string{"docdag.yaml": "id_width: 6\nfilename: \"{id}.md\"\n"})
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--config", filepath.Join(cfg, "docdag.yaml"), "--dir", dir)
+
+	assertExit(t, got, 0)
+	wantPath := docPath(dir, "000007.md")
+	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Errorf("stat created document: %v", err)
+	}
+}
+
+func TestNewRejectsAFilenameTemplateWithoutAnIdentifier(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+	cfg := writeDocs(t, map[string]string{"docdag.yaml": "filename: \"{slug}.md\"\n"})
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--config", filepath.Join(cfg, "docdag.yaml"), "--dir", dir)
+
+	assertExit(t, got, 3)
+	if !strings.Contains(got.stderr, "{id}") {
+		t.Errorf("stderr = %q, want it to name the missing placeholder", got.stderr)
 	}
 }
 

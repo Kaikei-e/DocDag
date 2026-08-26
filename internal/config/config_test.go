@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -10,6 +11,7 @@ import (
 
 func testEq(v string) AttrCondition  { return AttrCondition{Eq: &v} }
 func testNot(v string) AttrCondition { return AttrCondition{Not: &v} }
+func strptr(v string) *string        { return &v }
 
 func TestConfigEdge(t *testing.T) {
 	cfg := ADRPreset()
@@ -156,6 +158,89 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "a structural check escalated to an error",
+			mutate: func(c *Config) {
+				c.Structural = map[string]model.Severity{model.RuleMissingFrontmatter: model.SeverityError}
+			},
+		},
+		{
+			name:    "a structural check lowered to a warning",
+			mutate:  func(c *Config) { c.Structural = map[string]model.Severity{model.RuleCycle: model.SeverityWarn} },
+			wantErr: true,
+		},
+		{
+			name:    "a structural check at an unknown severity",
+			mutate:  func(c *Config) { c.Structural = map[string]model.Severity{model.RuleCycle: "fatal"} },
+			wantErr: true,
+		},
+		{
+			name:    "a structural check nobody runs",
+			mutate:  func(c *Config) { c.Structural = map[string]model.Severity{"status_drift": model.SeverityError} },
+			wantErr: true,
+		},
+		{
+			name:   "an edge with cardinality bounds",
+			mutate: func(c *Config) { c.Edges[0].MaxInbound, c.Edges[0].MinOutbound = 1, 1 },
+		},
+		{
+			name:    "a negative bound",
+			mutate:  func(c *Config) { c.Edges[0].MaxInbound = -1 },
+			wantErr: true,
+		},
+		{
+			name:    "a minimum above the maximum",
+			mutate:  func(c *Config) { c.Edges[0].MinOutbound, c.Edges[0].MaxOutbound = 2, 1 },
+			wantErr: true,
+		},
+		{
+			name:   "an edge with an inverse key",
+			mutate: func(c *Config) { c.Edges[0].Inverse = "superseded_by" },
+		},
+		{
+			name:    "an inverse key that is the edge's own key",
+			mutate:  func(c *Config) { c.Edges[0].Inverse = c.Edges[0].Key },
+			wantErr: true,
+		},
+		{
+			name:    "an inverse key another edge already declares",
+			mutate:  func(c *Config) { c.Edges[0].Inverse = c.Edges[1].Key },
+			wantErr: true,
+		},
+		{
+			name: "two edges sharing one inverse key",
+			mutate: func(c *Config) {
+				c.Edges[0].Inverse, c.Edges[1].Inverse = "linked_from", "linked_from"
+			},
+			wantErr: true,
+		},
+		{
+			name:   "reference validation switched off explicitly",
+			mutate: func(c *Config) { c.References.Dangling = ReferencesOff },
+		},
+		{
+			name:   "reference validation at warning severity",
+			mutate: func(c *Config) { c.References.Dangling = string(model.SeverityWarn) },
+		},
+		{
+			name:    "an unknown reference validation mode",
+			mutate:  func(c *Config) { c.References.Dangling = "fatal" },
+			wantErr: true,
+		},
+		{
+			name:   "the scannable regions",
+			mutate: func(c *Config) { c.References.Scan = []string{ScanBody, ScanFrontmatter} },
+		},
+		{
+			name:    "an unknown reference scan region",
+			mutate:  func(c *Config) { c.References.Scan = []string{"footnotes"} },
+			wantErr: true,
+		},
+		{
+			name:    "a reference pattern that does not compile",
+			mutate:  func(c *Config) { c.References.Pattern = "(" },
+			wantErr: true,
+		},
+		{
 			name:    "a rule condition naming an undeclared edge type",
 			mutate:  func(c *Config) { c.Rules[0].When.Inbound = "relates-to" },
 			wantErr: true,
@@ -180,6 +265,71 @@ func TestConfigValidate(t *testing.T) {
 			mutate: func(c *Config) {
 				c.Rules[0].When.Attr = map[string]AttrCondition{"status": {}}
 			},
+			wantErr: true,
+		},
+		{
+			name: "an attribute condition on a list",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Attr = map[string]AttrCondition{"tags": {Contains: strptr("legacy")}}
+			},
+		},
+		{
+			name: "an attribute condition bounding a list",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Attr = map[string]AttrCondition{"tags": {SubsetOf: []string{"legacy"}}}
+			},
+		},
+		{
+			name: "an attribute condition setting a scalar and a list operand",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Attr = map[string]AttrCondition{
+					"tags": {Eq: strptr("legacy"), Contains: strptr("legacy")},
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "an attribute condition setting two list operands",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Attr = map[string]AttrCondition{
+					"tags": {Contains: strptr("legacy"), NotContains: strptr("current")},
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a condition with alternatives and a negation",
+			mutate: func(c *Config) {
+				c.Rules[0].When = Condition{
+					AnyOf: []Condition{{Inbound: EdgeSupersedes.String()}, {Attr: map[string]AttrCondition{"status": testEq(StatusRejected)}}},
+					Not:   &Condition{Attr: map[string]AttrCondition{"status": testEq(StatusProposed)}},
+				}
+			},
+		},
+		{
+			name: "an alternative naming an undeclared edge type",
+			mutate: func(c *Config) {
+				c.Rules[0].When.AnyOf = []Condition{{Inbound: "relates-to"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a negation naming an undeclared edge type",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Not = &Condition{Outbound: "relates-to"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a nested attribute condition with no operand",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Not = &Condition{Attr: map[string]AttrCondition{"status": {}}}
+			},
+			wantErr: true,
+		},
+		{
+			name:    "an empty list of alternatives",
+			mutate:  func(c *Config) { c.Rules[0].When.AnyOf = []Condition{} },
 			wantErr: true,
 		},
 		{
@@ -254,6 +404,161 @@ func TestConfigValidate(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("Validate = %v, want no error", err)
+			}
+		})
+	}
+}
+
+func TestConfigSeverity(t *testing.T) {
+	tests := []struct {
+		name       string
+		structural map[string]model.Severity
+		rule       string
+		want       model.Severity
+	}{
+		{name: "an unconfigured warning", rule: model.RuleMissingFrontmatter, want: model.SeverityWarn},
+		{name: "an unconfigured error", rule: model.RuleCycle, want: model.SeverityError},
+		{
+			name:       "an escalated warning",
+			structural: map[string]model.Severity{model.RuleMissingFrontmatter: model.SeverityError},
+			rule:       model.RuleMissingFrontmatter,
+			want:       model.SeverityError,
+		},
+		{
+			name:       "a check the escalation does not name",
+			structural: map[string]model.Severity{model.RuleMissingFrontmatter: model.SeverityError},
+			rule:       model.RuleUnstructuredSupersedes,
+			want:       model.SeverityWarn,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.Structural = tt.structural
+
+			if got := cfg.Severity(tt.rule); got != tt.want {
+				t.Fatalf("Severity(%q) = %q, want %q", tt.rule, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConditionEdgeClauses(t *testing.T) {
+	tests := []struct {
+		name string
+		cond Condition
+		want []EdgeClause
+	}{
+		{name: "an empty condition names no edge"},
+		{
+			name: "every clause of the vocabulary, in declaration order",
+			cond: Condition{
+				Inbound:     "supersedes",
+				NotInbound:  "depends-on",
+				Outbound:    "amends",
+				NotOutbound: "relates-to",
+			},
+			want: []EdgeClause{
+				{Edge: "supersedes", Inbound: true},
+				{Edge: "depends-on", Inbound: true, Negate: true},
+				{Edge: "amends"},
+				{Edge: "relates-to", Negate: true},
+			},
+		},
+		{
+			name: "only the populated clauses come back",
+			cond: Condition{NotInbound: "supersedes", Attr: map[string]AttrCondition{"status": testEq("superseded")}},
+			want: []EdgeClause{{Edge: "supersedes", Inbound: true, Negate: true}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cond.EdgeClauses(); !slices.Equal(got, tt.want) {
+				t.Fatalf("EdgeClauses = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsAnUndeclaredEdgeInEveryClause(t *testing.T) {
+	clauses := map[string]func(edge string) Condition{
+		"inbound":      func(edge string) Condition { return Condition{Inbound: edge} },
+		"not_inbound":  func(edge string) Condition { return Condition{NotInbound: edge} },
+		"outbound":     func(edge string) Condition { return Condition{Outbound: edge} },
+		"not_outbound": func(edge string) Condition { return Condition{NotOutbound: edge} },
+	}
+	for name, build := range clauses {
+		t.Run(name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.Rules = []Rule{{Name: "r", Severity: model.SeverityWarn, When: build("relates-to"), Message: "m"}}
+
+			err := cfg.Validate()
+
+			if !errors.Is(err, model.ErrInvalidConfig) {
+				t.Fatalf("Validate = %v, want an invalid configuration error", err)
+			}
+			if !strings.Contains(err.Error(), "relates-to") {
+				t.Errorf("error = %v, want it to name the undeclared edge type", err)
+			}
+		})
+	}
+}
+
+func TestFilenameTemplate(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		want     string
+	}{
+		{name: "an unconfigured corpus takes the default", want: DefaultFilename},
+		{name: "a configured template is used as written", filename: "{id}.md", want: "{id}.md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.Filename = tt.filename
+			if got := cfg.FilenameTemplate(); got != tt.want {
+				t.Errorf("FilenameTemplate = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigValidateFilename(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		want     string
+	}{
+		{name: "an unconfigured template is valid"},
+		{name: "the default carries both placeholders", filename: DefaultFilename},
+		{name: "a bare numeric corpus needs no slug", filename: "{id}.md"},
+		{name: "an underscore separator is allowed", filename: "{id}_{slug}.md"},
+		{name: "a template without an identifier", filename: "{slug}.md", want: "{id}"},
+		{name: "a template with no placeholder at all", filename: "decision.md", want: "{id}"},
+		{name: "a slash reaches outside the documents directory", filename: "notes/{id}.md", want: "separator"},
+		{name: "a backslash reaches outside the documents directory", filename: `notes\{id}.md`, want: "separator"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.Filename = tt.filename
+
+			err := cfg.Validate()
+
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("Validate: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, model.ErrInvalidConfig) {
+				t.Fatalf("Validate = %v, want it to wrap %v", err, model.ErrInvalidConfig)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("Validate = %v, want it to mention %q", err, tt.want)
 			}
 		})
 	}

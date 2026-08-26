@@ -145,10 +145,11 @@ func TestKebab(t *testing.T) {
 
 func TestFilename(t *testing.T) {
 	tests := []struct {
-		name  string
-		id    model.ID
-		title string
-		want  string
+		name     string
+		template string
+		id       model.ID
+		title    string
+		want     string
 	}{
 		{
 			name:  "the identifier prefixes the slug",
@@ -168,10 +169,47 @@ func TestFilename(t *testing.T) {
 			title: "!!!",
 			want:  "0007.md",
 		},
+		{
+			name:     "a bare numeric template drops the slug",
+			template: "{id}.md",
+			id:       "000007",
+			title:    "Adopt content addressed cache keys",
+			want:     "000007.md",
+		},
+		{
+			name:     "an underscore separator is honoured",
+			template: "{id}_{slug}.md",
+			id:       "0007",
+			title:    "Adopt content addressed cache keys",
+			want:     "0007_adopt-content-addressed-cache-keys.md",
+		},
+		{
+			name:     "an empty slug takes its separator with it",
+			template: "{id}_{slug}.md",
+			id:       "0007",
+			title:    "!!!",
+			want:     "0007.md",
+		},
+		{
+			name:     "the slug may lead",
+			template: "{slug}-{id}.md",
+			id:       "0007",
+			title:    "Adopt caches",
+			want:     "adopt-caches-0007.md",
+		},
+		{
+			name:     "an empty leading slug takes its separator with it",
+			template: "{slug}-{id}.md",
+			id:       "0007",
+			title:    "!!!",
+			want:     "0007.md",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Filename(tt.id, tt.title); got != tt.want {
+			cfg := config.ADRPreset()
+			cfg.Filename = tt.template
+			if got := Filename(cfg, tt.id, tt.title); got != tt.want {
 				t.Errorf("Filename(%q, %q) = %q, want %q", tt.id, tt.title, got, tt.want)
 			}
 		})

@@ -1,0 +1,11 @@
+digraph docdag {
+  rankdir=LR;
+  "0001" [label="0001 Poll every feed on a fixed five-..."];
+  "0002" [label="0002 Poll feeds with adaptive backoff"];
+  "0003" [label="0003 Use a message queue for ingestio..."];
+  "0004" [label="0004 Schedule feed polling from the i..."];
+  "0005" [label="0005 Deduplicate articles by canonica..."];
+  "0006" [label="0006 Reject binary attachments during..."];
+  "0004" -> "0003" [label="depends-on"];
+  "0005" -> "0003" [label="depends-on"];
+}

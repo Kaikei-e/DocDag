@@ -273,6 +273,16 @@ func testCorpus(t *testing.T) (string, *model.Graph, config.Config) {
 	return dir, g, cfg
 }
 
+// testCreate plans a document and applies the plan, which is the sequence the
+// CLI runs.
+func testCreate(g *model.Graph, cfg config.Config, req Request) (string, error) {
+	plan, err := NewPlan(g, cfg, req)
+	if err != nil {
+		return "", err
+	}
+	return plan.Apply()
+}
+
 func testFixedDate() time.Time {
 	return time.Date(2026, time.January, 5, 0, 0, 0, 0, time.UTC)
 }
@@ -296,7 +306,7 @@ date: 2026-01-05
 `
 
 	dir, g, cfg := testCorpus(t)
-	path, err := Create(g, cfg, Request{Title: "Rotate signing keys weekly", Date: testFixedDate()})
+	path, err := testCreate(g, cfg, Request{Title: "Rotate signing keys weekly", Date: testFixedDate()})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -340,7 +350,7 @@ depends-on:
 	superseded := filepath.Join(dir, "0001-authenticate-with-session-cookies.md")
 	untouched := filepath.Join(dir, "0002-authenticate-with-api-keys.md")
 
-	path, err := Create(g, cfg, Request{
+	path, err := testCreate(g, cfg, Request{
 		Title:      "Rotate signing keys weekly",
 		Supersedes: []string{"0001"},
 		DependsOn:  []string{"0002"},
@@ -379,7 +389,7 @@ depends-on:
 func TestCreateUnknownSupersedesReference(t *testing.T) {
 	dir, g, cfg := testCorpus(t)
 
-	path, err := Create(g, cfg, Request{
+	path, err := testCreate(g, cfg, Request{
 		Title:      "Rotate signing keys weekly",
 		Supersedes: []string{"0009"},
 		Date:       testFixedDate(),
@@ -396,7 +406,7 @@ func TestCreateRefusesToOverwrite(t *testing.T) {
 	_, g, cfg := testCorpus(t)
 	req := Request{Title: "Rotate signing keys weekly", Date: testFixedDate()}
 
-	path, err := Create(g, cfg, req)
+	path, err := testCreate(g, cfg, req)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -405,7 +415,7 @@ func TestCreateRefusesToOverwrite(t *testing.T) {
 		t.Fatalf("read created document: %v", err)
 	}
 
-	if _, err := Create(g, cfg, req); err == nil {
+	if _, err := testCreate(g, cfg, req); err == nil {
 		t.Error("Create overwrote an existing document without an error")
 	}
 	after, err := os.ReadFile(path)
@@ -420,7 +430,7 @@ func TestCreateRefusesToOverwrite(t *testing.T) {
 func TestCreateWithoutADateUsesToday(t *testing.T) {
 	_, g, cfg := testCorpus(t)
 
-	path, err := Create(g, cfg, Request{Title: "Rotate signing keys weekly"})
+	path, err := testCreate(g, cfg, Request{Title: "Rotate signing keys weekly"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -449,7 +459,7 @@ func TestCreateLeavesNothingHalfApplied(t *testing.T) {
 		t.Fatalf("write malformed document: %v", err)
 	}
 
-	path, err := Create(g, cfg, Request{
+	path, err := testCreate(g, cfg, Request{
 		Title:      "Rotate signing keys weekly",
 		Supersedes: []string{"0001", "0002"},
 		Date:       testFixedDate(),
@@ -467,6 +477,158 @@ func TestCreateLeavesNothingHalfApplied(t *testing.T) {
 	}
 	if string(kept) != corpusFirst {
 		t.Errorf("a document was rewritten before the failure:\ngot:\n%s\nwant:\n%s", kept, corpusFirst)
+	}
+}
+
+func TestNewPlanComputesEverythingWithoutWriting(t *testing.T) {
+	dir, g, cfg := testCorpus(t)
+	superseded := filepath.Join(dir, "0001-authenticate-with-session-cookies.md")
+
+	plan, err := NewPlan(g, cfg, Request{
+		Title:      "Rotate signing keys weekly",
+		Supersedes: []string{"0001"},
+		Date:       testFixedDate(),
+	})
+	if err != nil {
+		t.Fatalf("NewPlan: %v", err)
+	}
+
+	if plan.ID != "0003" {
+		t.Errorf("ID = %q, want %q", plan.ID, "0003")
+	}
+	if want := filepath.Join(dir, "0003-rotate-signing-keys-weekly.md"); plan.Path != want {
+		t.Errorf("Path = %q, want %q", plan.Path, want)
+	}
+	if len(plan.Rewrites) != 1 {
+		t.Fatalf("Rewrites = %+v, want one entry", plan.Rewrites)
+	}
+	if plan.Rewrites[0].Path != superseded {
+		t.Errorf("rewrite path = %q, want %q", plan.Rewrites[0].Path, superseded)
+	}
+	if plan.Rewrites[0].Status != config.StatusSuperseded {
+		t.Errorf("rewrite status = %q, want %q", plan.Rewrites[0].Status, config.StatusSuperseded)
+	}
+	if !strings.Contains(string(plan.Content), "title: Rotate signing keys weekly") {
+		t.Errorf("Content =\n%s\nwant the rendered document", plan.Content)
+	}
+
+	if _, err := os.Stat(plan.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Error("NewPlan wrote the document it only planned")
+	}
+	kept, err := os.ReadFile(superseded)
+	if err != nil {
+		t.Fatalf("read superseded document: %v", err)
+	}
+	if string(kept) != corpusFirst {
+		t.Errorf("NewPlan rewrote a document:\ngot:\n%s\nwant:\n%s", kept, corpusFirst)
+	}
+}
+
+func TestPlanApplyWritesWhatWasPlanned(t *testing.T) {
+	dir, g, cfg := testCorpus(t)
+
+	plan, err := NewPlan(g, cfg, Request{
+		Title:      "Rotate signing keys weekly",
+		Supersedes: []string{"0001"},
+		Date:       testFixedDate(),
+	})
+	if err != nil {
+		t.Fatalf("NewPlan: %v", err)
+	}
+	path, err := plan.Apply()
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if path != plan.Path {
+		t.Errorf("Apply = %q, want the planned path %q", path, plan.Path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read created document: %v", err)
+	}
+	if !bytes.Equal(got, plan.Content) {
+		t.Errorf("created document =\n%s\nwant the planned content:\n%s", got, plan.Content)
+	}
+	rewritten, err := os.ReadFile(filepath.Join(dir, "0001-authenticate-with-session-cookies.md"))
+	if err != nil {
+		t.Fatalf("read superseded document: %v", err)
+	}
+	if !strings.Contains(string(rewritten), "status: superseded") {
+		t.Errorf("superseded document was not rewritten:\n%s", rewritten)
+	}
+}
+
+func TestNewPlanUsesTheRequestedIdentifier(t *testing.T) {
+	dir, g, cfg := testCorpus(t)
+
+	plan, err := NewPlan(g, cfg, Request{ID: "42", Title: "Rotate signing keys weekly", Date: testFixedDate()})
+	if err != nil {
+		t.Fatalf("NewPlan: %v", err)
+	}
+
+	if plan.ID != "0042" {
+		t.Errorf("ID = %q, want the requested identifier %q", plan.ID, "0042")
+	}
+	if want := filepath.Join(dir, "0042-rotate-signing-keys-weekly.md"); plan.Path != want {
+		t.Errorf("Path = %q, want %q", plan.Path, want)
+	}
+	if plan.Exists {
+		t.Error("Exists is true for an identifier the corpus does not hold")
+	}
+}
+
+func TestNewPlanForAnExistingDocumentWithTheSameTitleWritesNothing(t *testing.T) {
+	_, g, cfg := testCorpus(t)
+	existing := g.Nodes["0001"]
+	existing.Title = "Authenticate browsers with session cookies"
+
+	plan, err := NewPlan(g, cfg, Request{ID: "0001", Title: existing.Title, Date: testFixedDate()})
+	if err != nil {
+		t.Fatalf("NewPlan: %v", err)
+	}
+
+	if !plan.Exists {
+		t.Error("Exists is false for a document the corpus already holds")
+	}
+	if plan.Path != existing.Path {
+		t.Errorf("Path = %q, want the existing document %q", plan.Path, existing.Path)
+	}
+	if plan.Content != nil || len(plan.Rewrites) != 0 {
+		t.Errorf("plan = %+v, want nothing to write", plan)
+	}
+}
+
+func TestNewPlanRefusesADifferentTitleUnderAnExistingIdentifier(t *testing.T) {
+	_, g, cfg := testCorpus(t)
+	g.Nodes["0001"].Title = "Authenticate browsers with session cookies"
+
+	plan, err := NewPlan(g, cfg, Request{ID: "0001", Title: "Rotate signing keys weekly", Date: testFixedDate()})
+
+	if !errors.Is(err, model.ErrIDConflict) {
+		t.Fatalf("NewPlan = (%+v, %v), want an error wrapping %v", plan, err, model.ErrIDConflict)
+	}
+	if !strings.Contains(err.Error(), "Authenticate browsers with session cookies") {
+		t.Errorf("error = %v, want it to name the title already under the identifier", err)
+	}
+}
+
+func TestNewPlanRefusesACorpusWithAnIdentifierCollision(t *testing.T) {
+	_, g, cfg := testCorpus(t)
+	g.Findings = []model.Finding{{
+		Severity: model.SeverityError,
+		Rule:     model.RuleIDCollision,
+		ID:       "0001",
+		Detail:   "shares its identifier with 0001-again.md",
+	}}
+
+	plan, err := NewPlan(g, cfg, Request{Title: "Rotate signing keys weekly", Date: testFixedDate()})
+
+	if !errors.Is(err, model.ErrIDConflict) {
+		t.Fatalf("NewPlan = (%+v, %v), want an error wrapping %v", plan, err, model.ErrIDConflict)
+	}
+	if !strings.Contains(err.Error(), "0001") {
+		t.Errorf("error = %v, want it to name the colliding identifier", err)
 	}
 }
 

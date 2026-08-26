@@ -1,0 +1,2 @@
+../../testdata/fixtures/status-drift/0001-serve-images-from-the-application-server.md:3: ERROR status_drift 0001: has inbound supersedes but status is not superseded
+  fix: set status: superseded in ../../testdata/fixtures/status-drift/0001-serve-images-from-the-application-server.md

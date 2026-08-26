@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -56,12 +57,30 @@ func lines(s string) []string {
 	return out
 }
 
+// findingPattern splits a finding line into its location and the rest, and
+// lineSuffix peels the line number off that location, so an expectation can
+// name a file without the temporary directory it happens to live in.
+var (
+	findingPattern = regexp.MustCompile(`^(?:(.+?): )?((?:ERROR|WARN) \S+ .*)$`)
+	lineSuffix     = regexp.MustCompile(`:\d+$`)
+)
+
 func findingLines(s string) []string {
 	var out []string
 	for _, l := range lines(s) {
-		if strings.HasPrefix(l, "ERROR ") || strings.HasPrefix(l, "WARN ") {
-			out = append(out, l)
+		m := findingPattern.FindStringSubmatch(l)
+		switch {
+		case m == nil:
+			continue
+		case m[1] == "":
+			out = append(out, m[2])
+			continue
 		}
+		path, suffix := m[1], ""
+		if at := lineSuffix.FindStringIndex(path); at != nil {
+			path, suffix = path[:at[0]], path[at[0]:]
+		}
+		out = append(out, filepath.Base(path)+suffix+": "+m[2])
 	}
 	return out
 }
@@ -138,6 +157,10 @@ func copyFixture(t *testing.T, name string) string {
 	return dst
 }
 
+// docPath names a file the way docdag prints one, whatever separator the
+// platform joins paths with.
+func docPath(elem ...string) string { return filepath.ToSlash(filepath.Join(elem...)) }
+
 func decodeJSON[T any](t *testing.T, payload string) T {
 	t.Helper()
 	var v T
@@ -150,7 +173,7 @@ func decodeJSON[T any](t *testing.T, payload string) T {
 func TestRootWithoutArgumentsPrintsHelp(t *testing.T) {
 	got := run(t)
 	assertExit(t, got, 0)
-	for _, name := range []string{"docdag", "validate", "resolve", "query", "export", "stats", "new"} {
+	for _, name := range []string{"docdag", "validate", "resolve", "query", "context", "export", "stats", "new"} {
 		if !strings.Contains(got.stdout, name) {
 			t.Errorf("help output does not mention %q: %q", name, got.stdout)
 		}
@@ -237,15 +260,20 @@ func TestConfigFileOverridesThePreset(t *testing.T) {
 }
 
 func TestTheCommandSetIsExactlyTheDocumentedOne(t *testing.T) {
-	want := []string{"validate", "resolve", "query", "export", "stats", "new", "help"}
+	want := []string{"validate", "resolve", "query", "context", "export", "stats", "new", "help"}
 
-	for _, cmd := range newRootCmd().Commands() {
-		if !slices.Contains(want, cmd.Name()) {
-			t.Errorf("the command tree carries %q, want only %v", cmd.Name(), want)
-		}
+	// The help command is registered lazily, so ask for it before counting.
+	root := newRootCmd()
+	root.InitDefaultHelpCmd()
+	var got []string
+	for _, cmd := range root.Commands() {
+		got = append(got, cmd.Name())
 	}
-	got := run(t, "completion", "bash")
-	assertExit(t, got, 2)
+	slices.Sort(got)
+	if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+		t.Errorf("the command tree is %v, want exactly %v", got, want)
+	}
+	assertExit(t, run(t, "completion", "bash"), 2)
 }
 
 func TestAWindowsAuthoredCorpusIsManagedLikeAnyOther(t *testing.T) {
@@ -276,7 +304,7 @@ func TestARenamedStatusFieldCarriesThePresetRules(t *testing.T) {
 	got := run(t, "validate")
 
 	assertExit(t, got, 0)
-	assertPrefixes(t, "findings", findingLines(got.stdout), []string{"WARN unstructured_supersedes 0003:"})
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0003-derived.md:3: WARN unstructured_supersedes 0003:"})
 	want := "OK: 3 docs, 2 typed edges, no cycles"
 	if ls := lines(got.stdout); len(ls) == 0 || ls[len(ls)-1] != want {
 		t.Errorf("summary line = %q, want %q", got.stdout, want)

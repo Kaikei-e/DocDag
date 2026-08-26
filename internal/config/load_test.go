@@ -166,6 +166,19 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("an empty list in the file clears the preset list", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docdag.yaml": "derived_edges: []\n"})
+
+		file, err := Load(filepath.Join(root, "docdag.yaml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+
+		if got := Merge(ADRPreset(), file); len(got.DerivedEdges) != 0 {
+			t.Fatalf("derived_edges = %+v, want the preset list cleared", got.DerivedEdges)
+		}
+	})
+
 	t.Run("every key decodes", func(t *testing.T) {
 		file := `preset: adr
 dir: docs/decisions
@@ -271,6 +284,18 @@ func TestMerge(t *testing.T) {
 		}
 	})
 
+	t.Run("a reference block replaces the base field by field", func(t *testing.T) {
+		base := ADRPreset()
+		base.References = ReferencesSpec{Dangling: ReferencesOff, Pattern: `^(\d+)$`}
+
+		got := Merge(base, Config{References: ReferencesSpec{Dangling: "error", Scan: []string{ScanFrontmatter}}})
+
+		want := ReferencesSpec{Dangling: "error", Pattern: `^(\d+)$`, Scan: []string{ScanFrontmatter}}
+		if !reflect.DeepEqual(got.References, want) {
+			t.Fatalf("references = %+v, want %+v", got.References, want)
+		}
+	})
+
 	t.Run("a set width wins over the preset", func(t *testing.T) {
 		if got := Merge(ADRPreset(), Config{IDWidth: 6}); got.IDWidth != 6 {
 			t.Fatalf("id_width = %d, want 6", got.IDWidth)
@@ -354,11 +379,21 @@ func TestMerge(t *testing.T) {
 		})
 	}
 
-	t.Run("an empty list keeps the base list", func(t *testing.T) {
-		got := Merge(ADRPreset(), Config{Edges: []EdgeSpec{}, Rules: []Rule{}})
+	t.Run("an explicit empty list clears the base list", func(t *testing.T) {
+		got := Merge(ADRPreset(), Config{Edges: []EdgeSpec{}, Rules: []Rule{}, DerivedEdges: []DerivedEdgeSpec{}})
 
-		if len(got.Edges) != 2 || len(got.Rules) != 2 {
-			t.Fatalf("edges = %+v, rules = %+v, want the preset lists", got.Edges, got.Rules)
+		if len(got.Edges) != 0 || len(got.Rules) != 0 || len(got.DerivedEdges) != 0 {
+			t.Fatalf("edges = %+v, rules = %+v, derived_edges = %+v, want them cleared",
+				got.Edges, got.Rules, got.DerivedEdges)
+		}
+	})
+
+	t.Run("a list the override never mentions keeps the base list", func(t *testing.T) {
+		got := Merge(ADRPreset(), Config{IDWidth: 6})
+
+		if len(got.Edges) != 2 || len(got.Rules) != 2 || len(got.DerivedEdges) != 1 {
+			t.Fatalf("edges = %+v, rules = %+v, derived_edges = %+v, want the preset lists",
+				got.Edges, got.Rules, got.DerivedEdges)
 		}
 	})
 
@@ -367,7 +402,7 @@ func TestMerge(t *testing.T) {
 
 		Merge(base, Config{IDWidth: 6, StatusValues: []string{"draft"}, Rules: nil})
 
-		if base.IDWidth != 4 || len(base.StatusValues) != 5 || len(base.Rules) != 2 {
+		if base.IDWidth != 4 || len(base.StatusValues) != 6 || len(base.Rules) != 2 {
 			t.Fatalf("base = %+v, want it untouched", base)
 		}
 	})
@@ -638,5 +673,14 @@ func TestDiscoverHonorsOnDiskCasing(t *testing.T) {
 	}
 	if want := filepath.Join(root, "docs", "ADR"); got != want {
 		t.Errorf("Discover = %q, want %q", got, want)
+	}
+}
+
+func TestMergeOverridesTheFilenameTemplate(t *testing.T) {
+	if merged := Merge(ADRPreset(), Config{Filename: "{id}.md"}); merged.Filename != "{id}.md" {
+		t.Errorf("Filename = %q, want the override %q", merged.Filename, "{id}.md")
+	}
+	if kept := Merge(ADRPreset(), Config{}); kept.Filename != ADRPreset().Filename {
+		t.Errorf("Filename = %q, want the base %q", kept.Filename, ADRPreset().Filename)
 	}
 }
