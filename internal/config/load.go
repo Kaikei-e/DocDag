@@ -139,6 +139,9 @@ func Merge(base, override Config) Config {
 	if override.AcyclicUnion {
 		merged.AcyclicUnion = true
 	}
+	if len(override.Structural) > 0 {
+		merged.Structural = maps.Clone(override.Structural)
+	}
 	if merged.StatusField != base.StatusField {
 		if len(override.Rules) == 0 {
 			merged.Rules = retargetRules(base.Rules, base.StatusField, merged.StatusField)

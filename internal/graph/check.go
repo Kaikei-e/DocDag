@@ -22,10 +22,10 @@ func CheckDocuments(docs []*parse.Document, cfg config.Config) []model.Finding {
 		paths[doc.ID] = append(paths[doc.ID], doc.Path)
 		switch {
 		case doc.Err != nil:
-			findings = append(findings, invalidFrontmatter(doc))
+			findings = append(findings, invalidFrontmatter(cfg, doc))
 		case !doc.HasFrontmatter && doc.MatchesPattern:
 			findings = append(findings, model.Finding{
-				Severity: model.SeverityWarn,
+				Severity: cfg.Severity(model.RuleMissingFrontmatter),
 				Rule:     model.RuleMissingFrontmatter,
 				ID:       doc.ID,
 				Detail:   "no frontmatter block",
@@ -38,7 +38,7 @@ func CheckDocuments(docs []*parse.Document, cfg config.Config) []model.Finding {
 		if len(colliding) < 2 {
 			continue
 		}
-		findings = append(findings, idCollision(id, colliding))
+		findings = append(findings, idCollision(cfg, id, colliding))
 	}
 
 	SortFindings(findings)
@@ -48,9 +48,9 @@ func CheckDocuments(docs []*parse.Document, cfg config.Config) []model.Finding {
 // firstFileLine is where a finding about a whole file points.
 const firstFileLine = 1
 
-func invalidFrontmatter(doc *parse.Document) model.Finding {
+func invalidFrontmatter(cfg config.Config, doc *parse.Document) model.Finding {
 	f := model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleInvalidFrontmatter),
 		Rule:     model.RuleInvalidFrontmatter,
 		ID:       doc.ID,
 		Detail:   doc.Err.Error(),
@@ -64,14 +64,14 @@ func invalidFrontmatter(doc *parse.Document) model.Finding {
 	return f
 }
 
-func idCollision(id model.ID, colliding []string) model.Finding {
+func idCollision(cfg config.Config, id model.ID, colliding []string) model.Finding {
 	sorted := slices.Sorted(slices.Values(colliding))
 	related := make([]model.Location, 0, len(sorted)-1)
 	for _, path := range sorted[1:] {
 		related = append(related, model.Location{Path: path, Line: firstFileLine})
 	}
 	return model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleIDCollision),
 		Rule:     model.RuleIDCollision,
 		ID:       id,
 		Detail:   fmt.Sprintf("shares its identifier with %s", strings.Join(sorted[1:], ", ")),
@@ -176,7 +176,7 @@ func cycleTypes(g *model.Graph, cycle []model.ID, types []model.EdgeType) []stri
 // the others, so a reader opens one file and sees every edge on the path.
 func cycleFinding(g *model.Graph, cfg config.Config, cycle []model.ID, detail string, types ...model.EdgeType) model.Finding {
 	f := model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleCycle),
 		Rule:     model.RuleCycle,
 		ID:       cycle[0],
 		Detail:   detail,
@@ -219,7 +219,7 @@ func CheckDangling(g *model.Graph, cfg config.Config) []model.Finding {
 
 func danglingRef(cfg config.Config, owner *model.Node, e model.Edge, missing string) model.Finding {
 	return model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleDanglingRef),
 		Rule:     model.RuleDanglingRef,
 		ID:       owner.ID,
 		Detail:   danglingDetail(e.Type, missing),
@@ -260,7 +260,7 @@ func checkInverseKey(g *model.Graph, cfg config.Config, spec config.EdgeSpec) []
 		refs, invalid := parse.Refs(n.Attrs, spec.Inverse)
 		for _, entry := range append(slices.Clone(invalid), unshaped(refs)...) {
 			findings = append(findings, model.Finding{
-				Severity: model.SeverityError,
+				Severity: cfg.Severity(model.RuleInvalidRef),
 				Rule:     model.RuleInvalidRef,
 				ID:       id,
 				Detail:   fmt.Sprintf("%s reference %q is not an identifier", spec.Inverse, entry),
@@ -274,7 +274,7 @@ func checkInverseKey(g *model.Graph, cfg config.Config, spec config.EdgeSpec) []
 			}
 			if _, known := g.Node(source); !known {
 				findings = append(findings, model.Finding{
-					Severity: model.SeverityError,
+					Severity: cfg.Severity(model.RuleDanglingRef),
 					Rule:     model.RuleDanglingRef,
 					ID:       id,
 					Detail:   danglingDetail(model.EdgeType(spec.Inverse), ref),
@@ -313,7 +313,7 @@ func checkInverseKey(g *model.Graph, cfg config.Config, spec config.EdgeSpec) []
 
 func inverseMismatch(g *model.Graph, cfg config.Config, spec config.EdgeSpec, owner, peer model.ID, detail string) model.Finding {
 	f := model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleInverseMismatch),
 		Rule:     model.RuleInverseMismatch,
 		ID:       owner,
 		Detail:   detail,
@@ -384,7 +384,7 @@ func cardinality(g *model.Graph, cfg config.Config, spec config.EdgeSpec, id mod
 	findings := make([]model.Finding, 0, len(details))
 	for _, detail := range details {
 		findings = append(findings, model.Finding{
-			Severity: model.SeverityError,
+			Severity: cfg.Severity(model.RuleCardinality),
 			Rule:     model.RuleCardinality,
 			ID:       id,
 			Detail:   detail,
@@ -409,7 +409,7 @@ func CheckStatusVocabulary(g *model.Graph, cfg config.Config) []model.Finding {
 			continue
 		}
 		findings = append(findings, model.Finding{
-			Severity: model.SeverityError,
+			Severity: cfg.Severity(model.RuleUnknownStatus),
 			Rule:     model.RuleUnknownStatus,
 			ID:       id,
 			Detail:   fmt.Sprintf("status %q is outside the vocabulary %s", raw, strings.Join(cfg.StatusValues, ", ")),
@@ -440,7 +440,7 @@ func CheckDerived(g *model.Graph, cfg config.Config) []model.Finding {
 			loc = derivedFieldLocation(cfg, n, e.Type)
 		}
 		findings = append(findings, model.Finding{
-			Severity: model.SeverityWarn,
+			Severity: cfg.Severity(model.RuleUnstructuredSupersedes),
 			Rule:     model.RuleUnstructuredSupersedes,
 			ID:       owner,
 			Detail:   fmt.Sprintf("%s edge %s -> %s comes from a field value; declare it in frontmatter", e.Type, e.From, e.To),
@@ -450,7 +450,7 @@ func CheckDerived(g *model.Graph, cfg config.Config) []model.Finding {
 			continue
 		}
 		findings = append(findings, model.Finding{
-			Severity: model.SeverityError,
+			Severity: cfg.Severity(model.RuleDerivedConflict),
 			Rule:     model.RuleDerivedConflict,
 			ID:       owner,
 			Detail:   fmt.Sprintf("derived %s edge %s -> %s contradicts the structured edge %s -> %s", e.Type, e.From, e.To, e.To, e.From),
