@@ -1,6 +1,9 @@
 package cmd
 
 import (
+	"maps"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -72,6 +75,22 @@ func TestValidateTextReport(t *testing.T) {
 			fixture:  "invalid-yaml",
 			wantExit: 1,
 			findings: []string{"0002-negotiate-api-versions-by-header.md:2: ERROR invalid_frontmatter 0002:"},
+		},
+		{
+			name:     "an edge key that names nothing fails",
+			fixture:  "empty-edge",
+			wantExit: 1,
+			findings: []string{
+				"0002-stream-audit-events-to-append-only-storage.md:4: ERROR empty_edge 0002:",
+				"0002-stream-audit-events-to-append-only-storage.md:5: ERROR empty_edge 0002:",
+				"0001-write-audit-events-to-the-database.md:3: WARN superseded_orphan 0001:",
+			},
+		},
+		{
+			name:     "a withdrawn document is in the vocabulary and binds nothing",
+			fixture:  "withdrawn",
+			wantExit: 0,
+			summary:  "OK: 2 docs, 0 typed edges, no cycles",
 		},
 		{
 			name:     "status drift fails",
@@ -156,6 +175,258 @@ func TestValidateJSONCarriesTheFix(t *testing.T) {
 	if !strings.HasPrefix(report.Findings[0].Fix, "set status: superseded in ") {
 		t.Errorf("fix = %q, want the status change spelled out", report.Findings[0].Fix)
 	}
+}
+
+func TestValidateRejectsAFrontmatterReferenceThatIsNotIdentityShaped(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-a-decision.md": "---\ntitle: A decision\nstatus: superseded\ndate: 2025-01-01\n---\n\n# A decision\n",
+		"0002-another.md":    "---\ntitle: Another decision\nstatus: accepted\nsupersedes:\n  - see 0001\ndate: 2025-02-01\n---\n\n# Another decision\n",
+	})
+
+	got := run(t, "validate", "--dir", dir)
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0002-another.md:4: ERROR invalid_ref 0002:",
+		"0001-a-decision.md:3: WARN superseded_orphan 0001:",
+	})
+}
+
+func TestValidateLeavesProseThatIsNotIdentityShapedAlone(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n" +
+			"# A decision\n\nSee [[3days-recap]], [[upstream]] and [[tool.uv.index]].\n\n```\n[[0099]]\n```\n",
+	})
+
+	got := run(t, "validate", "--dir", dir)
+
+	assertExit(t, got, 0)
+	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+}
+
+const testAcceptedDocument = "---\ntitle: Serve images from the application\nstatus: accepted\ndate: 2025-01-01\n---\n\n" +
+	"# Serve images from the application\n\n## Decision Outcome\n\nThe application resizes and serves images itself.\n"
+
+// gitRepo commits an ADR corpus so a history check has a revision to compare
+// against. Identity comes from flags, so a runner without a git identity works.
+func gitRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not on PATH")
+	}
+	dir := writeDocs(t, files)
+	git(t, dir, "init", "--quiet")
+	git(t, dir, "add", "-A")
+	git(t, dir,
+		"-c", "user.name=DocDag Test",
+		"-c", "user.email=test@example.test",
+		"-c", "commit.gpgsign=false",
+		"commit", "--quiet", "-m", "the first revision")
+	return dir
+}
+
+func git(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+filepath.Join(dir, "nonexistent-gitconfig"), "GIT_CONFIG_NOSYSTEM=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+	}
+}
+
+func TestValidateImmutableSince(t *testing.T) {
+	corpus := map[string]string{"docs/adr/0001-serve-images-from-the-application.md": testAcceptedDocument}
+
+	t.Run("an untouched history passes", func(t *testing.T) {
+		t.Chdir(gitRepo(t, corpus))
+
+		got := run(t, "validate", "--immutable-since", "HEAD")
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	})
+
+	t.Run("a rewritten accepted document fails", func(t *testing.T) {
+		dir := gitRepo(t, corpus)
+		t.Chdir(dir)
+		rewritten := strings.Replace(testAcceptedDocument, "The application resizes", "A CDN resizes", 1)
+		if err := os.WriteFile(filepath.Join(dir, "docs", "adr", "0001-serve-images-from-the-application.md"), []byte(rewritten), 0o600); err != nil {
+			t.Fatalf("rewrite: %v", err)
+		}
+
+		got := run(t, "validate", "--immutable-since", "HEAD")
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+			"0001-serve-images-from-the-application.md:11: ERROR immutable_violation 0001:",
+		})
+	})
+
+	t.Run("the check is off unless it is asked for", func(t *testing.T) {
+		dir := gitRepo(t, corpus)
+		t.Chdir(dir)
+		rewritten := strings.Replace(testAcceptedDocument, "The application resizes", "A CDN resizes", 1)
+		if err := os.WriteFile(filepath.Join(dir, "docs", "adr", "0001-serve-images-from-the-application.md"), []byte(rewritten), 0o600); err != nil {
+			t.Fatalf("rewrite: %v", err)
+		}
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	})
+
+	t.Run("a corpus outside a repository is a configuration error", func(t *testing.T) {
+		t.Chdir(writeDocs(t, corpus))
+
+		got := run(t, "validate", "--immutable-since", "HEAD")
+
+		assertExit(t, got, 3)
+		if got.stderr == "" {
+			t.Error("stderr is empty, want a diagnostic naming the missing repository")
+		}
+	})
+}
+
+func TestValidateRuleAlternativesAndNegation(t *testing.T) {
+	dir := fixture(t, "any-of")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0001-run-nightly-reports-on-the-primary.md:3: WARN unexplained_retirement 0001:",
+	})
+}
+
+func TestValidateRulesOverListAttributes(t *testing.T) {
+	dir := fixture(t, "list-attrs")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0001-store-secrets-in-the-orchestrator.md:7: ERROR security_review_missing 0001:",
+		"0002-serve-static-assets-from-the-app.md:4: WARN retired_tags_only 0002:",
+	})
+}
+
+func TestValidateStructuralSeverityEscalation(t *testing.T) {
+	files := map[string]string{
+		"docs/adr/0001-with-frontmatter.md": "---\ntitle: With frontmatter\nstatus: accepted\ndate: 2025-01-01\n---\n\n# With frontmatter\n",
+		"docs/adr/0002-bare.md":             "# Bare\n\nThis file matches the document filename pattern but carries no frontmatter.\n",
+	}
+
+	t.Run("a missing frontmatter block is a warning by default", func(t *testing.T) {
+		t.Chdir(writeDocs(t, files))
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0002-bare.md:1: WARN missing_frontmatter 0002:"})
+	})
+
+	t.Run("an escalated check fails the build", func(t *testing.T) {
+		escalated := maps.Clone(files)
+		escalated["docdag.yaml"] = "structural:\n  missing_frontmatter: error\n"
+		t.Chdir(writeDocs(t, escalated))
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0002-bare.md:1: ERROR missing_frontmatter 0002:"})
+	})
+
+	t.Run("lowering a check is a configuration error", func(t *testing.T) {
+		lowered := maps.Clone(files)
+		lowered["docdag.yaml"] = "structural:\n  cycle: warn\n"
+		t.Chdir(writeDocs(t, lowered))
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 3)
+		if !strings.Contains(got.stderr, "cycle") {
+			t.Errorf("stderr = %q, want it to name the check", got.stderr)
+		}
+	})
+}
+
+func TestValidateUnionAcyclicity(t *testing.T) {
+	dir := fixture(t, "union-cycle")
+
+	t.Run("each edge type on its own is acyclic", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir)
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	})
+
+	t.Run("the union of the acyclic edge types is not", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+			"0001-keep-sessions-in-the-database.md:4: ERROR cycle 0001:",
+		})
+		detail := strings.Join(findingLines(got.stdout), "\n")
+		for _, want := range []string{"supersedes", "depends-on"} {
+			if !strings.Contains(detail, want) {
+				t.Errorf("finding %q does not name the edge type %q", detail, want)
+			}
+		}
+	})
+}
+
+func TestValidateEdgeCardinality(t *testing.T) {
+	dir := fixture(t, "cardinality")
+
+	t.Run("unbounded by default", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir)
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	})
+
+	t.Run("a bound the corpus breaks is an error on the document that carries it", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+			"0001-rate-limit-per-api-key.md:3: ERROR cardinality 0001:",
+		})
+	})
+}
+
+func TestValidateInverseKeysMustAgreeWithTheEdges(t *testing.T) {
+	dir := fixture(t, "inverse-mismatch")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0001-authorize-with-a-shared-service-token.md:3: ERROR inverse_mismatch 0001:",
+		"0003-pin-the-ca-bundle-in-every-image.md:4: ERROR inverse_mismatch 0003:",
+	})
+}
+
+func TestValidateReferenceLayerIsOptIn(t *testing.T) {
+	dir := fixture(t, "dangling-reference")
+
+	t.Run("unconfigured, the reference layer never fails a build", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir)
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	})
+
+	t.Run("configured, a link that names no document is a finding", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+			"0002-retry-failed-jobs-with-backoff.md:31: ERROR dangling_reference 0002:",
+		})
+	})
 }
 
 func TestValidateRejectsAStatusThatOnlyOpensWithAVocabularyWord(t *testing.T) {

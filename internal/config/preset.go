@@ -24,6 +24,7 @@ func ADRPreset() Config {
 			StatusRejected,
 			StatusDeprecated,
 			StatusSuperseded,
+			StatusWithdrawn,
 		},
 		Edges: []EdgeSpec{
 			{

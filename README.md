@@ -14,8 +14,10 @@ DocDag keeps two layers apart:
 - **Constraint layer** — typed edges declared in frontmatter (`supersedes:`, `depends-on:`) plus
   edges derived from configured field patterns. Only these carry invariants: acyclicity and rules.
 - **Reference layer** — untyped links found in bodies: `[[wikilink]]`, `[[wikilink|alias]]` and
-  relative Markdown links to other managed documents. Surfaced by `--include-refs` and `stats`;
-  never validated, never part of a constraint.
+  relative Markdown links to other managed documents. A link joins the layer only when its whole
+  target is identifier-shaped, or, for a Markdown link, names a managed file; a link inside a fenced
+  code block or an inline code span is an example and is skipped. Surfaced by `--include-refs` and
+  `stats`; never part of a constraint, and unvalidated unless `references.dangling` asks for it.
 
 A document's identity is its digit run, so `339`, `ADR-339`, `000339` and `0339-use-postgres.md` all
 name the same node, displayed zero-padded to `id_width`. Renaming a file's title suffix does not
@@ -83,8 +85,9 @@ Every finding names a file and, wherever a frontmatter key carries the fault, th
 
 `:<line>` is dropped when the position is unknown. Findings sort by severity, path, line, rule and
 identifier, so a report reads in file order and diffs cleanly. Besides the configured rules,
-`validate` reports `cycle`, `dangling_ref`, `id_collision`, `invalid_frontmatter`,
-`missing_frontmatter`, `unknown_status`, `derived_conflict` and `unstructured_supersedes`.
+`validate` reports `cardinality`, `cycle`, `dangling_ref`, `dangling_reference`, `derived_conflict`,
+`empty_edge`, `id_collision`, `immutable_violation`, `invalid_frontmatter`, `invalid_ref`,
+`inverse_mismatch`, `missing_frontmatter`, `unknown_status` and `unstructured_supersedes`.
 
 ## Commands
 
@@ -178,7 +181,7 @@ preset: adr
 dir: docs/decisions            # default: discovered, see above
 id_width: 4
 status_field: status
-status_values: [proposed, accepted, rejected, deprecated, superseded]
+status_values: [proposed, accepted, rejected, deprecated, superseded, withdrawn]
 filename: "{id}-{slug}.md"     # what `docdag new` names a document
 
 edges:
@@ -214,12 +217,82 @@ rules:
     message: "status is superseded but no document supersedes it"
 ```
 
-A rule's `when` block ANDs its conditions. The vocabulary is fixed and complete: `inbound`,
-`not_inbound`, `outbound`, `not_outbound` — each naming a declared edge type — and
-`attr: {<key>: {eq|not: <value>}}`. There is no expression language. Set `template: <path>` to
-replace the document template `docdag new` uses, and `filename:` to change what it names the
-result — the template must carry `{id}`, may carry `{slug}`, and may not carry a path separator.
-Structural checks are not rules and cannot be disabled.
+Every other key is optional, and off unless the file says otherwise:
+
+```yaml
+acyclic_union: true            # also check for cycles over the union of the acyclic edge types
+
+references:                    # reference-layer validation; without it the layer is unvalidated
+  dangling: error              # off (default) | warn | error
+  pattern: '^(?i)(?:adr-?)?(\d{3,6})$'   # the default: what an identifier-shaped target looks like
+  scan: [body, frontmatter]    # default [body]; frontmatter scans string scalars and list items
+
+structural:                    # raise a built-in check; lowering one is a configuration error
+  missing_frontmatter: error
+
+edges:
+  - name: amends
+    key: amends
+    acyclic: true
+    direction: forward
+    inverse: amended_by        # the target must list the source here; the key declares no edges
+    max_inbound: 1             # 0, the default, is unbounded
+    max_outbound: 0
+    min_outbound: 1
+
+rules:
+  - name: unexplained_retirement
+    severity: warn
+    when:
+      not_inbound: supersedes
+      any_of:                                    # holds when any alternative holds
+        - attr: { status: { eq: deprecated } }
+        - attr: { status: { eq: rejected } }
+      not:                                       # holds when this condition does not
+        attr: { tags: { contains: explained } }
+    message: "is retired, nothing supersedes it, and it carries no explained tag"
+```
+
+The `edges:` and `rules:` lists above show where the new keys go; writing either one replaces the
+preset's list rather than adding to it.
+
+A rule's `when` block ANDs its top-level clauses. The vocabulary is fixed and complete: `inbound`,
+`not_inbound`, `outbound`, `not_outbound` — each naming a declared edge type — `attr: {<key>:
+{eq|not: <value>}}` on a scalar, `attr: {<key>: {contains|not_contains: <value>}}` and
+`attr: {<key>: {subset_of: [<value>, …]}}` on a list, and the two combinators `any_of: [<condition>,
+…]` and `not: <condition>`, which nest. A scalar read as a list is a one-element list; comparison is
+case-insensitive; a positive clause needs the attribute to be there and a negative one is satisfied
+by its absence. There is no expression language. Set `template: <path>` to replace the document
+template `docdag new` uses, and `filename:` to change what it names the result — the template must
+carry `{id}`, may carry `{slug}`, and may not carry a path separator.
+
+Structural checks are not rules. `structural:` may raise one — `missing_frontmatter` and
+`unstructured_supersedes` are the two that warn by default — but lowering one, or naming a check
+that does not exist, is a configuration error (exit 3), and no check can be disabled.
+
+## Append-only history
+
+`docdag validate --immutable-since <rev>` treats a decision that was `accepted`, `superseded` or
+`withdrawn` at `<rev>` as a record rather than a draft. It compares the working tree against
+`git merge-base <rev> HEAD` and allows exactly three kinds of change to such a document:
+
+- the value of the `status_field`,
+- entries **added** under a configured `inverse:` key, so a later decision can record that it
+  replaced this one,
+- lines appended to the end of the body.
+
+Anything else — another frontmatter key changed, added or removed; an inverse entry removed; a line
+of the existing body rewritten; the file deleted — is an `immutable_violation` error naming what
+changed:
+
+```console
+$ docdag validate --immutable-since origin/main
+docs/adr/0001-serve-images-from-the-application.md:11: ERROR immutable_violation 0001: the body changed at line 11, which append-only history forbids
+```
+
+A document that `<rev>` did not hold is new and is always allowed. The check runs `git` from `PATH`
+and is off unless the flag is given; a corpus outside a git repository, or a machine without `git`,
+exits 3.
 
 ## Continuous integration
 
@@ -271,9 +344,17 @@ A conventional MADR repository needs no changes:
   `unstructured_supersedes` warning — a suggestion to declare the edge in frontmatter, not a failure.
   Moving the string to a `supersedes:` key clears it; the graph is the same either way.
 - Status comparison is case-insensitive; a value outside the vocabulary is `unknown_status`.
+  `withdrawn` is in the vocabulary for a proposal that was dropped rather than replaced: it binds
+  nothing, and because nothing supersedes it, it raises no `superseded_orphan` warning either.
 - Unrecognized frontmatter keys are ignored, so other tooling's fields are safe.
 - A file without frontmatter is skipped, or warned about (`missing_frontmatter`) if its name matches.
-- Body links stay in the reference layer, so prose can never fail a build.
+- An edge key written down and then left empty — `supersedes:` with nothing under it, `[]`, or a list
+  of blank items — is `empty_edge`, because it reads as a declared relation and builds none.
+- A `supersedes:` entry that is not an identifier (`see 0042`, a sentence, a slug) is `invalid_ref`;
+  one that is an identifier the corpus does not hold is `dangling_ref`.
+- Body links stay in the reference layer, so prose cannot fail a build unless `references.dangling`
+  opts in — and even then `[[upstream]]`, `[[3days-recap]]` and a link inside a code fence are not
+  references at all.
 
 ## For agents
 

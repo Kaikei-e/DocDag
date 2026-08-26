@@ -1,0 +1,12 @@
+rules:
+  - name: unexplained_retirement
+    severity: warn
+    when:
+      not_inbound: supersedes
+      any_of:
+        - attr: { status: { eq: deprecated } }
+        - attr: { status: { eq: rejected } }
+      not:
+        attr:
+          tags: { contains: explained }
+    message: "is retired, nothing supersedes it, and it carries no explained tag"

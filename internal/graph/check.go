@@ -22,10 +22,10 @@ func CheckDocuments(docs []*parse.Document, cfg config.Config) []model.Finding {
 		paths[doc.ID] = append(paths[doc.ID], doc.Path)
 		switch {
 		case doc.Err != nil:
-			findings = append(findings, invalidFrontmatter(doc))
+			findings = append(findings, invalidFrontmatter(cfg, doc))
 		case !doc.HasFrontmatter && doc.MatchesPattern:
 			findings = append(findings, model.Finding{
-				Severity: model.SeverityWarn,
+				Severity: cfg.Severity(model.RuleMissingFrontmatter),
 				Rule:     model.RuleMissingFrontmatter,
 				ID:       doc.ID,
 				Detail:   "no frontmatter block",
@@ -38,7 +38,7 @@ func CheckDocuments(docs []*parse.Document, cfg config.Config) []model.Finding {
 		if len(colliding) < 2 {
 			continue
 		}
-		findings = append(findings, idCollision(id, colliding))
+		findings = append(findings, idCollision(cfg, id, colliding))
 	}
 
 	SortFindings(findings)
@@ -48,9 +48,9 @@ func CheckDocuments(docs []*parse.Document, cfg config.Config) []model.Finding {
 // firstFileLine is where a finding about a whole file points.
 const firstFileLine = 1
 
-func invalidFrontmatter(doc *parse.Document) model.Finding {
+func invalidFrontmatter(cfg config.Config, doc *parse.Document) model.Finding {
 	f := model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleInvalidFrontmatter),
 		Rule:     model.RuleInvalidFrontmatter,
 		ID:       doc.ID,
 		Detail:   doc.Err.Error(),
@@ -64,14 +64,14 @@ func invalidFrontmatter(doc *parse.Document) model.Finding {
 	return f
 }
 
-func idCollision(id model.ID, colliding []string) model.Finding {
+func idCollision(cfg config.Config, id model.ID, colliding []string) model.Finding {
 	sorted := slices.Sorted(slices.Values(colliding))
 	related := make([]model.Location, 0, len(sorted)-1)
 	for _, path := range sorted[1:] {
 		related = append(related, model.Location{Path: path, Line: firstFileLine})
 	}
 	return model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleIDCollision),
 		Rule:     model.RuleIDCollision,
 		ID:       id,
 		Detail:   fmt.Sprintf("shares its identifier with %s", strings.Join(sorted[1:], ", ")),
@@ -83,12 +83,16 @@ func idCollision(id model.ID, colliding []string) model.Finding {
 // edgeKeyLocation points at the frontmatter key that declares an edge type,
 // falling back to the field a derived edge reads it from and then to the
 // status field.
-func edgeKeyLocation(cfg config.Config, n *model.Node, t model.EdgeType) model.Location {
-	keys := make([]string, 0, 3)
-	if spec, ok := cfg.Edge(t); ok {
-		keys = append(keys, spec.Key)
+func edgeKeyLocation(cfg config.Config, n *model.Node, types ...model.EdgeType) model.Location {
+	keys := make([]string, 0, 2*len(types)+1)
+	for _, t := range types {
+		if spec, ok := cfg.Edge(t); ok {
+			keys = append(keys, spec.Key)
+		}
 	}
-	keys = append(keys, derivedFields(cfg, t)...)
+	for _, t := range types {
+		keys = append(keys, derivedFields(cfg, t)...)
+	}
 	return n.Location(append(keys, statusField(cfg))...)
 }
 
@@ -115,32 +119,73 @@ func derivedFields(cfg config.Config, t model.EdgeType) []string {
 	return fields
 }
 
-// CheckCycles reports one finding per cycle found in an acyclic edge type.
+// CheckCycles reports one finding per cycle found in an acyclic edge type, and
+// per cycle that only the union of those types closes.
 func CheckCycles(g *model.Graph, cfg config.Config) []model.Finding {
 	findings := []model.Finding{}
-	for _, t := range cfg.AcyclicEdgeTypes() {
+	types := cfg.AcyclicEdgeTypes()
+	for _, t := range types {
 		for _, cycle := range FindCycles(Adjacency(g, t)) {
-			findings = append(findings, cycleFinding(g, cfg, t, cycle))
+			findings = append(findings, cycleFinding(g, cfg, cycle,
+				fmt.Sprintf("%s cycle: %s", t, joinIDs(cycle, " -> ")), t))
 		}
+	}
+	if cfg.AcyclicUnion && len(types) > 1 {
+		findings = append(findings, unionCycles(g, cfg, types)...)
 	}
 	SortFindings(findings)
 	return findings
 }
 
+// unionCycles reports the cycles that need more than one edge type to close.
+// A cycle inside a single type is already a finding of its own.
+func unionCycles(g *model.Graph, cfg config.Config, types []model.EdgeType) []model.Finding {
+	findings := []model.Finding{}
+	for _, cycle := range FindCycles(Adjacency(g, types...)) {
+		crossed := cycleTypes(g, cycle, types)
+		if len(crossed) < 2 {
+			continue
+		}
+		findings = append(findings, cycleFinding(g, cfg, cycle,
+			fmt.Sprintf("cycle over %s: %s", strings.Join(crossed, ", "), joinIDs(cycle, " -> ")), types...))
+	}
+	return findings
+}
+
+// cycleTypes names the edge types a closed path travels on, in configuration
+// order, so a reader knows which keys to look at.
+func cycleTypes(g *model.Graph, cycle []model.ID, types []model.EdgeType) []string {
+	used := make(map[model.EdgeType]bool, len(types))
+	for i := 1; i < len(cycle); i++ {
+		for _, e := range g.Edges {
+			if e.From == cycle[i-1] && e.To == cycle[i] && slices.Contains(types, e.Type) {
+				used[e.Type] = true
+			}
+		}
+	}
+	names := make([]string, 0, len(used))
+	for _, t := range types {
+		if used[t] {
+			names = append(names, t.String())
+		}
+	}
+	return names
+}
+
 // cycleFinding files a cycle against its lexically smallest member and relates
 // the others, so a reader opens one file and sees every edge on the path.
-func cycleFinding(g *model.Graph, cfg config.Config, t model.EdgeType, cycle []model.ID) model.Finding {
+func cycleFinding(g *model.Graph, cfg config.Config, cycle []model.ID, detail string, types ...model.EdgeType) model.Finding {
 	f := model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleCycle),
 		Rule:     model.RuleCycle,
 		ID:       cycle[0],
-		Detail:   fmt.Sprintf("%s cycle: %s", t, joinIDs(cycle, " -> ")),
+		Detail:   detail,
 	}
 	members := slices.Compact(slices.Sorted(slices.Values(cycle)))
 	locations := make([]model.Location, 0, len(members))
 	for _, id := range members {
 		if n, ok := g.Node(id); ok {
-			locations = append(locations, edgeKeyLocation(cfg, n, t))
+			locations = append(locations, edgeKeyLocation(cfg, n, types...))
 		}
 	}
 	if len(locations) > 0 {
@@ -174,7 +219,7 @@ func CheckDangling(g *model.Graph, cfg config.Config) []model.Finding {
 
 func danglingRef(cfg config.Config, owner *model.Node, e model.Edge, missing string) model.Finding {
 	return model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleDanglingRef),
 		Rule:     model.RuleDanglingRef,
 		ID:       owner.ID,
 		Detail:   danglingDetail(e.Type, missing),
@@ -186,6 +231,167 @@ func danglingRef(cfg config.Config, owner *model.Node, e model.Edge, missing str
 // whichever layer noticed it.
 func danglingDetail(t model.EdgeType, ref string) string {
 	return fmt.Sprintf("%s reference %q does not name a document", t, ref)
+}
+
+// CheckInverse reports frontmatter that disagrees with the edges it mirrors:
+// an edge whose target does not name its source under the inverse key, and an
+// entry under the inverse key that no edge backs.
+func CheckInverse(g *model.Graph, cfg config.Config) []model.Finding {
+	findings := []model.Finding{}
+	for _, spec := range cfg.Edges {
+		if spec.Inverse == "" {
+			continue
+		}
+		findings = append(findings, checkInverseKey(g, cfg, spec)...)
+	}
+	SortFindings(findings)
+	return findings
+}
+
+func checkInverseKey(g *model.Graph, cfg config.Config, spec config.EdgeSpec) []model.Finding {
+	findings := []model.Finding{}
+	t := model.EdgeType(spec.Name)
+	normalizer := cfg.Normalizer()
+	listed := make(map[edgeKey]bool)
+
+	for _, id := range g.NodeIDs() {
+		n := g.Nodes[id]
+		loc := n.Location(spec.Inverse, spec.Key, statusField(cfg))
+		refs, invalid := parse.Refs(n.Attrs, spec.Inverse)
+		for _, entry := range append(slices.Clone(invalid), unshaped(refs)...) {
+			findings = append(findings, model.Finding{
+				Severity: cfg.Severity(model.RuleInvalidRef),
+				Rule:     model.RuleInvalidRef,
+				ID:       id,
+				Detail:   fmt.Sprintf("%s reference %q is not an identifier", spec.Inverse, entry),
+				Location: loc,
+			})
+		}
+		for _, ref := range refs {
+			source, ok := normalizer.Normalize(ref)
+			if !ok || !config.IDShaped(ref) {
+				continue
+			}
+			if _, known := g.Node(source); !known {
+				findings = append(findings, model.Finding{
+					Severity: cfg.Severity(model.RuleDanglingRef),
+					Rule:     model.RuleDanglingRef,
+					ID:       id,
+					Detail:   danglingDetail(model.EdgeType(spec.Inverse), ref),
+					Location: loc,
+				})
+				continue
+			}
+			listed[edgeKey{from: source, to: id, t: t}] = true
+		}
+	}
+
+	for _, e := range g.EdgesOfType(t) {
+		if _, known := g.Node(e.To); !known {
+			continue
+		}
+		if listed[edgeKey{from: e.From, to: e.To, t: t}] {
+			continue
+		}
+		findings = append(findings, inverseMismatch(g, cfg, spec, e.To, e.From,
+			fmt.Sprintf("%s does not list %s, which declares %s", spec.Inverse, e.From, spec.Key)))
+	}
+
+	declared := make(map[edgeKey]bool, len(g.Edges))
+	for _, e := range g.EdgesOfType(t) {
+		declared[edgeKey{from: e.From, to: e.To, t: t}] = true
+	}
+	for k := range listed {
+		if declared[k] {
+			continue
+		}
+		findings = append(findings, inverseMismatch(g, cfg, spec, k.to, k.from,
+			fmt.Sprintf("%s lists %s, which declares no %s edge to this document", spec.Inverse, k.from, t)))
+	}
+	return findings
+}
+
+func inverseMismatch(g *model.Graph, cfg config.Config, spec config.EdgeSpec, owner, peer model.ID, detail string) model.Finding {
+	f := model.Finding{
+		Severity: cfg.Severity(model.RuleInverseMismatch),
+		Rule:     model.RuleInverseMismatch,
+		ID:       owner,
+		Detail:   detail,
+	}
+	if n, ok := g.Node(owner); ok {
+		f.Location = n.Location(spec.Inverse, spec.Key, statusField(cfg))
+	}
+	if n, ok := g.Node(peer); ok {
+		f.Related = []model.Location{n.Location(spec.Key, statusField(cfg))}
+	}
+	return f
+}
+
+// unshaped returns the references that name no identity at all.
+func unshaped(refs []string) []string {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if !config.IDShaped(ref) {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+// CheckCardinality reports documents whose edge degree leaves the bounds the
+// configuration puts on an edge type.
+func CheckCardinality(g *model.Graph, cfg config.Config) []model.Finding {
+	findings := []model.Finding{}
+	for _, spec := range cfg.Edges {
+		if spec.MaxInbound == 0 && spec.MaxOutbound == 0 && spec.MinOutbound == 0 {
+			continue
+		}
+		t := model.EdgeType(spec.Name)
+		inbound, outbound := degrees(g, t)
+		for _, id := range g.NodeIDs() {
+			findings = append(findings, cardinality(g, cfg, spec, id, inbound[id], outbound[id])...)
+		}
+	}
+	SortFindings(findings)
+	return findings
+}
+
+// degrees counts the edges of one type at each known document. An edge with an
+// unknown endpoint is a dangling reference, reported on its own; it still
+// counts at the endpoint that exists.
+func degrees(g *model.Graph, t model.EdgeType) (inbound, outbound map[model.ID]int) {
+	inbound = make(map[model.ID]int, len(g.Nodes))
+	outbound = make(map[model.ID]int, len(g.Nodes))
+	for _, e := range g.EdgesOfType(t) {
+		outbound[e.From]++
+		inbound[e.To]++
+	}
+	return inbound, outbound
+}
+
+func cardinality(g *model.Graph, cfg config.Config, spec config.EdgeSpec, id model.ID, inbound, outbound int) []model.Finding {
+	t := model.EdgeType(spec.Name)
+	var details []string
+	if spec.MaxInbound > 0 && inbound > spec.MaxInbound {
+		details = append(details, fmt.Sprintf("%d inbound %s edges exceed max_inbound %d", inbound, t, spec.MaxInbound))
+	}
+	if spec.MaxOutbound > 0 && outbound > spec.MaxOutbound {
+		details = append(details, fmt.Sprintf("%d outbound %s edges exceed max_outbound %d", outbound, t, spec.MaxOutbound))
+	}
+	if outbound < spec.MinOutbound {
+		details = append(details, fmt.Sprintf("%d outbound %s edges fall short of min_outbound %d", outbound, t, spec.MinOutbound))
+	}
+	findings := make([]model.Finding, 0, len(details))
+	for _, detail := range details {
+		findings = append(findings, model.Finding{
+			Severity: cfg.Severity(model.RuleCardinality),
+			Rule:     model.RuleCardinality,
+			ID:       id,
+			Detail:   detail,
+			Location: edgeKeyLocation(cfg, g.Nodes[id], t),
+		})
+	}
+	return findings
 }
 
 // CheckStatusVocabulary reports statuses outside the configured vocabulary.
@@ -203,7 +409,7 @@ func CheckStatusVocabulary(g *model.Graph, cfg config.Config) []model.Finding {
 			continue
 		}
 		findings = append(findings, model.Finding{
-			Severity: model.SeverityError,
+			Severity: cfg.Severity(model.RuleUnknownStatus),
 			Rule:     model.RuleUnknownStatus,
 			ID:       id,
 			Detail:   fmt.Sprintf("status %q is outside the vocabulary %s", raw, strings.Join(cfg.StatusValues, ", ")),
@@ -234,7 +440,7 @@ func CheckDerived(g *model.Graph, cfg config.Config) []model.Finding {
 			loc = derivedFieldLocation(cfg, n, e.Type)
 		}
 		findings = append(findings, model.Finding{
-			Severity: model.SeverityWarn,
+			Severity: cfg.Severity(model.RuleUnstructuredSupersedes),
 			Rule:     model.RuleUnstructuredSupersedes,
 			ID:       owner,
 			Detail:   fmt.Sprintf("%s edge %s -> %s comes from a field value; declare it in frontmatter", e.Type, e.From, e.To),
@@ -244,7 +450,7 @@ func CheckDerived(g *model.Graph, cfg config.Config) []model.Finding {
 			continue
 		}
 		findings = append(findings, model.Finding{
-			Severity: model.SeverityError,
+			Severity: cfg.Severity(model.RuleDerivedConflict),
 			Rule:     model.RuleDerivedConflict,
 			ID:       owner,
 			Detail:   fmt.Sprintf("derived %s edge %s -> %s contradicts the structured edge %s -> %s", e.Type, e.From, e.To, e.To, e.From),
@@ -275,6 +481,8 @@ func Check(g *model.Graph, cfg config.Config) []model.Finding {
 	findings := []model.Finding{}
 	findings = append(findings, CheckCycles(g, cfg)...)
 	findings = append(findings, CheckDangling(g, cfg)...)
+	findings = append(findings, CheckInverse(g, cfg)...)
+	findings = append(findings, CheckCardinality(g, cfg)...)
 	findings = append(findings, CheckStatusVocabulary(g, cfg)...)
 	findings = append(findings, CheckDerived(g, cfg)...)
 	SortFindings(findings)
@@ -327,15 +535,51 @@ func (ix edgeIndex) match(g *model.Graph, cond config.Condition, id model.ID) bo
 		}
 	}
 	for key, want := range cond.Attr {
-		value, present := n.Attr(key)
-		if want.Eq != nil && (!present || !strings.EqualFold(value, *want.Eq)) {
-			return false
-		}
-		if want.Not != nil && present && strings.EqualFold(value, *want.Not) {
+		if !matchAttr(n, key, want) {
 			return false
 		}
 	}
+	if len(cond.AnyOf) > 0 && !slices.ContainsFunc(cond.AnyOf, func(alternative config.Condition) bool {
+		return ix.match(g, alternative, id)
+	}) {
+		return false
+	}
+	return cond.Not == nil || !ix.match(g, *cond.Not, id)
+}
+
+// matchAttr applies one attribute clause. A positive clause needs the attribute
+// to be there; a negative one is satisfied by an attribute that is not.
+func matchAttr(n *model.Node, key string, want config.AttrCondition) bool {
+	switch {
+	case want.Eq != nil:
+		value, present := n.Attr(key)
+		return present && strings.EqualFold(value, *want.Eq)
+	case want.Not != nil:
+		value, present := n.Attr(key)
+		return !present || !strings.EqualFold(value, *want.Not)
+	case want.Contains != nil:
+		items, present := n.AttrList(key)
+		return present && containsFold(items, *want.Contains)
+	case want.NotContains != nil:
+		items, present := n.AttrList(key)
+		return !present || !containsFold(items, *want.NotContains)
+	case want.SubsetOf != nil:
+		items, present := n.AttrList(key)
+		if !present {
+			return false
+		}
+		for _, item := range items {
+			if !containsFold(want.SubsetOf, item) {
+				return false
+			}
+		}
+		return true
+	}
 	return true
+}
+
+func containsFold(items []string, want string) bool {
+	return slices.ContainsFunc(items, func(item string) bool { return strings.EqualFold(item, want) })
 }
 
 // MatchCondition reports whether one node satisfies every clause of a rule
@@ -380,12 +624,19 @@ func evalRule(g *model.Graph, cfg config.Config, ix edgeIndex, rule config.Rule)
 // ruleLocation points a rule finding at the clause the reader has to change:
 // the attribute the condition reads, else the key declaring the edge it names.
 func ruleLocation(cfg config.Config, n *model.Node, cond config.Condition) model.Location {
-	keys := slices.Sorted(maps.Keys(cond.Attr))
-	for _, clause := range cond.EdgeClauses() {
-		if spec, ok := cfg.Edge(model.EdgeType(clause.Edge)); ok {
-			keys = append(keys, spec.Key)
+	attrs := make(map[string]bool)
+	var edges []string
+	for _, nested := range cond.Conditions() {
+		for key := range nested.Attr {
+			attrs[key] = true
+		}
+		for _, clause := range nested.EdgeClauses() {
+			if spec, ok := cfg.Edge(model.EdgeType(clause.Edge)); ok {
+				edges = append(edges, spec.Key)
+			}
 		}
 	}
+	keys := append(slices.Sorted(maps.Keys(attrs)), edges...)
 	return n.Location(append(keys, statusField(cfg))...)
 }
 

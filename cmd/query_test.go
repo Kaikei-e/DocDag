@@ -207,6 +207,13 @@ func TestUnknownFieldIsAUsageError(t *testing.T) {
 	}
 }
 
+func TestQueryBindingSkipsAWithdrawnDecision(t *testing.T) {
+	got := run(t, "query", "--binding", "--dir", fixture(t, "withdrawn"))
+
+	assertExit(t, got, 0)
+	assertLines(t, "binding", lines(got.stdout), []string{"0002"})
+}
+
 func TestQueryBinding(t *testing.T) {
 	tests := []struct {
 		name    string

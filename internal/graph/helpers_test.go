@@ -23,7 +23,7 @@ func testNode(id, status string) *model.Node {
 // testNodeAttrs mirrors the status onto both the field and the attribute map so
 // a rule reading the attribute and code reading the field observe one value.
 // Every recognized key gets its own line so a finding's location is legible.
-func testNodeAttrs(id, status string, attrs map[string]string) *model.Node {
+func testNodeAttrs(id, status string, attrs map[string]any) *model.Node {
 	n := &model.Node{
 		ID:     model.ID(id),
 		Path:   id + ".md",
@@ -33,10 +33,12 @@ func testNodeAttrs(id, status string, attrs map[string]string) *model.Node {
 		Attrs:  map[string]any{},
 		Line:   testFrontmatterLine,
 		KeyLines: map[string]int{
-			"title":      testTitleLine,
-			"status":     testStatusLine,
-			"supersedes": testSupersedesLine,
-			"depends-on": testDependsOnLine,
+			"title":          testTitleLine,
+			"status":         testStatusLine,
+			"supersedes":     testSupersedesLine,
+			"depends-on":     testDependsOnLine,
+			testInverseKey:   testInverseLine,
+			testListAttrsKey: testListAttrsLine,
 		},
 	}
 	if status != "" {
@@ -56,6 +58,15 @@ const (
 	testStatusLine      = 3
 	testSupersedesLine  = 4
 	testDependsOnLine   = 5
+	testInverseLine     = 6
+	testListAttrsLine   = 7
+	testBodyLine        = 9
+)
+
+// The inverse key and the list attribute the constraint tests configure.
+const (
+	testInverseKey   = "superseded_by"
+	testListAttrsKey = "tags"
 )
 
 func testNodeLocation(id string, line int) model.Location {
@@ -96,6 +107,7 @@ func testDoc(id string, frontmatter map[string]any, body string) *parse.Document
 		HasFrontmatter:  true,
 		MatchesPattern:  true,
 		FrontmatterLine: testFrontmatterLine,
+		BodyLine:        testBodyLine,
 		KeyLines:        make(map[string]int, len(frontmatter)),
 	}
 	for i, key := range slices.Sorted(maps.Keys(frontmatter)) {
@@ -129,6 +141,8 @@ func testAttrNot(v string) config.AttrCondition {
 	value := v
 	return config.AttrCondition{Not: &value}
 }
+
+func testStr(v string) *string { return &v }
 
 func testAssertIDs(t *testing.T, what string, got, want []model.ID) {
 	t.Helper()
