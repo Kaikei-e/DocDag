@@ -132,6 +132,33 @@ func TestValidateReportsAStatusStringNamingAnUnknownDocument(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsAFrontmatterReferenceThatIsNotIdentityShaped(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-a-decision.md": "---\ntitle: A decision\nstatus: superseded\ndate: 2025-01-01\n---\n\n# A decision\n",
+		"0002-another.md":    "---\ntitle: Another decision\nstatus: accepted\nsupersedes:\n  - see 0001\ndate: 2025-02-01\n---\n\n# Another decision\n",
+	})
+
+	got := run(t, "validate", "--dir", dir)
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0002-another.md:4: ERROR invalid_ref 0002:",
+		"0001-a-decision.md:3: WARN superseded_orphan 0001:",
+	})
+}
+
+func TestValidateLeavesProseThatIsNotIdentityShapedAlone(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n" +
+			"# A decision\n\nSee [[3days-recap]], [[upstream]] and [[tool.uv.index]].\n\n```\n[[0099]]\n```\n",
+	})
+
+	got := run(t, "validate", "--dir", dir)
+
+	assertExit(t, got, 0)
+	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+}
+
 func TestValidateRejectsAStatusThatOnlyOpensWithAVocabularyWord(t *testing.T) {
 	dir := writeDocs(t, map[string]string{
 		"0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted by the architecture board\ndate: 2025-01-01\n---\n\n# A decision\n",

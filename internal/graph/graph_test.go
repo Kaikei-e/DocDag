@@ -172,7 +172,7 @@ func TestBuildTypedEdges(t *testing.T) {
 		}
 	})
 
-	t.Run("a reference that cannot be normalized is recorded as dangling", func(t *testing.T) {
+	t.Run("a reference that names no identity is rejected", func(t *testing.T) {
 		docs := []*parse.Document{
 			testDoc("0002", map[string]any{
 				"status":     "accepted",
@@ -181,7 +181,7 @@ func TestBuildTypedEdges(t *testing.T) {
 		}
 
 		g := Build(docs, cfg)
-		f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingRef, model.SeverityError, "0002")
+		f := testAssertSingleFinding(t, g.Findings, model.RuleInvalidRef, model.SeverityError, "0002")
 		if !strings.Contains(f.Detail, "a-reference-without-digits") {
 			t.Errorf("detail = %q, want it to name the unresolvable reference", f.Detail)
 		}
@@ -330,6 +330,43 @@ func TestBuildReferenceLayer(t *testing.T) {
 			t.Fatalf("findings = %+v, want none (the reference layer is never validated)", g.Findings)
 		}
 	})
+}
+
+func TestBuildReferenceLayerTakesOnlyIdentityShapedLinks(t *testing.T) {
+	cfg := config.ADRPreset()
+	docs := []*parse.Document{
+		testDoc("0001", map[string]any{"status": "accepted"}, ""),
+		testDoc("0002", map[string]any{"status": "accepted"},
+			"Unlike [[1]], [[upstream]] and [[tool.uv.index]], only [[0001]] names a document.\n"),
+	}
+
+	g := Build(docs, cfg)
+
+	want := []model.Edge{testRefEdge("0002", "0001")}
+	if !slices.Equal(g.RefEdges, want) {
+		t.Fatalf("reference edges = %+v, want %+v", g.RefEdges, want)
+	}
+}
+
+func TestBuildRejectsAFrontmatterReferenceThatIsNotIdentityShaped(t *testing.T) {
+	cfg := config.ADRPreset()
+	docs := []*parse.Document{
+		testDoc("0001", map[string]any{"status": "accepted"}, ""),
+		testDoc("0002", map[string]any{
+			"status":     "accepted",
+			"supersedes": []any{"see 0001"},
+		}, ""),
+	}
+
+	g := Build(docs, cfg)
+
+	f := testAssertSingleFinding(t, g.Findings, model.RuleInvalidRef, model.SeverityError, "0002")
+	if !strings.Contains(f.Detail, "see 0001") {
+		t.Errorf("detail = %q, want the reference as written", f.Detail)
+	}
+	if len(g.Edges) != 0 {
+		t.Fatalf("edges = %+v, want none: the reference names no identity", g.Edges)
+	}
 }
 
 func TestAdjacency(t *testing.T) {
@@ -515,7 +552,7 @@ func TestBuildLocatesAnUnresolvableReference(t *testing.T) {
 	}
 
 	g := Build(docs, config.ADRPreset())
-	f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingRef, model.SeverityError, "0002")
+	f := testAssertSingleFinding(t, g.Findings, model.RuleInvalidRef, model.SeverityError, "0002")
 	want := model.Location{Path: "0002.md", Line: docs[0].KeyLines["supersedes"]}
 	if f.Location != want {
 		t.Errorf("location = %+v, want %+v", f.Location, want)
