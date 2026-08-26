@@ -74,6 +74,16 @@ func TestValidateTextReport(t *testing.T) {
 			findings: []string{"0002-negotiate-api-versions-by-header.md:2: ERROR invalid_frontmatter 0002:"},
 		},
 		{
+			name:     "an edge key that names nothing fails",
+			fixture:  "empty-edge",
+			wantExit: 1,
+			findings: []string{
+				"0002-stream-audit-events-to-append-only-storage.md:4: ERROR empty_edge 0002:",
+				"0002-stream-audit-events-to-append-only-storage.md:5: ERROR empty_edge 0002:",
+				"0001-write-audit-events-to-the-database.md:3: WARN superseded_orphan 0001:",
+			},
+		},
+		{
 			name:     "status drift fails",
 			fixture:  "status-drift",
 			wantExit: 1,

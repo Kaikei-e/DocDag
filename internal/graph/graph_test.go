@@ -348,6 +348,55 @@ func TestBuildReferenceLayerTakesOnlyIdentityShapedLinks(t *testing.T) {
 	}
 }
 
+func TestBuildReportsAnEdgeKeyThatNamesNothing(t *testing.T) {
+	cfg := config.ADRPreset()
+	tests := []struct {
+		name  string
+		value any
+		want  bool
+	}{
+		{name: "a null value", want: true},
+		{name: "an empty list", value: []any{}, want: true},
+		{name: "a list of empty items", value: []any{"", "   "}, want: true},
+		{name: "an empty scalar", value: "", want: true},
+		{name: "a populated list", value: []any{"0001"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			docs := []*parse.Document{
+				testDoc("0001", map[string]any{"status": "accepted"}, ""),
+				testDoc("0002", map[string]any{"status": "accepted", "supersedes": tt.value}, ""),
+			}
+
+			g := Build(docs, cfg)
+
+			found := testFindingsFor(g.Findings, model.RuleEmptyEdge)
+			if !tt.want {
+				if len(found) != 0 {
+					t.Fatalf("findings = %+v, want none", found)
+				}
+				return
+			}
+			f := testAssertSingleFinding(t, g.Findings, model.RuleEmptyEdge, model.SeverityError, "0002")
+			if f.Location != testNodeLocation("0002", docs[1].KeyLines["supersedes"]) {
+				t.Errorf("location = %+v, want the line of the empty key", f.Location)
+			}
+			if !strings.Contains(f.Detail, "supersedes") {
+				t.Errorf("detail = %q, want the key named", f.Detail)
+			}
+		})
+	}
+
+	t.Run("an absent key is not an empty one", func(t *testing.T) {
+		docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted"}, "")}
+
+		if g := Build(docs, cfg); len(g.Findings) != 0 {
+			t.Fatalf("findings = %+v, want none", g.Findings)
+		}
+	})
+}
+
 func TestBuildReportsDanglingReferences(t *testing.T) {
 	withDangling := func(mode string) config.Config {
 		cfg := config.ADRPreset()
