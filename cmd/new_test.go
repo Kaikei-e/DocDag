@@ -193,6 +193,32 @@ func TestNewRejectsAnUnknownFormat(t *testing.T) {
 	}
 }
 
+func TestNewHonoursTheConfiguredFilenameTemplate(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+	cfg := writeDocs(t, map[string]string{"docdag.yaml": "id_width: 6\nfilename: \"{id}.md\"\n"})
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--config", filepath.Join(cfg, "docdag.yaml"), "--dir", dir)
+
+	assertExit(t, got, 0)
+	wantPath := filepath.Join(dir, "000007.md")
+	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Errorf("stat created document: %v", err)
+	}
+}
+
+func TestNewRejectsAFilenameTemplateWithoutAnIdentifier(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+	cfg := writeDocs(t, map[string]string{"docdag.yaml": "filename: \"{slug}.md\"\n"})
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--config", filepath.Join(cfg, "docdag.yaml"), "--dir", dir)
+
+	assertExit(t, got, 3)
+	if !strings.Contains(got.stderr, "{id}") {
+		t.Errorf("stderr = %q, want it to name the missing placeholder", got.stderr)
+	}
+}
+
 func TestNewResolvesToTheCreatedDocument(t *testing.T) {
 	dir := copyFixture(t, "ok-basic")
 

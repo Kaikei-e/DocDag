@@ -321,3 +321,61 @@ func TestValidateRejectsAnUndeclaredEdgeInEveryClause(t *testing.T) {
 		})
 	}
 }
+
+func TestFilenameTemplate(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		want     string
+	}{
+		{name: "an unconfigured corpus takes the default", want: DefaultFilename},
+		{name: "a configured template is used as written", filename: "{id}.md", want: "{id}.md"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.Filename = tt.filename
+			if got := cfg.FilenameTemplate(); got != tt.want {
+				t.Errorf("FilenameTemplate = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigValidateFilename(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		want     string
+	}{
+		{name: "an unconfigured template is valid"},
+		{name: "the default carries both placeholders", filename: DefaultFilename},
+		{name: "a bare numeric corpus needs no slug", filename: "{id}.md"},
+		{name: "an underscore separator is allowed", filename: "{id}_{slug}.md"},
+		{name: "a template without an identifier", filename: "{slug}.md", want: "{id}"},
+		{name: "a template with no placeholder at all", filename: "decision.md", want: "{id}"},
+		{name: "a slash reaches outside the documents directory", filename: "notes/{id}.md", want: "separator"},
+		{name: "a backslash reaches outside the documents directory", filename: `notes\{id}.md`, want: "separator"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.Filename = tt.filename
+
+			err := cfg.Validate()
+
+			if tt.want == "" {
+				if err != nil {
+					t.Fatalf("Validate: %v", err)
+				}
+				return
+			}
+			if !errors.Is(err, model.ErrInvalidConfig) {
+				t.Fatalf("Validate = %v, want it to wrap %v", err, model.ErrInvalidConfig)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("Validate = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+}
