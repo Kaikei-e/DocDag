@@ -360,6 +360,62 @@ func TestCheckInverse(t *testing.T) {
 	})
 }
 
+func TestCheckCyclesOverTheUnionOfAcyclicEdgeTypes(t *testing.T) {
+	union := func() config.Config {
+		cfg := config.ADRPreset()
+		cfg.AcyclicUnion = true
+		return cfg
+	}
+	mixed := testGraph(
+		[]*model.Node{
+			testNode("0001", config.StatusSuperseded),
+			testNode("0002", config.StatusAccepted),
+			testNode("0003", config.StatusAccepted),
+		},
+		[]model.Edge{
+			testEdge("0001", "0002", config.EdgeDependsOn),
+			testEdge("0002", "0003", config.EdgeDependsOn),
+			testEdge("0003", "0001", config.EdgeSupersedes),
+		},
+		nil,
+	)
+
+	t.Run("each edge type on its own stays acyclic", func(t *testing.T) {
+		if got := CheckCycles(mixed, config.ADRPreset()); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("the union closes the loop", func(t *testing.T) {
+		f := testAssertSingleFinding(t, CheckCycles(mixed, union()), model.RuleCycle, model.SeverityError, "0001")
+		for _, want := range []string{config.EdgeDependsOn.String(), config.EdgeSupersedes.String(), "0002", "0003"} {
+			if !strings.Contains(f.Detail, want) {
+				t.Errorf("detail = %q, want it to name %q", f.Detail, want)
+			}
+		}
+		if len(f.Related) != 2 {
+			t.Errorf("related = %+v, want the other two members", f.Related)
+		}
+	})
+
+	t.Run("a cycle inside one edge type is reported once", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0001", config.StatusSuperseded), testNode("0002", config.StatusSuperseded)},
+			[]model.Edge{
+				testEdge("0001", "0002", config.EdgeSupersedes),
+				testEdge("0002", "0001", config.EdgeSupersedes),
+			},
+			nil,
+		)
+
+		got := CheckCycles(g, union())
+
+		if len(testFindingsFor(got, model.RuleCycle)) != 1 {
+			t.Fatalf("findings = %+v, want one", got)
+		}
+	})
+}
+
 func TestCheckCardinality(t *testing.T) {
 	bounded := func(mutate func(*config.EdgeSpec)) config.Config {
 		cfg := config.ADRPreset()

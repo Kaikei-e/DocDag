@@ -169,6 +169,32 @@ func TestValidateLeavesProseThatIsNotIdentityShapedAlone(t *testing.T) {
 	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
 }
 
+func TestValidateUnionAcyclicity(t *testing.T) {
+	dir := fixture(t, "union-cycle")
+
+	t.Run("each edge type on its own is acyclic", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir)
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	})
+
+	t.Run("the union of the acyclic edge types is not", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+			"0001-keep-sessions-in-the-database.md:4: ERROR cycle 0001:",
+		})
+		detail := strings.Join(findingLines(got.stdout), "\n")
+		for _, want := range []string{"supersedes", "depends-on"} {
+			if !strings.Contains(detail, want) {
+				t.Errorf("finding %q does not name the edge type %q", detail, want)
+			}
+		}
+	})
+}
+
 func TestValidateEdgeCardinality(t *testing.T) {
 	dir := fixture(t, "cardinality")
 
