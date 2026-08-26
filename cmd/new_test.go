@@ -323,6 +323,39 @@ func TestNewDryRunJSONPlan(t *testing.T) {
 	}
 }
 
+func TestNewNamesFilesTheWayTheCallerWouldTypeThem(t *testing.T) {
+	corpus := map[string]string{
+		"docs/adr/0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n",
+	}
+
+	t.Run("the plan is relative to the working directory", func(t *testing.T) {
+		t.Chdir(writeDocs(t, corpus))
+
+		got := run(t, "new", "Another decision", "--supersedes", "0001", "--dry-run", "--format", "json")
+
+		assertExit(t, got, 0)
+		plan := decodeJSON[render.Plan](t, got.stdout)
+		want := render.Plan{
+			SchemaVersion: render.PlanSchemaVersion,
+			ID:            "0002",
+			Path:          "docs/adr/0002-another-decision.md",
+			Rewrites:      []render.PlanRewrite{{Path: "docs/adr/0001-a-decision.md", Status: "superseded"}},
+		}
+		if !reflect.DeepEqual(plan, want) {
+			t.Errorf("plan = %+v, want %+v", plan, want)
+		}
+	})
+
+	t.Run("the created path is relative to the working directory", func(t *testing.T) {
+		t.Chdir(writeDocs(t, corpus))
+
+		got := run(t, "new", "Another decision")
+
+		assertExit(t, got, 0)
+		assertLines(t, "created path", lines(got.stdout), []string{"docs/adr/0002-another-decision.md"})
+	})
+}
+
 func TestNewDryRunKeepsTheExitCodesOfARealRun(t *testing.T) {
 	dir := copyFixture(t, "ok-basic")
 
