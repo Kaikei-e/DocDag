@@ -41,6 +41,9 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 		for _, spec := range cfg.Edges {
 			t := model.EdgeType(spec.Name)
 			refs, invalid := parse.Refs(doc.Frontmatter, spec.Key)
+			if declaresNothing(doc, spec.Key, refs, invalid) {
+				findings = append(findings, emptyEdge(doc, spec.Key))
+			}
 			for _, entry := range invalid {
 				findings = append(findings, unresolvableRef(doc, spec.Key, t, entry))
 			}
@@ -142,6 +145,23 @@ func unresolvableRef(doc *parse.Document, key string, t model.EdgeType, ref stri
 		Rule:     model.RuleDanglingRef,
 		ID:       doc.ID,
 		Detail:   danglingDetail(t, ref),
+		Location: model.Locate(doc.Path, doc.FrontmatterLine, doc.KeyLines, key),
+	}
+}
+
+// declaresNothing reports an edge key written down and then left empty, which
+// reads as a declared relation but builds no edge.
+func declaresNothing(doc *parse.Document, key string, refs, invalid []string) bool {
+	_, present := doc.Frontmatter[key]
+	return present && len(refs) == 0 && len(invalid) == 0
+}
+
+func emptyEdge(doc *parse.Document, key string) model.Finding {
+	return model.Finding{
+		Severity: model.SeverityError,
+		Rule:     model.RuleEmptyEdge,
+		ID:       doc.ID,
+		Detail:   fmt.Sprintf("%s is present but names no document", key),
 		Location: model.Locate(doc.Path, doc.FrontmatterLine, doc.KeyLines, key),
 	}
 }
