@@ -298,6 +298,41 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "a condition with alternatives and a negation",
+			mutate: func(c *Config) {
+				c.Rules[0].When = Condition{
+					AnyOf: []Condition{{Inbound: EdgeSupersedes.String()}, {Attr: map[string]AttrCondition{"status": testEq(StatusRejected)}}},
+					Not:   &Condition{Attr: map[string]AttrCondition{"status": testEq(StatusProposed)}},
+				}
+			},
+		},
+		{
+			name: "an alternative naming an undeclared edge type",
+			mutate: func(c *Config) {
+				c.Rules[0].When.AnyOf = []Condition{{Inbound: "relates-to"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a negation naming an undeclared edge type",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Not = &Condition{Outbound: "relates-to"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a nested attribute condition with no operand",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Not = &Condition{Attr: map[string]AttrCondition{"status": {}}}
+			},
+			wantErr: true,
+		},
+		{
+			name:    "an empty list of alternatives",
+			mutate:  func(c *Config) { c.Rules[0].When.AnyOf = []Condition{} },
+			wantErr: true,
+		},
+		{
 			name:    "a derived edge naming an undeclared edge type",
 			mutate:  func(c *Config) { c.DerivedEdges[0].Edge = "relates-to" },
 			wantErr: true,

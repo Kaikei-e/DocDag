@@ -914,6 +914,92 @@ func TestMatchConditionOnListAttributes(t *testing.T) {
 	}
 }
 
+func TestMatchConditionWithAlternativesAndNegation(t *testing.T) {
+	g := testGraph(
+		[]*model.Node{
+			testNodeAttrs("0001", config.StatusDeprecated, map[string]any{testListAttrsKey: []any{"storage"}}),
+			testNodeAttrs("0002", config.StatusRejected, map[string]any{testListAttrsKey: []any{"explained"}}),
+			testNode("0003", config.StatusAccepted),
+			testNode("0004", config.StatusSuperseded),
+		},
+		[]model.Edge{testEdge("0003", "0004", config.EdgeSupersedes)},
+		nil,
+	)
+	retired := config.Condition{
+		AnyOf: []config.Condition{
+			{Attr: map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusDeprecated)}},
+			{Attr: map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusRejected)}},
+		},
+		Not: &config.Condition{Attr: map[string]config.AttrCondition{testListAttrsKey: {Contains: testStr("explained")}}},
+	}
+
+	tests := []struct {
+		name string
+		cond config.Condition
+		id   model.ID
+		want bool
+	}{
+		{name: "the first alternative matches", cond: retired, id: "0001", want: true},
+		{name: "the negation blocks the second alternative", cond: retired, id: "0002"},
+		{name: "no alternative matches", cond: retired, id: "0003"},
+		{
+			name: "top-level clauses still and with the alternatives",
+			cond: config.Condition{
+				NotInbound: config.EdgeSupersedes.String(),
+				AnyOf:      retired.AnyOf,
+			},
+			id:   "0001",
+			want: true,
+		},
+		{
+			name: "a top-level clause can veto every alternative",
+			cond: config.Condition{
+				Inbound: config.EdgeSupersedes.String(),
+				AnyOf:   retired.AnyOf,
+			},
+			id: "0001",
+		},
+		{
+			name: "a negation of an edge clause",
+			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeSupersedes.String()}},
+			id:   "0004",
+		},
+		{
+			name: "a negation that does not hold leaves the condition alone",
+			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeSupersedes.String()}},
+			id:   "0003",
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MatchCondition(g, tt.cond, tt.id); got != tt.want {
+				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvalRuleLocatesANestedAttributeClause(t *testing.T) {
+	g := testGraph([]*model.Node{testNode("0001", config.StatusDeprecated)}, nil, nil)
+	rule := config.Rule{
+		Name:     "unexplained_retirement",
+		Severity: model.SeverityWarn,
+		When: config.Condition{
+			AnyOf: []config.Condition{
+				{Attr: map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusDeprecated)}},
+			},
+		},
+		Message: "is retired without an explanation",
+	}
+
+	f := testAssertSingleFinding(t, EvalRule(g, config.ADRPreset(), rule), rule.Name, model.SeverityWarn, "0001")
+	if f.Location != testNodeLocation("0001", testStatusLine) {
+		t.Errorf("location = %+v, want the status line the alternative reads", f.Location)
+	}
+}
+
 func TestEvalRule(t *testing.T) {
 	cfg := config.ADRPreset()
 	g := testRulesFixture()
