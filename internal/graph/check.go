@@ -539,7 +539,12 @@ func (ix edgeIndex) match(g *model.Graph, cond config.Condition, id model.ID) bo
 			return false
 		}
 	}
-	return true
+	if len(cond.AnyOf) > 0 && !slices.ContainsFunc(cond.AnyOf, func(alternative config.Condition) bool {
+		return ix.match(g, alternative, id)
+	}) {
+		return false
+	}
+	return cond.Not == nil || !ix.match(g, *cond.Not, id)
 }
 
 // matchAttr applies one attribute clause. A positive clause needs the attribute
@@ -619,13 +624,26 @@ func evalRule(g *model.Graph, cfg config.Config, ix edgeIndex, rule config.Rule)
 // ruleLocation points a rule finding at the clause the reader has to change:
 // the attribute the condition reads, else the key declaring the edge it names.
 func ruleLocation(cfg config.Config, n *model.Node, cond config.Condition) model.Location {
-	keys := slices.Sorted(maps.Keys(cond.Attr))
-	for _, clause := range cond.EdgeClauses() {
-		if spec, ok := cfg.Edge(model.EdgeType(clause.Edge)); ok {
-			keys = append(keys, spec.Key)
+	attrs := make(map[string]bool)
+	var edges []string
+	for _, nested := range cond.Conditions() {
+		maps.Copy(attrs, boolKeys(nested.Attr))
+		for _, clause := range nested.EdgeClauses() {
+			if spec, ok := cfg.Edge(model.EdgeType(clause.Edge)); ok {
+				edges = append(edges, spec.Key)
+			}
 		}
 	}
+	keys := append(slices.Sorted(maps.Keys(attrs)), edges...)
 	return n.Location(append(keys, statusField(cfg))...)
+}
+
+func boolKeys(attr map[string]config.AttrCondition) map[string]bool {
+	keys := make(map[string]bool, len(attr))
+	for key := range attr {
+		keys[key] = true
+	}
+	return keys
 }
 
 // Validate runs the structural checks and the configured rules, returning the
