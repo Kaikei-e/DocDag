@@ -77,7 +77,7 @@ func TestSuggestNamesWhatToType(t *testing.T) {
 		{
 			name:    "an unknown status lists the vocabulary",
 			finding: model.Finding{Rule: model.RuleUnknownStatus, ID: "0001"},
-			want:    "use one of: proposed, accepted, rejected, deprecated, superseded",
+			want:    "use one of: proposed, accepted, rejected, deprecated, superseded, withdrawn",
 		},
 		{
 			name:    "an absent frontmatter block says what to write",

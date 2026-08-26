@@ -38,8 +38,8 @@ func TestADRPreset(t *testing.T) {
 		}
 	})
 
-	t.Run("the standard five status values", func(t *testing.T) {
-		want := []string{"proposed", "accepted", "rejected", "deprecated", "superseded"}
+	t.Run("the standard status values", func(t *testing.T) {
+		want := []string{"proposed", "accepted", "rejected", "deprecated", "superseded", "withdrawn"}
 
 		if !slices.Equal(cfg.StatusValues, want) {
 			t.Fatalf("status_values = %v, want %v", cfg.StatusValues, want)

@@ -2,14 +2,21 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
+	"github.com/Kaikei-e/DocDag/internal/model"
 	"github.com/Kaikei-e/DocDag/internal/render"
+	"github.com/Kaikei-e/DocDag/internal/vcs"
 )
 
-const flagTouching = "touching"
+const (
+	flagTouching       = "touching"
+	flagImmutableSince = "immutable-since"
+)
 
 func newValidateCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -29,7 +36,16 @@ func newValidateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			findings := graph.Suggest(graph.Validate(g, cfg), g, cfg)
+			findings := graph.Validate(g, cfg)
+			history, err := immutableFindings(cmd, cfg)
+			if err != nil {
+				return err
+			}
+			if len(history) > 0 {
+				findings = append(findings, history...)
+				graph.SortFindings(findings)
+			}
+			findings = graph.Suggest(findings, g, cfg)
 			// The exit code answers for the corpus, never for the filter: a
 			// report narrowed to one file must not turn a failure into a pass.
 			summary := graph.Summarize(g, findings)
@@ -61,5 +77,32 @@ func newValidateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringArray(flagTouching, nil, "report only the findings about these files or directories (repeatable)")
+	cmd.Flags().String(flagImmutableSince, "", "check that documents closed at <rev> only grew since")
 	return cmd
+}
+
+// immutableFindings runs the append-only history check when a revision names
+// one. A corpus outside a repository cannot answer it, which is a setup error
+// rather than a failing corpus.
+func immutableFindings(cmd *cobra.Command, cfg config.Config) ([]model.Finding, error) {
+	rev, err := cmd.Flags().GetString(flagImmutableSince)
+	if err != nil {
+		return nil, usageErr("%v", err)
+	}
+	if rev == "" {
+		return nil, nil
+	}
+	repo, err := vcs.Open(cfg.Dir)
+	if err != nil {
+		return nil, ioErr(fmt.Errorf("--%s: %w", flagImmutableSince, err))
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		return nil, ioErr(fmt.Errorf("working directory: %w", err))
+	}
+	findings, err := graph.CheckImmutable(repo, cfg, rev, root)
+	if err != nil {
+		return nil, ioErr(fmt.Errorf("--%s: %w", flagImmutableSince, err))
+	}
+	return findings, nil
 }
