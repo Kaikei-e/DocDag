@@ -25,6 +25,14 @@ type edgeKey struct {
 	t    model.EdgeType
 }
 
+// refKey identifies one reference-layer link as a reader sees it: what it
+// names, how it was written and where.
+type refKey struct {
+	kind   parse.LinkKind
+	target string
+	line   int
+}
+
 // Build assembles the typed constraint layer and the untyped reference layer
 // from parsed documents, recording structural findings it observes on the way.
 func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
@@ -80,6 +88,9 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 	severity, validated := cfg.ReferenceSeverity()
 	refs := make(map[edgeKey]bool)
 	for _, doc := range docs {
+		// One link written twice on a line is one thing to fix, and a second
+		// byte-identical finding only costs a reader time.
+		reported := make(map[refKey]bool)
 		for _, link := range referenceLinks(doc, cfg) {
 			ref, ok := referenceTarget(cfg, link)
 			if !ok {
@@ -90,7 +101,9 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 				continue
 			}
 			if _, known := g.Nodes[target]; !known {
-				if validated {
+				key := refKey{kind: link.Kind, target: ref, line: link.Line}
+				if validated && !reported[key] {
+					reported[key] = true
 					findings = append(findings, danglingReference(doc, link, ref, severity))
 				}
 				continue
