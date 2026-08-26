@@ -157,8 +157,10 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:   "a structural check escalated to an error",
-			mutate: func(c *Config) { c.Structural = map[string]model.Severity{model.RuleMissingFrontmatter: model.SeverityError} },
+			name: "a structural check escalated to an error",
+			mutate: func(c *Config) {
+				c.Structural = map[string]model.Severity{model.RuleMissingFrontmatter: model.SeverityError}
+			},
 		},
 		{
 			name:    "a structural check lowered to a warning",

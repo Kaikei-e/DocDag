@@ -42,24 +42,24 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 			t := model.EdgeType(spec.Name)
 			refs, invalid := parse.Refs(doc.Frontmatter, spec.Key)
 			if declaresNothing(doc, spec.Key, refs, invalid) {
-				findings = append(findings, emptyEdge(doc, spec.Key))
+				findings = append(findings, emptyEdge(cfg, doc, spec.Key))
 			}
 			if spec.Inverse != "" {
 				if mirrored, bad := parse.Refs(doc.Frontmatter, spec.Inverse); declaresNothing(doc, spec.Inverse, mirrored, bad) {
-					findings = append(findings, emptyEdge(doc, spec.Inverse))
+					findings = append(findings, emptyEdge(cfg, doc, spec.Inverse))
 				}
 			}
 			for _, entry := range invalid {
-				findings = append(findings, unresolvableRef(doc, spec.Key, t, entry))
+				findings = append(findings, unresolvableRef(cfg, doc, spec.Key, t, entry))
 			}
 			for _, ref := range refs {
 				if !config.IDShaped(ref) {
-					findings = append(findings, invalidRef(doc, spec.Key, t, ref))
+					findings = append(findings, invalidRef(cfg, doc, spec.Key, t, ref))
 					continue
 				}
 				target, ok := normalizer.Normalize(ref)
 				if !ok {
-					findings = append(findings, unresolvableRef(doc, spec.Key, t, ref))
+					findings = append(findings, unresolvableRef(cfg, doc, spec.Key, t, ref))
 					continue
 				}
 				recordEdge(origins, doc.ID, target, t, spec.Direction, model.OriginStructured)
@@ -69,7 +69,7 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 			t := model.EdgeType(derived.Spec.Edge)
 			target, ok := normalizer.Normalize(derived.Target)
 			if !ok {
-				findings = append(findings, unresolvableRef(doc, derived.Field, t, derived.Target))
+				findings = append(findings, unresolvableRef(cfg, doc, derived.Field, t, derived.Target))
 				continue
 			}
 			recordEdge(origins, doc.ID, target, t, derived.Spec.Direction, model.OriginDerived)
@@ -144,9 +144,9 @@ func recordEdge(origins map[edgeKey]model.Origin, doc, target model.ID, t model.
 	origins[k] = origin
 }
 
-func unresolvableRef(doc *parse.Document, key string, t model.EdgeType, ref string) model.Finding {
+func unresolvableRef(cfg config.Config, doc *parse.Document, key string, t model.EdgeType, ref string) model.Finding {
 	return model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleDanglingRef),
 		Rule:     model.RuleDanglingRef,
 		ID:       doc.ID,
 		Detail:   danglingDetail(t, ref),
@@ -161,9 +161,9 @@ func declaresNothing(doc *parse.Document, key string, refs, invalid []string) bo
 	return present && len(refs) == 0 && len(invalid) == 0
 }
 
-func emptyEdge(doc *parse.Document, key string) model.Finding {
+func emptyEdge(cfg config.Config, doc *parse.Document, key string) model.Finding {
 	return model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleEmptyEdge),
 		Rule:     model.RuleEmptyEdge,
 		ID:       doc.ID,
 		Detail:   fmt.Sprintf("%s is present but names no document", key),
@@ -171,9 +171,9 @@ func emptyEdge(doc *parse.Document, key string) model.Finding {
 	}
 }
 
-func invalidRef(doc *parse.Document, key string, t model.EdgeType, ref string) model.Finding {
+func invalidRef(cfg config.Config, doc *parse.Document, key string, t model.EdgeType, ref string) model.Finding {
 	return model.Finding{
-		Severity: model.SeverityError,
+		Severity: cfg.Severity(model.RuleInvalidRef),
 		Rule:     model.RuleInvalidRef,
 		ID:       doc.ID,
 		Detail:   fmt.Sprintf("%s reference %q is not an identifier", t, ref),

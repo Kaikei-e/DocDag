@@ -173,6 +173,35 @@ type Config struct {
 	Template     string            `yaml:"template,omitempty"`
 	References   ReferencesSpec    `yaml:"references,omitempty"`
 	AcyclicUnion bool              `yaml:"acyclic_union,omitempty"`
+	// Structural raises the severity of a built-in check. Lowering one is a
+	// configuration error: the checks are the contract, not a preference.
+	Structural map[string]model.Severity `yaml:"structural,omitempty"`
+}
+
+// structuralSeverities is the severity every built-in check reports at, and
+// therefore the set of names a structural escalation may address.
+var structuralSeverities = map[string]model.Severity{
+	model.RuleCycle:                  model.SeverityError,
+	model.RuleDanglingRef:            model.SeverityError,
+	model.RuleIDCollision:            model.SeverityError,
+	model.RuleInvalidFrontmatter:     model.SeverityError,
+	model.RuleMissingFrontmatter:     model.SeverityWarn,
+	model.RuleUnknownStatus:          model.SeverityError,
+	model.RuleDerivedConflict:        model.SeverityError,
+	model.RuleUnstructuredSupersedes: model.SeverityWarn,
+	model.RuleInvalidRef:             model.SeverityError,
+	model.RuleEmptyEdge:              model.SeverityError,
+	model.RuleInverseMismatch:        model.SeverityError,
+	model.RuleCardinality:            model.SeverityError,
+}
+
+// Severity reports the severity a structural check speaks at, after whatever
+// escalation the configuration applies.
+func (c Config) Severity(rule string) model.Severity {
+	if raised, ok := c.Structural[rule]; ok {
+		return raised
+	}
+	return structuralSeverities[rule]
 }
 
 // Edge returns the spec of one typed edge.
@@ -220,7 +249,26 @@ func (c Config) Validate() error {
 	if err := c.validateReferences(); err != nil {
 		return err
 	}
+	if err := c.validateStructural(); err != nil {
+		return err
+	}
 	return c.validateDerivedEdges()
+}
+
+func (c Config) validateStructural() error {
+	for _, rule := range slices.Sorted(maps.Keys(c.Structural)) {
+		want := c.Structural[rule]
+		base, known := structuralSeverities[rule]
+		switch {
+		case !known:
+			return fmt.Errorf("structural: %q is not a structural check: %w", rule, model.ErrInvalidConfig)
+		case want != model.SeverityError && want != model.SeverityWarn:
+			return fmt.Errorf("structural %q: unknown severity %q: %w", rule, want, model.ErrInvalidConfig)
+		case want.Rank() > base.Rank():
+			return fmt.Errorf("structural %q: %q cannot be lowered to %q: %w", rule, base, want, model.ErrInvalidConfig)
+		}
+	}
+	return nil
 }
 
 func (c Config) validateReferences() error {
