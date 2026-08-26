@@ -42,19 +42,21 @@ func (r *Repo) MergeBase(rev string) string {
 }
 
 // Change is one path the working tree changed relative to a commit. Status is
-// git's letter: M modified, D deleted, A added, R renamed.
+// git's letter: M modified, D deleted, A added.
 type Change struct {
 	Status byte
 	Path   string
 }
 
-// Changes lists the working-tree changes under dir relative to base.
+// Changes lists the working-tree changes under dir relative to base. Renames
+// are not detected: a moved document is a deletion and an addition, and the
+// deletion is what a caller asking about a closed record needs to hear.
 func (r *Repo) Changes(base, dir string) ([]Change, error) {
 	scope, err := r.scope(dir)
 	if err != nil {
 		return nil, err
 	}
-	out, err := run(r.root, "diff", "--name-status", "-z", base, "--", scope)
+	out, err := run(r.root, "diff", "--name-status", "--no-renames", "-z", base, "--", scope)
 	if err != nil {
 		return nil, fmt.Errorf("diff %s: %w", base, err)
 	}
@@ -104,24 +106,13 @@ func (r *Repo) scope(dir string) (string, error) {
 	return filepath.ToSlash(rel), nil
 }
 
-// parseNameStatus reads git's NUL-separated name-status stream. A rename or a
-// copy carries two paths; the second one is the file as it stands now.
+// parseNameStatus reads git's NUL-separated name-status stream, in which each
+// change is a status letter followed by the path it applies to.
 func parseNameStatus(out []byte) []Change {
 	fields := records(out)
 	changes := make([]Change, 0, len(fields)/2)
-	for i := 0; i < len(fields); {
-		status := fields[i]
-		i++
-		if i >= len(fields) {
-			break
-		}
-		path := fields[i]
-		i++
-		if (status[0] == 'R' || status[0] == 'C') && i < len(fields) {
-			path = fields[i]
-			i++
-		}
-		changes = append(changes, Change{Status: status[0], Path: path})
+	for i := 0; i+1 < len(fields); i += 2 {
+		changes = append(changes, Change{Status: fields[i][0], Path: fields[i+1]})
 	}
 	return changes
 }
