@@ -356,6 +356,31 @@ func TestNewNamesFilesTheWayTheCallerWouldTypeThem(t *testing.T) {
 	})
 }
 
+func TestNewDryRunJSONSaysWhetherTheDocumentIsAlreadyThere(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+
+	t.Run("an identifier the corpus already holds", func(t *testing.T) {
+		got := run(t, "new", "Schedule feed polling from the ingestion queue", "--id", "0004", "--dry-run", "--format", "json", "--dir", dir)
+
+		assertExit(t, got, 0)
+		payload := decodeJSON[map[string]any](t, got.stdout)
+		if payload["exists"] != true {
+			t.Errorf("payload = %v, want \"exists\": true", payload)
+		}
+	})
+
+	t.Run("a document that would be written", func(t *testing.T) {
+		got := run(t, "new", "Adopt content addressed cache keys", "--dry-run", "--format", "json", "--dir", dir)
+
+		assertExit(t, got, 0)
+		payload := decodeJSON[map[string]any](t, got.stdout)
+		exists, present := payload["exists"]
+		if !present || exists != false {
+			t.Errorf("payload = %v, want \"exists\": false, which is always there", payload)
+		}
+	})
+}
+
 func TestNewDryRunKeepsTheExitCodesOfARealRun(t *testing.T) {
 	dir := copyFixture(t, "ok-basic")
 
