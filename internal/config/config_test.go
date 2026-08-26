@@ -157,6 +157,27 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:   "an edge with an inverse key",
+			mutate: func(c *Config) { c.Edges[0].Inverse = "superseded_by" },
+		},
+		{
+			name:    "an inverse key that is the edge's own key",
+			mutate:  func(c *Config) { c.Edges[0].Inverse = c.Edges[0].Key },
+			wantErr: true,
+		},
+		{
+			name:    "an inverse key another edge already declares",
+			mutate:  func(c *Config) { c.Edges[0].Inverse = c.Edges[1].Key },
+			wantErr: true,
+		},
+		{
+			name: "two edges sharing one inverse key",
+			mutate: func(c *Config) {
+				c.Edges[0].Inverse, c.Edges[1].Inverse = "linked_from", "linked_from"
+			},
+			wantErr: true,
+		},
+		{
 			name:   "reference validation switched off explicitly",
 			mutate: func(c *Config) { c.References.Dangling = ReferencesOff },
 		},

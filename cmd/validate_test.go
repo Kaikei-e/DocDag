@@ -169,6 +169,18 @@ func TestValidateLeavesProseThatIsNotIdentityShapedAlone(t *testing.T) {
 	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
 }
 
+func TestValidateInverseKeysMustAgreeWithTheEdges(t *testing.T) {
+	dir := fixture(t, "inverse-mismatch")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0001-authorize-with-a-shared-service-token.md:3: ERROR inverse_mismatch 0001:",
+		"0003-pin-the-ca-bundle-in-every-image.md:4: ERROR inverse_mismatch 0003:",
+	})
+}
+
 func TestValidateReferenceLayerIsOptIn(t *testing.T) {
 	dir := fixture(t, "dangling-reference")
 

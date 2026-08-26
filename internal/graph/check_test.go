@@ -240,6 +240,126 @@ func TestCheckDangling(t *testing.T) {
 	})
 }
 
+// testInverseConfig declares the supersedes edge with an inverse key, so a
+// superseded document has to name what replaced it.
+func testInverseConfig() config.Config {
+	cfg := config.ADRPreset()
+	cfg.Edges[0].Inverse = testInverseKey
+	return cfg
+}
+
+func TestCheckInverse(t *testing.T) {
+	cfg := testInverseConfig()
+
+	t.Run("an agreeing pair reports nothing", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNodeAttrs("0001", config.StatusSuperseded, map[string]any{testInverseKey: []any{"0002"}}),
+				testNode("0002", config.StatusAccepted),
+			},
+			[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			nil,
+		)
+
+		if got := CheckInverse(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a target that does not name its source is a mismatch", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0001", config.StatusSuperseded), testNode("0002", config.StatusAccepted)},
+			[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			nil,
+		)
+
+		f := testAssertSingleFinding(t, CheckInverse(g, cfg), model.RuleInverseMismatch, model.SeverityError, "0001")
+		if !strings.Contains(f.Detail, testInverseKey) || !strings.Contains(f.Detail, "0002") {
+			t.Errorf("detail = %q, want the inverse key and the missing entry", f.Detail)
+		}
+		if len(f.Related) != 1 || f.Related[0].Path != "0002.md" {
+			t.Errorf("related = %+v, want the other endpoint", f.Related)
+		}
+	})
+
+	t.Run("an entry without a forward edge is a mismatch", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNodeAttrs("0001", config.StatusAccepted, map[string]any{testInverseKey: []any{"0002"}}),
+				testNode("0002", config.StatusAccepted),
+			},
+			nil,
+			nil,
+		)
+
+		f := testAssertSingleFinding(t, CheckInverse(g, cfg), model.RuleInverseMismatch, model.SeverityError, "0001")
+		if f.Location != testNodeLocation("0001", testInverseLine) {
+			t.Errorf("location = %+v, want the inverse key line", f.Location)
+		}
+		if !strings.Contains(f.Detail, config.EdgeSupersedes.String()) {
+			t.Errorf("detail = %q, want the edge type that is missing", f.Detail)
+		}
+	})
+
+	t.Run("an entry naming no document is dangling, not a mismatch", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNodeAttrs("0001", config.StatusAccepted, map[string]any{testInverseKey: []any{"0099"}})},
+			nil,
+			nil,
+		)
+
+		got := CheckInverse(g, cfg)
+		testAssertSingleFinding(t, got, model.RuleDanglingRef, model.SeverityError, "0001")
+		if len(testFindingsFor(got, model.RuleInverseMismatch)) != 0 {
+			t.Errorf("findings = %+v, want the dangling entry reported once", got)
+		}
+	})
+
+	t.Run("an entry that names no identity is invalid", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNodeAttrs("0001", config.StatusAccepted, map[string]any{testInverseKey: []any{"see 0002"}})},
+			nil,
+			nil,
+		)
+
+		testAssertSingleFinding(t, CheckInverse(g, cfg), model.RuleInvalidRef, model.SeverityError, "0001")
+	})
+
+	t.Run("an edge type without an inverse key is not checked", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0001", config.StatusSuperseded), testNode("0002", config.StatusAccepted)},
+			[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			nil,
+		)
+
+		if got := CheckInverse(g, config.ADRPreset()); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("the inverse key creates no edges", func(t *testing.T) {
+		docs := []*parse.Document{
+			testDoc("0001", map[string]any{"status": "superseded", testInverseKey: []any{"0002"}}, ""),
+			testDoc("0002", map[string]any{"status": "accepted", "supersedes": []any{"0001"}}, ""),
+		}
+
+		g := Build(docs, cfg)
+
+		want := []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}
+		if !slices.Equal(g.Edges, want) {
+			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
+		}
+	})
+
+	t.Run("an empty inverse key is an empty edge", func(t *testing.T) {
+		docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted", testInverseKey: nil}, "")}
+
+		g := Build(docs, cfg)
+
+		testAssertSingleFinding(t, g.Findings, model.RuleEmptyEdge, model.SeverityError, "0001")
+	})
+}
+
 func TestCheckStatusVocabularyRejectsProseAroundAVocabularyWord(t *testing.T) {
 	cfg := config.ADRPreset()
 	// Only a status that a derived-edge pattern claims may project onto a
@@ -748,7 +868,7 @@ func testRulesFixture() *model.Graph {
 			testNode("0003", config.StatusSuperseded),
 			testNode("0004", config.StatusProposed),
 			testNode("0005", "Accepted"),
-			testNodeAttrs("0006", config.StatusRejected, map[string]string{"owner": "platform"}),
+			testNodeAttrs("0006", config.StatusRejected, map[string]any{"owner": "platform"}),
 		},
 		[]model.Edge{
 			testEdge("0002", "0001", config.EdgeSupersedes),
