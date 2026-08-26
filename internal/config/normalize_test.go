@@ -144,10 +144,14 @@ func TestIDShaped(t *testing.T) {
 		{name: "a file stem", ref: "0042-title", want: true},
 		{name: "prose around a reference", ref: "see 0042"},
 		{name: "a reference in a sentence", ref: "0042 and 0043"},
+		{name: "a wikilink", ref: "[[0042]]", want: true},
+		{name: "an aliased wikilink", ref: "[[0042|the caching decision]]", want: true},
 		{name: "a slug that opens with digits", ref: "3days-recap"},
 		{name: "a dotted name", ref: "tool.uv.index"},
 		{name: "a word", ref: "upstream"},
 		{name: "a path", ref: "docs/adr/0042.md"},
+		{name: "a wikilink around a word", ref: "[[upstream]]"},
+		{name: "an unclosed wikilink", ref: "[[0042"},
 		{name: "an empty reference"},
 	}
 

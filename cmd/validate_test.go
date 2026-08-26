@@ -192,6 +192,22 @@ func TestValidateRejectsAFrontmatterReferenceThatIsNotIdentityShaped(t *testing.
 	})
 }
 
+func TestValidateUnwrapsAWikilinkedFrontmatterReference(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-a-decision.md": "---\ntitle: A decision\nstatus: superseded\ndate: 2025-01-01\n---\n\n# A decision\n",
+		"0002-another.md":    "---\ntitle: Another decision\nstatus: accepted\nsupersedes:\n  - \"[[0001|A decision]]\"\ndate: 2025-02-01\n---\n\n# Another decision\n",
+	})
+
+	got := run(t, "validate", "--dir", dir)
+
+	assertExit(t, got, 0)
+	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	want := "OK: 2 docs, 1 typed edges, no cycles"
+	if ls := lines(got.stdout); len(ls) == 0 || ls[len(ls)-1] != want {
+		t.Errorf("summary = %q, want %q", got.stdout, want)
+	}
+}
+
 func TestValidateLeavesProseThatIsNotIdentityShapedAlone(t *testing.T) {
 	dir := writeDocs(t, map[string]string{
 		"0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n" +
