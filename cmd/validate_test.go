@@ -132,6 +132,32 @@ func TestValidateReportsAStatusStringNamingAnUnknownDocument(t *testing.T) {
 	}
 }
 
+func TestValidateSuggestsAFixUnderTheFinding(t *testing.T) {
+	got := run(t, "validate", "--dir", fixture(t, "dangling"))
+
+	assertExit(t, got, 1)
+	all := lines(got.stdout)
+	if len(all) != 2 {
+		t.Fatalf("stdout = %q, want the finding and its fix", got.stdout)
+	}
+	if all[1] != "  fix: did you mean 0002 or 0001?" {
+		t.Errorf("fix line = %q, want the nearest documents suggested", all[1])
+	}
+}
+
+func TestValidateJSONCarriesTheFix(t *testing.T) {
+	got := run(t, "validate", "--format", "json", "--dir", fixture(t, "status-drift"))
+
+	assertExit(t, got, 1)
+	report := decodeJSON[render.Report](t, got.stdout)
+	if len(report.Findings) != 1 {
+		t.Fatalf("findings = %+v, want one", report.Findings)
+	}
+	if !strings.HasPrefix(report.Findings[0].Fix, "set status: superseded in ") {
+		t.Errorf("fix = %q, want the status change spelled out", report.Findings[0].Fix)
+	}
+}
+
 func TestValidateRejectsAStatusThatOnlyOpensWithAVocabularyWord(t *testing.T) {
 	dir := writeDocs(t, map[string]string{
 		"0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted by the architecture board\ndate: 2025-01-01\n---\n\n# A decision\n",
