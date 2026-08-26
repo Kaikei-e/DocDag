@@ -22,10 +22,7 @@ func TestBuildNodes(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		n, ok := g.Nodes["0001"]
 		if !ok {
 			t.Fatalf("node 0001 is missing: %v", g.Nodes)
@@ -56,10 +53,7 @@ func TestBuildNodes(t *testing.T) {
 			},
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		if _, ok := g.Nodes["0001"]; !ok {
 			t.Fatalf("node 0001 is missing: %v", g.Nodes)
 		}
@@ -77,10 +71,7 @@ func TestBuildNodes(t *testing.T) {
 			},
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		n, ok := g.Nodes["0001"]
 		if !ok {
 			t.Fatalf("node 0001 is missing: %v", g.Nodes)
@@ -103,10 +94,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
@@ -122,10 +110,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0001", config.EdgeDependsOn)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
@@ -141,10 +126,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v (three spellings of one reference are one edge)", g.Edges, want)
@@ -168,10 +150,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			testDoc("0003", map[string]any{"status": "accepted"}, ""),
 		}
 
-		g, err := Build(docs, reversed)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, reversed)
 		want := []model.Edge{testEdge("0003", "0002", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
@@ -186,10 +165,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0099", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
@@ -204,10 +180,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingRef, model.SeverityError, "0002")
 		if !strings.Contains(f.Detail, "a-reference-without-digits") {
 			t.Errorf("detail = %q, want it to name the unresolvable reference", f.Detail)
@@ -223,10 +196,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		if len(g.Edges) != 0 {
 			t.Fatalf("edges = %+v, want none", g.Edges)
 		}
@@ -255,14 +225,8 @@ func TestBuildTypedEdges(t *testing.T) {
 			testEdge("0003", "0002", config.EdgeSupersedes),
 		}
 
-		ascending, err := Build(order("0001", "0002", "0003"), cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
-		shuffled, err := Build(order("0003", "0001", "0002"), cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		ascending := Build(order("0001", "0002", "0003"), cfg)
+		shuffled := Build(order("0003", "0001", "0002"), cfg)
 		if !slices.Equal(ascending.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v (sorted by from, type, to)", ascending.Edges, want)
 		}
@@ -281,10 +245,7 @@ func TestBuildDerivedEdges(t *testing.T) {
 			testDoc("0003", map[string]any{"status": "accepted"}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testDerivedEdge("0003", "0002", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v (the referenced document is the new one)", g.Edges, want)
@@ -297,10 +258,7 @@ func TestBuildDerivedEdges(t *testing.T) {
 			testDoc("0003", map[string]any{"status": "accepted"}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testDerivedEdge("0003", "0002", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
@@ -313,10 +271,7 @@ func TestBuildDerivedEdges(t *testing.T) {
 			testDoc("0003", map[string]any{"status": "accepted"}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		n, ok := g.Nodes["0002"]
 		if !ok {
 			t.Fatalf("node 0002 is missing: %v", g.Nodes)
@@ -335,10 +290,7 @@ func TestBuildDerivedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0003", "0002", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v (agreement collapses to the structured edge)", g.Edges, want)
@@ -355,10 +307,7 @@ func TestBuildReferenceLayer(t *testing.T) {
 			testDoc("0002", map[string]any{"status": "accepted"}, "Replaces [[0001]] entirely.\n"),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testRefEdge("0002", "0001")}
 		if !slices.Equal(g.RefEdges, want) {
 			t.Fatalf("reference edges = %+v, want %+v", g.RefEdges, want)
@@ -373,10 +322,7 @@ func TestBuildReferenceLayer(t *testing.T) {
 			testDoc("0001", map[string]any{"status": "accepted"}, "See [[0099]] and [[not-a-document]].\n"),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		if len(g.RefEdges) != 0 {
 			t.Fatalf("reference edges = %+v, want none", g.RefEdges)
 		}
@@ -545,10 +491,7 @@ func testTypedFixture() *model.Graph {
 func TestBuildNodesCarryFrontmatterPositions(t *testing.T) {
 	docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted", "title": "First"}, "")}
 
-	g, err := Build(docs, config.ADRPreset())
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	g := Build(docs, config.ADRPreset())
 	n, ok := g.Node("0001")
 	if !ok {
 		t.Fatal("node 0001 is missing")
@@ -571,10 +514,7 @@ func TestBuildLocatesAnUnresolvableReference(t *testing.T) {
 		}, ""),
 	}
 
-	g, err := Build(docs, config.ADRPreset())
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+	g := Build(docs, config.ADRPreset())
 	f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingRef, model.SeverityError, "0002")
 	want := model.Location{Path: "0002.md", Line: docs[0].KeyLines["supersedes"]}
 	if f.Location != want {
