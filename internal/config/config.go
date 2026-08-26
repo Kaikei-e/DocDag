@@ -80,6 +80,35 @@ type Condition struct {
 	Attr        map[string]AttrCondition `yaml:"attr,omitempty"`
 }
 
+// EdgeClause is one edge requirement of a condition: an edge type, the
+// direction it is read in, and whether its absence is what the rule wants.
+type EdgeClause struct {
+	Edge    string
+	Inbound bool
+	Negate  bool
+}
+
+// EdgeClauses enumerates the populated edge clauses of a condition, so the
+// validator and the matcher never disagree about the vocabulary.
+func (c Condition) EdgeClauses() []EdgeClause {
+	all := []EdgeClause{
+		{Edge: c.Inbound, Inbound: true},
+		{Edge: c.NotInbound, Inbound: true, Negate: true},
+		{Edge: c.Outbound},
+		{Edge: c.NotOutbound, Negate: true},
+	}
+	clauses := make([]EdgeClause, 0, len(all))
+	for _, clause := range all {
+		if clause.Edge != "" {
+			clauses = append(clauses, clause)
+		}
+	}
+	if len(clauses) == 0 {
+		return nil
+	}
+	return clauses
+}
+
 // Rule is one declarative implication evaluated per node.
 type Rule struct {
 	Name     string         `yaml:"name"`
@@ -174,12 +203,9 @@ func (c Config) validateRules() error {
 		if rule.Severity != model.SeverityError && rule.Severity != model.SeverityWarn {
 			return fmt.Errorf("rule %q: unknown severity %q: %w", rule.Name, rule.Severity, model.ErrInvalidConfig)
 		}
-		for _, edge := range []string{rule.When.Inbound, rule.When.NotInbound, rule.When.Outbound, rule.When.NotOutbound} {
-			if edge == "" {
-				continue
-			}
-			if _, ok := c.Edge(model.EdgeType(edge)); !ok {
-				return fmt.Errorf("rule %q: undeclared edge type %q, declare it under edges or replace rules: %w", rule.Name, edge, model.ErrInvalidConfig)
+		for _, clause := range rule.When.EdgeClauses() {
+			if _, ok := c.Edge(model.EdgeType(clause.Edge)); !ok {
+				return fmt.Errorf("rule %q: undeclared edge type %q, declare it under edges or replace rules: %w", rule.Name, clause.Edge, model.ErrInvalidConfig)
 			}
 		}
 		for _, key := range slices.Sorted(maps.Keys(rule.When.Attr)) {
