@@ -1,0 +1,14 @@
+rules:
+  - name: security_review_missing
+    severity: error
+    when:
+      attr:
+        tags: { contains: security }
+        reviewers: { not_contains: security-guild }
+    message: "is tagged security but no security-guild reviewer signed it off"
+  - name: retired_tags_only
+    severity: warn
+    when:
+      attr:
+        tags: { subset_of: [legacy, deprecated] }
+    message: "carries only retired labels"

@@ -170,6 +170,18 @@ func TestValidateLeavesProseThatIsNotIdentityShapedAlone(t *testing.T) {
 	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
 }
 
+func TestValidateRulesOverListAttributes(t *testing.T) {
+	dir := fixture(t, "list-attrs")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0001-store-secrets-in-the-orchestrator.md:7: ERROR security_review_missing 0001:",
+		"0002-serve-static-assets-from-the-app.md:4: WARN retired_tags_only 0002:",
+	})
+}
+
 func TestValidateStructuralSeverityEscalation(t *testing.T) {
 	files := map[string]string{
 		"docs/adr/0001-with-frontmatter.md": "---\ntitle: With frontmatter\nstatus: accepted\ndate: 2025-01-01\n---\n\n# With frontmatter\n",
