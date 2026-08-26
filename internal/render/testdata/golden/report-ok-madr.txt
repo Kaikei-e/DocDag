@@ -1,0 +1,3 @@
+../../testdata/fixtures/ok-madr/0002-store-thumbnails-on-the-local-disk.md:3: WARN unstructured_supersedes 0002: supersedes edge 0003 -> 0002 comes from a field value; declare it in frontmatter
+  fix: declare supersedes: 0002 in 0003
+OK: 4 docs, 3 typed edges, no cycles

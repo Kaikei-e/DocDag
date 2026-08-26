@@ -20,10 +20,11 @@ func TestCheckDocuments(t *testing.T) {
 		}
 
 		f := testAssertSingleFinding(t, CheckDocuments(docs, cfg), model.RuleIDCollision, model.SeverityError, "0004")
-		for _, path := range []string{"0004-a.md", "0004-b.md"} {
-			if !strings.Contains(f.Detail, path) {
-				t.Errorf("detail = %q, want it to name %s", f.Detail, path)
-			}
+		if f.Location.Path != "0004-a.md" {
+			t.Errorf("location = %+v, want the lexically first path", f.Location)
+		}
+		if !strings.Contains(f.Detail, "0004-b.md") {
+			t.Errorf("detail = %q, want it to name the colliding peer", f.Detail)
 		}
 	})
 
@@ -236,6 +237,358 @@ func TestCheckDangling(t *testing.T) {
 		)
 
 		testAssertSingleFinding(t, CheckDangling(g, cfg), model.RuleDanglingRef, model.SeverityError, "0007")
+	})
+}
+
+// testInverseConfig declares the supersedes edge with an inverse key, so a
+// superseded document has to name what replaced it.
+func testInverseConfig() config.Config {
+	cfg := config.ADRPreset()
+	cfg.Edges[0].Inverse = testInverseKey
+	return cfg
+}
+
+func TestCheckInverse(t *testing.T) {
+	cfg := testInverseConfig()
+
+	t.Run("an agreeing pair reports nothing", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNodeAttrs("0001", config.StatusSuperseded, map[string]any{testInverseKey: []any{"0002"}}),
+				testNode("0002", config.StatusAccepted),
+			},
+			[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			nil,
+		)
+
+		if got := CheckInverse(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a target that does not name its source is a mismatch", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0001", config.StatusSuperseded), testNode("0002", config.StatusAccepted)},
+			[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			nil,
+		)
+
+		f := testAssertSingleFinding(t, CheckInverse(g, cfg), model.RuleInverseMismatch, model.SeverityError, "0001")
+		if !strings.Contains(f.Detail, testInverseKey) || !strings.Contains(f.Detail, "0002") {
+			t.Errorf("detail = %q, want the inverse key and the missing entry", f.Detail)
+		}
+		if len(f.Related) != 1 || f.Related[0].Path != "0002.md" {
+			t.Errorf("related = %+v, want the other endpoint", f.Related)
+		}
+	})
+
+	t.Run("an entry without a forward edge is a mismatch", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNodeAttrs("0001", config.StatusAccepted, map[string]any{testInverseKey: []any{"0002"}}),
+				testNode("0002", config.StatusAccepted),
+			},
+			nil,
+			nil,
+		)
+
+		f := testAssertSingleFinding(t, CheckInverse(g, cfg), model.RuleInverseMismatch, model.SeverityError, "0001")
+		if f.Location != testNodeLocation("0001", testInverseLine) {
+			t.Errorf("location = %+v, want the inverse key line", f.Location)
+		}
+		if !strings.Contains(f.Detail, config.EdgeSupersedes.String()) {
+			t.Errorf("detail = %q, want the edge type that is missing", f.Detail)
+		}
+	})
+
+	t.Run("an entry naming no document is dangling, not a mismatch", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNodeAttrs("0001", config.StatusAccepted, map[string]any{testInverseKey: []any{"0099"}})},
+			nil,
+			nil,
+		)
+
+		got := CheckInverse(g, cfg)
+		testAssertSingleFinding(t, got, model.RuleDanglingRef, model.SeverityError, "0001")
+		if len(testFindingsFor(got, model.RuleInverseMismatch)) != 0 {
+			t.Errorf("findings = %+v, want the dangling entry reported once", got)
+		}
+	})
+
+	t.Run("an entry that names no identity is invalid", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNodeAttrs("0001", config.StatusAccepted, map[string]any{testInverseKey: []any{"see 0002"}})},
+			nil,
+			nil,
+		)
+
+		testAssertSingleFinding(t, CheckInverse(g, cfg), model.RuleInvalidRef, model.SeverityError, "0001")
+	})
+
+	t.Run("an edge type without an inverse key is not checked", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0001", config.StatusSuperseded), testNode("0002", config.StatusAccepted)},
+			[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			nil,
+		)
+
+		if got := CheckInverse(g, config.ADRPreset()); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("the inverse key creates no edges", func(t *testing.T) {
+		docs := []*parse.Document{
+			testDoc("0001", map[string]any{"status": "superseded", testInverseKey: []any{"0002"}}, ""),
+			testDoc("0002", map[string]any{"status": "accepted", "supersedes": []any{"0001"}}, ""),
+		}
+
+		g := Build(docs, cfg)
+
+		want := []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}
+		if !slices.Equal(g.Edges, want) {
+			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
+		}
+	})
+
+	t.Run("an empty inverse key is an empty edge", func(t *testing.T) {
+		docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted", testInverseKey: nil}, "")}
+
+		g := Build(docs, cfg)
+
+		testAssertSingleFinding(t, g.Findings, model.RuleEmptyEdge, model.SeverityError, "0001")
+	})
+}
+
+func TestStructuralSeverityEscalation(t *testing.T) {
+	escalated := config.ADRPreset()
+	escalated.Structural = map[string]model.Severity{
+		model.RuleMissingFrontmatter:     model.SeverityError,
+		model.RuleUnstructuredSupersedes: model.SeverityError,
+	}
+
+	t.Run("a warned file-level check becomes an error", func(t *testing.T) {
+		docs := []*parse.Document{{Path: "0001.md", ID: "0001", MatchesPattern: true}}
+
+		testAssertSingleFinding(t, CheckDocuments(docs, escalated),
+			model.RuleMissingFrontmatter, model.SeverityError, "0001")
+	})
+
+	t.Run("a warned graph check becomes an error", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0002", config.StatusSuperseded), testNode("0003", config.StatusAccepted)},
+			[]model.Edge{testDerivedEdge("0003", "0002", config.EdgeSupersedes)},
+			nil,
+		)
+
+		testAssertSingleFinding(t, CheckDerived(g, escalated),
+			model.RuleUnstructuredSupersedes, model.SeverityError, "0002")
+	})
+
+	t.Run("an unescalated corpus keeps the default severity", func(t *testing.T) {
+		docs := []*parse.Document{{Path: "0001.md", ID: "0001", MatchesPattern: true}}
+
+		testAssertSingleFinding(t, CheckDocuments(docs, config.ADRPreset()),
+			model.RuleMissingFrontmatter, model.SeverityWarn, "0001")
+	})
+}
+
+func TestCheckCyclesOverTheUnionOfAcyclicEdgeTypes(t *testing.T) {
+	union := func() config.Config {
+		cfg := config.ADRPreset()
+		cfg.AcyclicUnion = true
+		return cfg
+	}
+	mixed := testGraph(
+		[]*model.Node{
+			testNode("0001", config.StatusSuperseded),
+			testNode("0002", config.StatusAccepted),
+			testNode("0003", config.StatusAccepted),
+		},
+		[]model.Edge{
+			testEdge("0001", "0002", config.EdgeDependsOn),
+			testEdge("0002", "0003", config.EdgeDependsOn),
+			testEdge("0003", "0001", config.EdgeSupersedes),
+		},
+		nil,
+	)
+
+	t.Run("each edge type on its own stays acyclic", func(t *testing.T) {
+		if got := CheckCycles(mixed, config.ADRPreset()); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("the union closes the loop", func(t *testing.T) {
+		f := testAssertSingleFinding(t, CheckCycles(mixed, union()), model.RuleCycle, model.SeverityError, "0001")
+		for _, want := range []string{config.EdgeDependsOn.String(), config.EdgeSupersedes.String(), "0002", "0003"} {
+			if !strings.Contains(f.Detail, want) {
+				t.Errorf("detail = %q, want it to name %q", f.Detail, want)
+			}
+		}
+		if len(f.Related) != 2 {
+			t.Errorf("related = %+v, want the other two members", f.Related)
+		}
+	})
+
+	t.Run("a cross-type cycle sharing a component with a single-type one is still reported", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNode("0001", config.StatusSuperseded),
+				testNode("0002", config.StatusSuperseded),
+				testNode("0003", config.StatusAccepted),
+			},
+			[]model.Edge{
+				testEdge("0001", "0002", config.EdgeSupersedes),
+				testEdge("0002", "0001", config.EdgeSupersedes),
+				testEdge("0002", "0003", config.EdgeDependsOn),
+				testEdge("0003", "0001", config.EdgeDependsOn),
+			},
+			nil,
+		)
+
+		got := testFindingsFor(CheckCycles(g, union()), model.RuleCycle)
+
+		if len(got) != 2 {
+			t.Fatalf("findings = %+v, want the supersedes cycle and the one only the union closes", got)
+		}
+		details := strings.Join([]string{got[0].Detail, got[1].Detail}, "\n")
+		for _, want := range []string{"supersedes cycle: 0001 -> 0002 -> 0001", "cycle over supersedes, depends-on: 0001 -> 0002 -> 0003 -> 0001"} {
+			if !strings.Contains(details, want) {
+				t.Errorf("details = %q, want them to carry %q", details, want)
+			}
+		}
+	})
+
+	t.Run("a cycle every edge type carries on its own is not a union cycle", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0001", config.StatusSuperseded), testNode("0002", config.StatusSuperseded)},
+			[]model.Edge{
+				testEdge("0001", "0002", config.EdgeSupersedes),
+				testEdge("0002", "0001", config.EdgeSupersedes),
+				testEdge("0001", "0002", config.EdgeDependsOn),
+				testEdge("0002", "0001", config.EdgeDependsOn),
+			},
+			nil,
+		)
+
+		got := testFindingsFor(CheckCycles(g, union()), model.RuleCycle)
+
+		if len(got) != 2 {
+			t.Fatalf("findings = %+v, want one cycle per edge type and nothing extra", got)
+		}
+	})
+
+	t.Run("a cycle inside one edge type is reported once", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0001", config.StatusSuperseded), testNode("0002", config.StatusSuperseded)},
+			[]model.Edge{
+				testEdge("0001", "0002", config.EdgeSupersedes),
+				testEdge("0002", "0001", config.EdgeSupersedes),
+			},
+			nil,
+		)
+
+		got := CheckCycles(g, union())
+
+		if len(testFindingsFor(got, model.RuleCycle)) != 1 {
+			t.Fatalf("findings = %+v, want one", got)
+		}
+	})
+}
+
+func TestCheckCardinality(t *testing.T) {
+	bounded := func(mutate func(*config.EdgeSpec)) config.Config {
+		cfg := config.ADRPreset()
+		mutate(&cfg.Edges[0])
+		return cfg
+	}
+	fanIn := testGraph(
+		[]*model.Node{
+			testNode("0001", config.StatusSuperseded),
+			testNode("0002", config.StatusAccepted),
+			testNode("0003", config.StatusAccepted),
+		},
+		[]model.Edge{
+			testEdge("0002", "0001", config.EdgeSupersedes),
+			testEdge("0003", "0001", config.EdgeSupersedes),
+		},
+		nil,
+	)
+
+	t.Run("an unbounded edge type reports nothing", func(t *testing.T) {
+		if got := CheckCardinality(fanIn, config.ADRPreset()); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("too many inbound edges is an error on the target", func(t *testing.T) {
+		cfg := bounded(func(s *config.EdgeSpec) { s.MaxInbound = 1 })
+
+		f := testAssertSingleFinding(t, CheckCardinality(fanIn, cfg), model.RuleCardinality, model.SeverityError, "0001")
+		if !strings.Contains(f.Detail, "max_inbound") || !strings.Contains(f.Detail, "2") {
+			t.Errorf("detail = %q, want the count and the bound", f.Detail)
+		}
+		if f.Location != testNodeLocation("0001", testSupersedesLine) {
+			t.Errorf("location = %+v, want the edge key line", f.Location)
+		}
+	})
+
+	t.Run("too many outbound edges is an error on the source", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNode("0001", config.StatusSuperseded),
+				testNode("0002", config.StatusSuperseded),
+				testNode("0003", config.StatusAccepted),
+			},
+			[]model.Edge{
+				testEdge("0003", "0001", config.EdgeSupersedes),
+				testEdge("0003", "0002", config.EdgeSupersedes),
+			},
+			nil,
+		)
+		cfg := bounded(func(s *config.EdgeSpec) { s.MaxOutbound = 1 })
+
+		f := testAssertSingleFinding(t, CheckCardinality(g, cfg), model.RuleCardinality, model.SeverityError, "0003")
+		if !strings.Contains(f.Detail, "max_outbound") {
+			t.Errorf("detail = %q, want the bound named", f.Detail)
+		}
+	})
+
+	t.Run("too few outbound edges is an error on every document short of the minimum", func(t *testing.T) {
+		cfg := bounded(func(s *config.EdgeSpec) { s.MinOutbound = 1 })
+
+		got := CheckCardinality(fanIn, cfg)
+
+		testAssertIDs(t, "cardinality ids", testFindingIDs(got, model.RuleCardinality), testIDs("0001"))
+		if !strings.Contains(got[0].Detail, "min_outbound") {
+			t.Errorf("detail = %q, want the bound named", got[0].Detail)
+		}
+	})
+
+	t.Run("the bound is per edge type", func(t *testing.T) {
+		cfg := config.ADRPreset()
+		cfg.Edges[1].MaxInbound = 1
+
+		if got := CheckCardinality(fanIn, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none: the bound is on another edge type", got)
+		}
+	})
+
+	t.Run("findings are sorted", func(t *testing.T) {
+		cfg := bounded(func(s *config.EdgeSpec) { s.MinOutbound = 1 })
+		g := testGraph(
+			[]*model.Node{testNode("0002", config.StatusAccepted), testNode("0001", config.StatusAccepted)},
+			nil,
+			nil,
+		)
+
+		got := CheckCardinality(g, cfg)
+
+		if len(got) != 2 {
+			t.Fatalf("findings = %+v, want 2", got)
+		}
+		testAssertSortedFindings(t, got)
 	})
 }
 
@@ -526,6 +879,175 @@ func TestMatchCondition(t *testing.T) {
 	}
 }
 
+func TestMatchConditionOnListAttributes(t *testing.T) {
+	tests := []struct {
+		name  string
+		attrs map[string]any
+		cond  config.AttrCondition
+		want  bool
+	}{
+		{
+			name:  "contains finds a member",
+			attrs: map[string]any{testListAttrsKey: []any{"security", "storage"}},
+			cond:  config.AttrCondition{Contains: testStr("security")},
+			want:  true,
+		},
+		{
+			name:  "contains misses a member the list does not hold",
+			attrs: map[string]any{testListAttrsKey: []any{"storage"}},
+			cond:  config.AttrCondition{Contains: testStr("security")},
+		},
+		{
+			name:  "contains reads a scalar as a one element list",
+			attrs: map[string]any{testListAttrsKey: "security"},
+			cond:  config.AttrCondition{Contains: testStr("security")},
+			want:  true,
+		},
+		{
+			name:  "contains is case-insensitive",
+			attrs: map[string]any{testListAttrsKey: []any{"Security"}},
+			cond:  config.AttrCondition{Contains: testStr("security")},
+			want:  true,
+		},
+		{
+			name:  "contains needs the attribute",
+			attrs: map[string]any{},
+			cond:  config.AttrCondition{Contains: testStr("security")},
+		},
+		{
+			name:  "not_contains holds when the member is absent",
+			attrs: map[string]any{testListAttrsKey: []any{"storage"}},
+			cond:  config.AttrCondition{NotContains: testStr("security")},
+			want:  true,
+		},
+		{
+			name:  "not_contains fails when the member is present",
+			attrs: map[string]any{testListAttrsKey: []any{"security"}},
+			cond:  config.AttrCondition{NotContains: testStr("security")},
+		},
+		{
+			name:  "an absent attribute contains nothing",
+			attrs: map[string]any{},
+			cond:  config.AttrCondition{NotContains: testStr("security")},
+			want:  true,
+		},
+		{
+			name:  "subset_of holds for a covered list",
+			attrs: map[string]any{testListAttrsKey: []any{"legacy"}},
+			cond:  config.AttrCondition{SubsetOf: []string{"legacy", "deprecated"}},
+			want:  true,
+		},
+		{
+			name:  "subset_of fails on a member outside the set",
+			attrs: map[string]any{testListAttrsKey: []any{"legacy", "security"}},
+			cond:  config.AttrCondition{SubsetOf: []string{"legacy", "deprecated"}},
+		},
+		{
+			name:  "subset_of needs the attribute",
+			attrs: map[string]any{},
+			cond:  config.AttrCondition{SubsetOf: []string{"legacy"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := testNodeAttrs("0001", config.StatusAccepted, tt.attrs)
+			g := testGraph([]*model.Node{n}, nil, nil)
+			cond := config.Condition{Attr: map[string]config.AttrCondition{testListAttrsKey: tt.cond}}
+
+			if got := MatchCondition(g, cond, "0001"); got != tt.want {
+				t.Fatalf("MatchCondition = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMatchConditionWithAlternativesAndNegation(t *testing.T) {
+	g := testGraph(
+		[]*model.Node{
+			testNodeAttrs("0001", config.StatusDeprecated, map[string]any{testListAttrsKey: []any{"storage"}}),
+			testNodeAttrs("0002", config.StatusRejected, map[string]any{testListAttrsKey: []any{"explained"}}),
+			testNode("0003", config.StatusAccepted),
+			testNode("0004", config.StatusSuperseded),
+		},
+		[]model.Edge{testEdge("0003", "0004", config.EdgeSupersedes)},
+		nil,
+	)
+	retired := config.Condition{
+		AnyOf: []config.Condition{
+			{Attr: map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusDeprecated)}},
+			{Attr: map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusRejected)}},
+		},
+		Not: &config.Condition{Attr: map[string]config.AttrCondition{testListAttrsKey: {Contains: testStr("explained")}}},
+	}
+
+	tests := []struct {
+		name string
+		cond config.Condition
+		id   model.ID
+		want bool
+	}{
+		{name: "the first alternative matches", cond: retired, id: "0001", want: true},
+		{name: "the negation blocks the second alternative", cond: retired, id: "0002"},
+		{name: "no alternative matches", cond: retired, id: "0003"},
+		{
+			name: "top-level clauses still and with the alternatives",
+			cond: config.Condition{
+				NotInbound: config.EdgeSupersedes.String(),
+				AnyOf:      retired.AnyOf,
+			},
+			id:   "0001",
+			want: true,
+		},
+		{
+			name: "a top-level clause can veto every alternative",
+			cond: config.Condition{
+				Inbound: config.EdgeSupersedes.String(),
+				AnyOf:   retired.AnyOf,
+			},
+			id: "0001",
+		},
+		{
+			name: "a negation of an edge clause",
+			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeSupersedes.String()}},
+			id:   "0004",
+		},
+		{
+			name: "a negation that does not hold leaves the condition alone",
+			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeSupersedes.String()}},
+			id:   "0003",
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MatchCondition(g, tt.cond, tt.id); got != tt.want {
+				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvalRuleLocatesANestedAttributeClause(t *testing.T) {
+	g := testGraph([]*model.Node{testNode("0001", config.StatusDeprecated)}, nil, nil)
+	rule := config.Rule{
+		Name:     "unexplained_retirement",
+		Severity: model.SeverityWarn,
+		When: config.Condition{
+			AnyOf: []config.Condition{
+				{Attr: map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusDeprecated)}},
+			},
+		},
+		Message: "is retired without an explanation",
+	}
+
+	f := testAssertSingleFinding(t, EvalRule(g, config.ADRPreset(), rule), rule.Name, model.SeverityWarn, "0001")
+	if f.Location != testNodeLocation("0001", testStatusLine) {
+		t.Errorf("location = %+v, want the status line the alternative reads", f.Location)
+	}
+}
+
 func TestEvalRule(t *testing.T) {
 	cfg := config.ADRPreset()
 	g := testRulesFixture()
@@ -533,13 +1055,11 @@ func TestEvalRule(t *testing.T) {
 
 	t.Run("one finding per matching document, sorted", func(t *testing.T) {
 		want := []model.Finding{
-			{Severity: drift.Severity, Rule: drift.Name, ID: "0001", Detail: drift.Message},
-			{Severity: drift.Severity, Rule: drift.Name, ID: "0004", Detail: drift.Message},
+			{Severity: drift.Severity, Rule: drift.Name, ID: "0001", Detail: drift.Message, Location: testNodeLocation("0001", testStatusLine)},
+			{Severity: drift.Severity, Rule: drift.Name, ID: "0004", Detail: drift.Message, Location: testNodeLocation("0004", testStatusLine)},
 		}
 
-		if got := EvalRule(g, drift); !slices.Equal(got, want) {
-			t.Fatalf("EvalRule = %+v, want %+v", got, want)
-		}
+		testAssertFindings(t, "EvalRule", EvalRule(g, cfg, drift), want)
 	})
 
 	t.Run("a rule matching nothing reports nothing", func(t *testing.T) {
@@ -550,7 +1070,7 @@ func TestEvalRule(t *testing.T) {
 			Message:  "no document has this status",
 		}
 
-		if got := EvalRule(g, unmatched); len(got) != 0 {
+		if got := EvalRule(g, cfg, unmatched); len(got) != 0 {
 			t.Fatalf("EvalRule = %+v, want none", got)
 		}
 	})
@@ -563,14 +1083,12 @@ func TestEvalRules(t *testing.T) {
 		cfg := config.ADRPreset()
 		drift, orphan := cfg.Rules[0], cfg.Rules[1]
 		want := []model.Finding{
-			{Severity: drift.Severity, Rule: drift.Name, ID: "0001", Detail: drift.Message},
-			{Severity: drift.Severity, Rule: drift.Name, ID: "0004", Detail: drift.Message},
-			{Severity: orphan.Severity, Rule: orphan.Name, ID: "0003", Detail: orphan.Message},
+			{Severity: drift.Severity, Rule: drift.Name, ID: "0001", Detail: drift.Message, Location: testNodeLocation("0001", testStatusLine)},
+			{Severity: drift.Severity, Rule: drift.Name, ID: "0004", Detail: drift.Message, Location: testNodeLocation("0004", testStatusLine)},
+			{Severity: orphan.Severity, Rule: orphan.Name, ID: "0003", Detail: orphan.Message, Location: testNodeLocation("0003", testStatusLine)},
 		}
 
-		if got := EvalRules(g, cfg); !slices.Equal(got, want) {
-			t.Fatalf("EvalRules = %+v, want %+v (rule order, then id)", got, want)
-		}
+		testAssertFindings(t, "EvalRules", EvalRules(g, cfg), want)
 	})
 
 	t.Run("configured rules replace the preset rules", func(t *testing.T) {
@@ -589,11 +1107,10 @@ func TestEvalRules(t *testing.T) {
 			Rule:     "accepted_with_dependencies",
 			ID:       "0002",
 			Detail:   "an accepted decision still depends on another",
+			Location: testNodeLocation("0002", testStatusLine),
 		}}
 
-		if got := EvalRules(g, custom); !slices.Equal(got, want) {
-			t.Fatalf("EvalRules = %+v, want %+v", got, want)
-		}
+		testAssertFindings(t, "EvalRules", EvalRules(g, custom), want)
 	})
 
 	t.Run("no configured rules report nothing", func(t *testing.T) {
@@ -625,20 +1142,21 @@ func TestValidate(t *testing.T) {
 		Rule:     model.RuleInvalidFrontmatter,
 		ID:       "0004",
 		Detail:   "frontmatter does not decode",
+		Location: testNodeLocation("0004", 2),
 	}}
 
 	got := Validate(g, cfg)
 
 	t.Run("structural checks, rules and build findings all appear", func(t *testing.T) {
 		want := []string{
+			model.RuleStatusDrift,
 			model.RuleDanglingRef,
 			model.RuleInvalidFrontmatter,
-			model.RuleStatusDrift,
 			model.RuleSupersededOrphan,
 		}
 
 		if !slices.Equal(testRuleNames(got), want) {
-			t.Fatalf("rules = %v, want %v", testRuleNames(got), want)
+			t.Fatalf("rules = %v, want %v (path order, then line)", testRuleNames(got), want)
 		}
 	})
 
@@ -721,9 +1239,7 @@ func TestSortFindings(t *testing.T) {
 
 			SortFindings(got)
 
-			if !slices.Equal(got, tt.want) {
-				t.Fatalf("SortFindings = %+v, want %+v", got, tt.want)
-			}
+			testAssertFindings(t, "SortFindings", got, tt.want)
 		})
 	}
 }
@@ -753,7 +1269,7 @@ func testRulesFixture() *model.Graph {
 			testNode("0003", config.StatusSuperseded),
 			testNode("0004", config.StatusProposed),
 			testNode("0005", "Accepted"),
-			testNodeAttrs("0006", config.StatusRejected, map[string]string{"owner": "platform"}),
+			testNodeAttrs("0006", config.StatusRejected, map[string]any{"owner": "platform"}),
 		},
 		[]model.Edge{
 			testEdge("0002", "0001", config.EdgeSupersedes),
@@ -762,4 +1278,184 @@ func testRulesFixture() *model.Graph {
 		},
 		nil,
 	)
+}
+
+func TestCheckDocumentsLocatesFindings(t *testing.T) {
+	cfg := config.ADRPreset()
+
+	t.Run("a decode failure is located at the offending token", func(t *testing.T) {
+		docs := []*parse.Document{{
+			Path:            "0001.md",
+			Name:            "0001.md",
+			ID:              "0001",
+			HasFrontmatter:  true,
+			MatchesPattern:  true,
+			FrontmatterLine: 1,
+			Err:             &parse.FrontmatterError{Message: "mapping value is not allowed in this context", Line: 4, Column: 9},
+		}}
+
+		f := testAssertSingleFinding(t, CheckDocuments(docs, cfg), model.RuleInvalidFrontmatter, model.SeverityError, "0001")
+		want := model.Location{Path: "0001.md", Line: 4, Column: 9}
+		if f.Location != want {
+			t.Errorf("location = %+v, want %+v", f.Location, want)
+		}
+		if f.Detail != "mapping value is not allowed in this context" {
+			t.Errorf("detail = %q, want the decoder message alone", f.Detail)
+		}
+	})
+
+	t.Run("an absent frontmatter block is located on the first line", func(t *testing.T) {
+		docs := []*parse.Document{{Path: "0001-bare.md", Name: "0001-bare.md", ID: "0001", MatchesPattern: true}}
+
+		f := testAssertSingleFinding(t, CheckDocuments(docs, cfg), model.RuleMissingFrontmatter, model.SeverityWarn, "0001")
+		want := model.Location{Path: "0001-bare.md", Line: 1}
+		if f.Location != want {
+			t.Errorf("location = %+v, want %+v", f.Location, want)
+		}
+	})
+
+	t.Run("a collision is located on the first path and relates the others", func(t *testing.T) {
+		docs := []*parse.Document{
+			{Path: "0004-c.md", Name: "0004-c.md", ID: "0004", HasFrontmatter: true, MatchesPattern: true},
+			{Path: "0004-a.md", Name: "0004-a.md", ID: "0004", HasFrontmatter: true, MatchesPattern: true},
+			{Path: "0004-b.md", Name: "0004-b.md", ID: "0004", HasFrontmatter: true, MatchesPattern: true},
+		}
+
+		f := testAssertSingleFinding(t, CheckDocuments(docs, cfg), model.RuleIDCollision, model.SeverityError, "0004")
+		if f.Location != (model.Location{Path: "0004-a.md", Line: 1}) {
+			t.Errorf("location = %+v, want the lexically first path", f.Location)
+		}
+		want := []model.Location{{Path: "0004-b.md", Line: 1}, {Path: "0004-c.md", Line: 1}}
+		if !slices.Equal(f.Related, want) {
+			t.Errorf("related = %+v, want %+v", f.Related, want)
+		}
+		for _, path := range []string{"0004-b.md", "0004-c.md"} {
+			if !strings.Contains(f.Detail, path) {
+				t.Errorf("detail = %q, want it to name %s", f.Detail, path)
+			}
+		}
+	})
+}
+
+func TestCheckCyclesLocatesTheSmallestMember(t *testing.T) {
+	f := testAssertSingleFinding(t, CheckCycles(testSupersedesCycle(), config.ADRPreset()), model.RuleCycle, model.SeverityError, "0001")
+
+	if want := testNodeLocation("0001", testSupersedesLine); f.Location != want {
+		t.Errorf("location = %+v, want %+v", f.Location, want)
+	}
+	want := []model.Location{testNodeLocation("0002", testSupersedesLine), testNodeLocation("0003", testSupersedesLine)}
+	if !slices.Equal(f.Related, want) {
+		t.Errorf("related = %+v, want the other members %+v", f.Related, want)
+	}
+}
+
+func TestCheckDanglingLocatesTheDeclaringKey(t *testing.T) {
+	cfg := config.ADRPreset()
+
+	t.Run("a structured edge is located on its frontmatter key", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0002", config.StatusAccepted)},
+			[]model.Edge{testEdge("0002", "0099", config.EdgeSupersedes)},
+			nil,
+		)
+
+		f := testAssertSingleFinding(t, CheckDangling(g, cfg), model.RuleDanglingRef, model.SeverityError, "0002")
+		if want := testNodeLocation("0002", testSupersedesLine); f.Location != want {
+			t.Errorf("location = %+v, want %+v", f.Location, want)
+		}
+	})
+
+	t.Run("a derived edge is located on the field it was read from", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0002", "superseded by 0099")},
+			[]model.Edge{testDerivedEdge("0099", "0002", config.EdgeSupersedes)},
+			nil,
+		)
+
+		f := testAssertSingleFinding(t, CheckDangling(g, cfg), model.RuleDanglingRef, model.SeverityError, "0002")
+		if want := testNodeLocation("0002", testStatusLine); f.Location != want {
+			t.Errorf("location = %+v, want the field the edge was derived from", f.Location)
+		}
+	})
+}
+
+func TestCheckStatusVocabularyLocatesTheStatusField(t *testing.T) {
+	g := testGraph([]*model.Node{testNode("0001", "retired")}, nil, nil)
+
+	f := testAssertSingleFinding(t, CheckStatusVocabulary(g, config.ADRPreset()), model.RuleUnknownStatus, model.SeverityError, "0001")
+
+	if want := testNodeLocation("0001", testStatusLine); f.Location != want {
+		t.Errorf("location = %+v, want %+v", f.Location, want)
+	}
+}
+
+func TestCheckDerivedLocatesTheField(t *testing.T) {
+	g := testGraph(
+		[]*model.Node{testNode("0002", config.StatusSuperseded), testNode("0003", config.StatusAccepted)},
+		[]model.Edge{testDerivedEdge("0003", "0002", config.EdgeSupersedes)},
+		nil,
+	)
+
+	f := testAssertSingleFinding(t, CheckDerived(g, config.ADRPreset()), model.RuleUnstructuredSupersedes, model.SeverityWarn, "0002")
+
+	if want := testNodeLocation("0002", testStatusLine); f.Location != want {
+		t.Errorf("location = %+v, want the field the edge was derived from", f.Location)
+	}
+}
+
+func TestEvalRuleLocatesTheClauseItRead(t *testing.T) {
+	g := testRulesFixture()
+
+	t.Run("an attribute clause points at its key", func(t *testing.T) {
+		cfg := config.ADRPreset()
+
+		got := EvalRule(g, cfg, cfg.Rules[0])
+
+		if len(got) == 0 {
+			t.Fatal("findings = none, want the drifted documents")
+		}
+		if want := testNodeLocation("0001", testStatusLine); got[0].Location != want {
+			t.Errorf("location = %+v, want %+v", got[0].Location, want)
+		}
+	})
+
+	t.Run("without an attribute clause the edge key wins", func(t *testing.T) {
+		rule := config.Rule{
+			Name:     "superseding",
+			Severity: model.SeverityWarn,
+			When:     config.Condition{Outbound: config.EdgeSupersedes.String()},
+			Message:  "supersedes another document",
+		}
+
+		got := EvalRule(g, config.ADRPreset(), rule)
+
+		if len(got) == 0 {
+			t.Fatal("findings = none, want the superseding document")
+		}
+		if want := testNodeLocation("0002", testSupersedesLine); got[0].Location != want {
+			t.Errorf("location = %+v, want %+v", got[0].Location, want)
+		}
+	})
+}
+
+func TestSortFindingsOrdersByPathThenLine(t *testing.T) {
+	at := func(path string, line int, rule string) model.Finding {
+		return model.Finding{Severity: model.SeverityError, Rule: rule, Location: model.Location{Path: path, Line: line}}
+	}
+	got := []model.Finding{
+		at("b.md", 2, "cycle"),
+		at("a.md", 9, "cycle"),
+		at("a.md", 3, "unknown_status"),
+		at("a.md", 3, "cycle"),
+	}
+	want := []model.Finding{
+		at("a.md", 3, "cycle"),
+		at("a.md", 3, "unknown_status"),
+		at("a.md", 9, "cycle"),
+		at("b.md", 2, "cycle"),
+	}
+
+	SortFindings(got)
+
+	testAssertFindings(t, "SortFindings", got, want)
 }

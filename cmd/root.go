@@ -36,10 +36,13 @@ const (
 	flagFormat      = "format"
 	flagIncludeRefs = "include-refs"
 
-	formatText    = "text"
-	formatJSON    = "json"
-	formatMermaid = "mermaid"
-	formatDOT     = "dot"
+	formatText     = "text"
+	formatJSON     = "json"
+	formatGitHub   = "github"
+	formatRDJSON   = "rdjson"
+	formatMarkdown = "md"
+	formatMermaid  = "mermaid"
+	formatDOT      = "dot"
 )
 
 // cliError carries an exit code through cobra's RunE path. An empty msg means
@@ -85,13 +88,14 @@ func validFormat(format string, allowed ...string) error {
 	return usageErr("invalid --%s %q (allowed: %v)", flagFormat, format, allowed)
 }
 
-// outputFormat reads and validates the text/json output format.
-func outputFormat(cmd *cobra.Command) (string, error) {
+// outputFormat reads the output format and holds it to the set the calling
+// command answers in.
+func outputFormat(cmd *cobra.Command, allowed ...string) (string, error) {
 	format, err := cmd.Flags().GetString(flagFormat)
 	if err != nil {
 		return "", usageErr("%v", err)
 	}
-	if err := validFormat(format, formatText, formatJSON); err != nil {
+	if err := validFormat(format, allowed...); err != nil {
 		return "", err
 	}
 	return format, nil
@@ -129,11 +133,14 @@ func loadGraph(cmd *cobra.Command) (*model.Graph, config.Config, error) {
 	if err != nil {
 		return nil, cfg, ioErr(err)
 	}
-	g, err := graph.Build(docs, cfg)
+	root, err := os.Getwd()
 	if err != nil {
-		return nil, cfg, domainErr("build graph: %v", err)
+		return nil, cfg, ioErr(fmt.Errorf("working directory: %w", err))
 	}
-	return g, cfg, nil
+	// Findings name files the way the caller would type them, not the way
+	// discovery happened to spell them.
+	parse.Localize(docs, root)
+	return graph.Build(docs, cfg), cfg, nil
 }
 
 // requireSupersedes refuses the commands that are defined over the supersedes
@@ -177,11 +184,12 @@ func newRootCmd() *cobra.Command {
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().String(flagDir, "", "documents directory (overrides config and discovery)")
 	root.PersistentFlags().String(flagConfig, "", "path to docdag.yaml")
-	root.PersistentFlags().String(flagFormat, formatText, "output format: text|json")
+	root.PersistentFlags().String(flagFormat, formatText, "output format: text|json, plus github|rdjson on validate and md on context")
 	root.AddCommand(
 		newValidateCmd(),
 		newResolveCmd(),
 		newQueryCmd(),
+		newContextCmd(),
 		newExportCmd(),
 		newStatsCmd(),
 		newNewCmd(),

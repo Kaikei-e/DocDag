@@ -4,13 +4,17 @@ package parse
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
 	"github.com/goccy/go-yaml"
+	"github.com/goccy/go-yaml/ast"
+	"github.com/goccy/go-yaml/parser"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -22,21 +26,34 @@ const Delimiter = "---"
 const markdownExt = ".md"
 
 // Document is one Markdown file after parsing and before graph construction.
+// FrontmatterLine, BodyLine and KeyLines are 1-based file lines, zero when
+// unknown, so a finding can name the exact key or body line it is about.
 type Document struct {
-	Path           string
-	Name           string
-	ID             model.ID
-	Frontmatter    map[string]any
-	Body           string
-	HasFrontmatter bool
-	MatchesPattern bool
-	Err            error
+	Path            string
+	Name            string
+	ID              model.ID
+	Frontmatter     map[string]any
+	Body            string
+	HasFrontmatter  bool
+	MatchesPattern  bool
+	FrontmatterLine int
+	BodyLine        int
+	KeyLines        map[string]int
+	Err             error
 }
 
-// DecodeOptions returns the goccy/go-yaml options used for frontmatter blocks.
-// Unknown keys stay allowed: other repositories carry extra frontmatter fields.
-// The parser already rejects duplicate keys, so strictness needs no option.
-func DecodeOptions() []yaml.DecodeOption { return nil }
+// FrontmatterError is a frontmatter decode failure with the position of the
+// offending token. UnmarshalFrontmatter reports it relative to the first line
+// of the block; File offsets it onto the file.
+type FrontmatterError struct {
+	Message string
+	Line    int
+	Column  int
+}
+
+func (e *FrontmatterError) Error() string {
+	return fmt.Sprintf("decode frontmatter at line %d, column %d: %s", e.Line, e.Column, e.Message)
+}
 
 // byteOrderMark is what a Windows editor may write in front of the opening
 // delimiter. It belongs to neither the frontmatter block nor the body.
@@ -90,15 +107,85 @@ func readLine(src []byte) (line []byte, next int) {
 func isDelimiter(line []byte) bool { return string(line) == Delimiter }
 
 // UnmarshalFrontmatter decodes a frontmatter block with a strict YAML parser.
+// Unknown keys stay allowed: other repositories carry extra frontmatter fields.
+// The parser already rejects duplicate keys, so strictness needs no option.
 func UnmarshalFrontmatter(src []byte) (map[string]any, error) {
 	if len(bytes.TrimSpace(src)) == 0 {
 		return nil, nil
 	}
 	var fm map[string]any
-	if err := yaml.UnmarshalWithOptions(src, &fm, DecodeOptions()...); err != nil {
-		return nil, fmt.Errorf("decode frontmatter: %w", err)
+	if err := yaml.Unmarshal(src, &fm); err != nil {
+		return nil, frontmatterError(err)
 	}
 	return fm, nil
+}
+
+// frontmatterError lifts goccy's position and message out of a decode failure,
+// leaving the multi-line source excerpt behind: a finding occupies one line and
+// carries its position in fields.
+func frontmatterError(err error) *FrontmatterError {
+	var located yaml.Error
+	if !errors.As(err, &located) {
+		return &FrontmatterError{Message: err.Error()}
+	}
+	fe := &FrontmatterError{Message: located.GetMessage()}
+	if tk := located.GetToken(); tk != nil && tk.Position != nil {
+		fe.Line, fe.Column = tk.Position.Line, tk.Position.Column
+	}
+	return fe
+}
+
+// embeddedPosition matches the position a decode failure writes into its own
+// text, such as the earlier definition a duplicate key names.
+var embeddedPosition = regexp.MustCompile(`\[(\d+):(\d+)\]`)
+
+// offsetBy moves a block-relative failure onto the file. The message counts
+// from the block's first line too, so a reader is not told two positions.
+func (e *FrontmatterError) offsetBy(first int) *FrontmatterError {
+	message := embeddedPosition.ReplaceAllStringFunc(e.Message, func(match string) string {
+		parts := embeddedPosition.FindStringSubmatch(match)
+		line, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return match
+		}
+		return fmt.Sprintf("[%d:%s]", first+line, parts[2])
+	})
+	return &FrontmatterError{Message: message, Line: first + e.Line, Column: e.Column}
+}
+
+// KeyLines reports the line of every top-level key in a frontmatter block,
+// 1-based and relative to the first line of the block. A block that does not
+// parse has no keys; the decode failure is reported separately.
+func KeyLines(src []byte) map[string]int {
+	file, err := parser.ParseBytes(src, 0)
+	if err != nil {
+		return nil
+	}
+	lines := make(map[string]int)
+	for _, doc := range file.Docs {
+		switch body := doc.Body.(type) {
+		case *ast.MappingNode:
+			for _, value := range body.Values {
+				recordKeyLine(lines, value)
+			}
+		case *ast.MappingValueNode:
+			recordKeyLine(lines, body)
+		}
+	}
+	return lines
+}
+
+func recordKeyLine(lines map[string]int, value *ast.MappingValueNode) {
+	if value == nil || value.Key == nil {
+		return
+	}
+	tk := value.Key.GetToken()
+	if tk == nil || tk.Position == nil {
+		return
+	}
+	if _, seen := lines[tk.Value]; !seen {
+		lines[tk.Value] = tk.Position.Line
+	}
 }
 
 // File parses one Markdown file. A frontmatter decode failure is recorded on
@@ -117,17 +204,49 @@ func File(path string, cfg config.Config) (*Document, error) {
 
 	frontmatter, body, ok := SplitFrontmatter(src)
 	doc.Body = string(body)
+	// The body is a suffix of the file, so what precedes it locates its first
+	// line without re-walking the block.
+	doc.BodyLine = 1 + bytes.Count(src[:len(src)-len(body)], []byte("\n"))
 	if !ok {
 		return doc, nil
 	}
 	doc.HasFrontmatter = true
+	// The block always opens the file, so its first line is the line after the
+	// delimiter and every position inside it offsets by the delimiter line.
+	doc.FrontmatterLine = 1
 	fm, err := UnmarshalFrontmatter(frontmatter)
 	if err != nil {
-		doc.Err = err
+		var fe *FrontmatterError
+		errors.As(err, &fe)
+		doc.Err = fe.offsetBy(doc.FrontmatterLine)
 		return doc, nil
 	}
 	doc.Frontmatter = fm
+	doc.KeyLines = make(map[string]int, len(fm))
+	for key, line := range KeyLines(frontmatter) {
+		doc.KeyLines[key] = doc.FrontmatterLine + line
+	}
 	return doc, nil
+}
+
+// Localize rewrites document paths the way a caller would type them: forward
+// slashes, and relative to base when the document lives under it.
+func Localize(docs []*Document, base string) {
+	for _, doc := range docs {
+		doc.Path = LocalPath(base, doc.Path)
+	}
+}
+
+// LocalPath rewrites one path the way a caller standing in base would type it.
+func LocalPath(base, path string) string {
+	if !filepath.IsAbs(path) {
+		return filepath.ToSlash(path)
+	}
+	rel, err := filepath.Rel(base, path)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(rel)
 }
 
 // Dir parses the Markdown files directly in dir whose name matches the preset

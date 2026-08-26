@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "findings": [
+    {
+      "severity": "warn",
+      "rule": "unstructured_supersedes",
+      "id": "0002",
+      "detail": "supersedes edge 0003 -> 0002 comes from a field value; declare it in frontmatter",
+      "location": {
+        "path": "../../testdata/fixtures/ok-madr/0002-store-thumbnails-on-the-local-disk.md",
+        "line": 3
+      },
+      "fix": "declare supersedes: 0002 in 0003"
+    }
+  ],
+  "summary": {
+    "documents": 4,
+    "edges": 3,
+    "errors": 0,
+    "warnings": 1,
+    "cycles": 0
+  }
+}

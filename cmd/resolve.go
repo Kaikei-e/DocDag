@@ -9,12 +9,16 @@ import (
 )
 
 func newResolveCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "resolve <ref>",
 		Short: "Print the documents that currently supersede a reference",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			format, err := outputFormat(cmd)
+			format, err := outputFormat(cmd, formatText, formatJSON)
+			if err != nil {
+				return err
+			}
+			fields, err := recordFields(cmd)
 			if err != nil {
 				return err
 			}
@@ -34,10 +38,11 @@ func newResolveCmd() *cobra.Command {
 				return domainErr("%v", err)
 			}
 			out := cmd.OutOrStdout()
+			records := render.Records(g, ids)
 			if format == formatJSON {
-				err = render.IDsJSON(out, ids)
+				err = render.RecordsJSON(out, records)
 			} else {
-				err = render.IDsText(out, ids)
+				err = render.RecordsText(out, records, fields)
 			}
 			if err != nil {
 				return ioErr(err)
@@ -45,4 +50,6 @@ func newResolveCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addFieldsFlag(cmd)
+	return cmd
 }

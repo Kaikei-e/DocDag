@@ -1,19 +1,32 @@
 package cmd
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/Kaikei-e/DocDag/internal/graph"
 	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/internal/render"
 )
 
-func queryResults(t *testing.T, payload string) []graph.QueryResult {
-	t.Helper()
-	return decodeJSON[[]graph.QueryResult](t, payload)
+// testHit is a query result reduced to what a fixture-independent expectation
+// can name: the document and the layer it was reached through.
+type testHit struct {
+	id        model.ID
+	reference bool
 }
 
-func assertResults(t *testing.T, got []graph.QueryResult, want []graph.QueryResult) {
+func queryResults(t *testing.T, payload string) []testHit {
+	t.Helper()
+	records := decodeJSON[[]render.Record](t, payload)
+	out := make([]testHit, 0, len(records))
+	for _, r := range records {
+		out = append(out, testHit{id: r.ID, reference: r.Reference})
+	}
+	return out
+}
+
+func assertResults(t *testing.T, got []testHit, want []testHit) {
 	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("results = %+v, want %+v", got, want)
@@ -25,10 +38,10 @@ func assertResults(t *testing.T, got []graph.QueryResult, want []graph.QueryResu
 	}
 }
 
-func typed(ids ...model.ID) []graph.QueryResult {
-	out := make([]graph.QueryResult, 0, len(ids))
+func typed(ids ...model.ID) []testHit {
+	out := make([]testHit, 0, len(ids))
 	for _, id := range ids {
-		out = append(out, graph.QueryResult{ID: id, Layer: graph.LayerTyped})
+		out = append(out, testHit{id: id})
 	}
 	return out
 }
@@ -38,7 +51,7 @@ func TestQueryReachability(t *testing.T) {
 		name    string
 		fixture string
 		args    []string
-		want    []graph.QueryResult
+		want    []testHit
 	}{
 		{
 			name:    "ancestors are the impacted documents",
@@ -115,9 +128,90 @@ func TestQueryIncludeRefsOverlaysTheReferenceLayer(t *testing.T) {
 
 	with := run(t, "query", "0001", "--descendants", "--include-refs", "--format", "json", "--dir", dir)
 	assertExit(t, with, 0)
-	assertResults(t, queryResults(t, with.stdout), []graph.QueryResult{
-		{ID: "0002", Layer: graph.LayerReference},
+	assertResults(t, queryResults(t, with.stdout), []testHit{
+		{id: "0002", reference: true},
 	})
+}
+
+func TestQueryBindingJSONCarriesEveryField(t *testing.T) {
+	got := run(t, "query", "--binding", "--format", "json", "--dir", fixture(t, "ok-madr"))
+
+	assertExit(t, got, 0)
+	records := decodeJSON[[]render.Record](t, got.stdout)
+	if len(records) != 2 {
+		t.Fatalf("records = %+v, want two binding documents", records)
+	}
+	want := render.Record{ID: "0001", Title: "Cache rendered thumbnails", Status: "accepted"}
+	got0 := records[0]
+	if got0.ID != want.ID || got0.Title != want.Title || got0.Status != want.Status {
+		t.Errorf("record = %+v, want %+v", got0, want)
+	}
+	if filepath.Base(got0.Path) != "0001-cache-rendered-thumbnails.md" {
+		t.Errorf("path = %q, want the document file", got0.Path)
+	}
+	if got0.Reference {
+		t.Errorf("record = %+v, want no reference marker on a binding document", got0)
+	}
+}
+
+func TestQueryFieldsSelectTheTextColumns(t *testing.T) {
+	dir := fixture(t, "ok-madr")
+
+	bare := run(t, "query", "--binding", "--dir", dir)
+	assertExit(t, bare, 0)
+	assertLines(t, "binding", lines(bare.stdout), []string{"0001", "0003"})
+
+	got := run(t, "query", "--binding", "--fields", "id,title,status", "--dir", dir)
+
+	assertExit(t, got, 0)
+	assertLines(t, "binding", lines(got.stdout), []string{
+		"0001\tCache rendered thumbnails\taccepted",
+		"0003\tStore thumbnails in object storage\taccepted",
+	})
+}
+
+func TestQueryFieldsKeepTheGivenOrder(t *testing.T) {
+	got := run(t, "query", "0004", "--descendants", "--fields", "status,id", "--dir", fixture(t, "ok-madr"))
+
+	assertExit(t, got, 0)
+	assertLines(t, "query", lines(got.stdout), []string{
+		"accepted\t0001",
+		"superseded\t0002",
+		"accepted\t0003",
+	})
+}
+
+func TestQueryFieldsMarkAReferenceLayerHit(t *testing.T) {
+	got := run(t, "query", "0001", "--descendants", "--include-refs", "--fields", "id,title", "--dir", fixture(t, "ok-basic"))
+
+	assertExit(t, got, 0)
+	all := lines(got.stdout)
+	if len(all) != 1 || !strings.HasSuffix(all[0], " (reference)") {
+		t.Errorf("query = %q, want the reference-layer hit marked", got.stdout)
+	}
+}
+
+func TestUnknownFieldIsAUsageError(t *testing.T) {
+	for _, args := range [][]string{
+		{"query", "--binding", "--fields", "id,colour"},
+		{"resolve", "0001", "--fields", "colour"},
+	} {
+		t.Run(args[0], func(t *testing.T) {
+			got := run(t, append(args, "--dir", fixture(t, "ok-basic"))...)
+
+			assertExit(t, got, 2)
+			if !strings.Contains(got.stderr, "unknown field") {
+				t.Errorf("stderr = %q, want an unknown field diagnostic", got.stderr)
+			}
+		})
+	}
+}
+
+func TestQueryBindingSkipsAWithdrawnDecision(t *testing.T) {
+	got := run(t, "query", "--binding", "--dir", fixture(t, "withdrawn"))
+
+	assertExit(t, got, 0)
+	assertLines(t, "binding", lines(got.stdout), []string{"0002"})
 }
 
 func TestQueryBinding(t *testing.T) {
@@ -142,9 +236,9 @@ func TestQueryBinding(t *testing.T) {
 func TestQueryBindingJSON(t *testing.T) {
 	got := run(t, "query", "--binding", "--format", "json", "--dir", fixture(t, "fan-in"))
 	assertExit(t, got, 0)
-	ids := decodeJSON[[]model.ID](t, got.stdout)
-	if len(ids) != 1 || ids[0] != model.ID("0003") {
-		t.Errorf("ids = %v, want [0003]", ids)
+	records := decodeJSON[[]render.Record](t, got.stdout)
+	if len(records) != 1 || records[0].ID != model.ID("0003") {
+		t.Errorf("records = %+v, want [0003]", records)
 	}
 }
 

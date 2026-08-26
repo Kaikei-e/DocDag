@@ -105,7 +105,9 @@ func Load(path string) (Config, error) {
 }
 
 // Merge overlays a partial configuration onto a base, returning the effective
-// configuration. Set fields and non-empty lists replace their base counterpart.
+// configuration. Set fields replace their base counterpart, and so does a list
+// the override writes down: an explicitly empty one clears the preset's, which
+// is how a corpus says it derives no edges at all.
 func Merge(base, override Config) Config {
 	merged := base
 	if override.Preset != "" {
@@ -123,25 +125,49 @@ func Merge(base, override Config) Config {
 	if override.Template != "" {
 		merged.Template = override.Template
 	}
+	if override.Filename != "" {
+		merged.Filename = override.Filename
+	}
 	if len(override.StatusValues) > 0 {
 		merged.StatusValues = slices.Clone(override.StatusValues)
 	}
-	if len(override.Edges) > 0 {
+	if override.Edges != nil {
 		merged.Edges = slices.Clone(override.Edges)
 	}
-	if len(override.DerivedEdges) > 0 {
+	if override.DerivedEdges != nil {
 		merged.DerivedEdges = slices.Clone(override.DerivedEdges)
 	}
-	if len(override.Rules) > 0 {
+	if override.Rules != nil {
 		merged.Rules = slices.Clone(override.Rules)
 	}
+	merged.References = mergeReferences(base.References, override.References)
+	if override.AcyclicUnion {
+		merged.AcyclicUnion = true
+	}
+	if len(override.Structural) > 0 {
+		merged.Structural = maps.Clone(override.Structural)
+	}
 	if merged.StatusField != base.StatusField {
-		if len(override.Rules) == 0 {
+		if override.Rules == nil {
 			merged.Rules = retargetRules(base.Rules, base.StatusField, merged.StatusField)
 		}
-		if len(override.DerivedEdges) == 0 {
+		if override.DerivedEdges == nil {
 			merged.DerivedEdges = retargetDerivedEdges(base.DerivedEdges, base.StatusField, merged.StatusField)
 		}
+	}
+	return merged
+}
+
+func mergeReferences(base, override ReferencesSpec) ReferencesSpec {
+	merged := base
+	if override.Dangling != "" {
+		merged.Dangling = override.Dangling
+	}
+	if override.Pattern != "" {
+		merged.Pattern = override.Pattern
+	}
+	if len(override.Scan) > 0 {
+		merged.Scan = slices.Clone(override.Scan)
 	}
 	return merged
 }

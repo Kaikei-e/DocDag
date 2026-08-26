@@ -3,6 +3,8 @@ package graph
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"reflect"
 	"slices"
 	"testing"
 	"time"
@@ -20,7 +22,8 @@ func testNode(id, status string) *model.Node {
 
 // testNodeAttrs mirrors the status onto both the field and the attribute map so
 // a rule reading the attribute and code reading the field observe one value.
-func testNodeAttrs(id, status string, attrs map[string]string) *model.Node {
+// Every recognized key gets its own line so a finding's location is legible.
+func testNodeAttrs(id, status string, attrs map[string]any) *model.Node {
 	n := &model.Node{
 		ID:     model.ID(id),
 		Path:   id + ".md",
@@ -28,6 +31,15 @@ func testNodeAttrs(id, status string, attrs map[string]string) *model.Node {
 		Status: status,
 		Date:   "2025-01-01",
 		Attrs:  map[string]any{},
+		Line:   testFrontmatterLine,
+		KeyLines: map[string]int{
+			"title":          testTitleLine,
+			"status":         testStatusLine,
+			"supersedes":     testSupersedesLine,
+			"depends-on":     testDependsOnLine,
+			testInverseKey:   testInverseLine,
+			testListAttrsKey: testListAttrsLine,
+		},
 	}
 	if status != "" {
 		n.Attrs[config.DefaultStatusField] = status
@@ -36,6 +48,29 @@ func testNodeAttrs(id, status string, attrs map[string]string) *model.Node {
 		n.Attrs[k] = v
 	}
 	return n
+}
+
+// Frontmatter lines every test node carries, so a location assertion names a
+// key rather than a number nobody can trace.
+const (
+	testFrontmatterLine = 1
+	testTitleLine       = 2
+	testStatusLine      = 3
+	testSupersedesLine  = 4
+	testDependsOnLine   = 5
+	testInverseLine     = 6
+	testListAttrsLine   = 7
+	testBodyLine        = 9
+)
+
+// The inverse key and the list attribute the constraint tests configure.
+const (
+	testInverseKey   = "superseded_by"
+	testListAttrsKey = "tags"
+)
+
+func testNodeLocation(id string, line int) model.Location {
+	return model.Location{Path: id + ".md", Line: line}
 }
 
 func testEdge(from, to string, t model.EdgeType) model.Edge {
@@ -63,15 +98,22 @@ func testGraph(nodes []*model.Node, edges, refEdges []model.Edge) *model.Graph {
 }
 
 func testDoc(id string, frontmatter map[string]any, body string) *parse.Document {
-	return &parse.Document{
-		Path:           id + ".md",
-		Name:           id + ".md",
-		ID:             model.ID(id),
-		Frontmatter:    frontmatter,
-		Body:           body,
-		HasFrontmatter: true,
-		MatchesPattern: true,
+	doc := &parse.Document{
+		Path:            id + ".md",
+		Name:            id + ".md",
+		ID:              model.ID(id),
+		Frontmatter:     frontmatter,
+		Body:            body,
+		HasFrontmatter:  true,
+		MatchesPattern:  true,
+		FrontmatterLine: testFrontmatterLine,
+		BodyLine:        testBodyLine,
+		KeyLines:        make(map[string]int, len(frontmatter)),
 	}
+	for i, key := range slices.Sorted(maps.Keys(frontmatter)) {
+		doc.KeyLines[key] = testFrontmatterLine + 1 + i
+	}
+	return doc
 }
 
 func testIDs(raw ...string) []model.ID {
@@ -99,6 +141,8 @@ func testAttrNot(v string) config.AttrCondition {
 	value := v
 	return config.AttrCondition{Not: &value}
 }
+
+func testStr(v string) *string { return &v }
 
 func testAssertIDs(t *testing.T, what string, got, want []model.ID) {
 	t.Helper()
@@ -157,7 +201,15 @@ func testSeverityRank(s model.Severity) int {
 }
 
 func testFindingKey(f model.Finding) string {
-	return fmt.Sprintf("%d\x00%s\x00%s\x00%s", testSeverityRank(f.Severity), f.Rule, f.ID, f.Detail)
+	return fmt.Sprintf("%d\x00%s\x00%08d\x00%s\x00%s\x00%s",
+		testSeverityRank(f.Severity), f.Location.Path, f.Location.Line, f.Rule, f.ID, f.Detail)
+}
+
+func testAssertFindings(t *testing.T, what string, got, want []model.Finding) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%s = %+v, want %+v", what, got, want)
+	}
 }
 
 func testAssertSortedFindings(t *testing.T, findings []model.Finding) {

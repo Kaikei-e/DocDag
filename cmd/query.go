@@ -27,11 +27,16 @@ func newQueryCmd() *cobra.Command {
 	cmd.Flags().String(flagEdge, "", "restrict the walk to one edge type")
 	cmd.Flags().Bool(flagIncludeRefs, false, "overlay reference-layer neighbours")
 	cmd.Flags().Bool(flagBinding, false, "list every binding document")
+	addFieldsFlag(cmd)
 	return cmd
 }
 
 func runQuery(cmd *cobra.Command, args []string) error {
-	format, err := outputFormat(cmd)
+	format, err := outputFormat(cmd, formatText, formatJSON)
+	if err != nil {
+		return err
+	}
+	fields, err := recordFields(cmd)
 	if err != nil {
 		return err
 	}
@@ -82,11 +87,11 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		if err := requireSupersedes(cfg); err != nil {
 			return err
 		}
-		ids := graph.BindingSet(g, cfg)
+		records := render.Records(g, graph.BindingSet(g, cfg))
 		if format == formatJSON {
-			err = render.IDsJSON(out, ids)
+			err = render.RecordsJSON(out, records)
 		} else {
-			err = render.IDsText(out, ids)
+			err = render.RecordsText(out, records, fields)
 		}
 		if err != nil {
 			return ioErr(err)
@@ -112,10 +117,11 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return domainErr("query %s: %v", id, err)
 	}
+	records := render.QueryRecords(g, results)
 	if format == formatJSON {
-		err = render.QueryJSON(out, results)
+		err = render.RecordsJSON(out, records)
 	} else {
-		err = render.QueryText(out, results)
+		err = render.RecordsText(out, records, fields)
 	}
 	if err != nil {
 		return ioErr(err)

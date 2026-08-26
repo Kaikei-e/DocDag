@@ -22,10 +22,7 @@ func TestBuildNodes(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		n, ok := g.Nodes["0001"]
 		if !ok {
 			t.Fatalf("node 0001 is missing: %v", g.Nodes)
@@ -56,10 +53,7 @@ func TestBuildNodes(t *testing.T) {
 			},
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		if _, ok := g.Nodes["0001"]; !ok {
 			t.Fatalf("node 0001 is missing: %v", g.Nodes)
 		}
@@ -77,10 +71,7 @@ func TestBuildNodes(t *testing.T) {
 			},
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		n, ok := g.Nodes["0001"]
 		if !ok {
 			t.Fatalf("node 0001 is missing: %v", g.Nodes)
@@ -103,10 +94,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
@@ -122,10 +110,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0001", config.EdgeDependsOn)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
@@ -141,10 +126,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v (three spellings of one reference are one edge)", g.Edges, want)
@@ -168,10 +150,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			testDoc("0003", map[string]any{"status": "accepted"}, ""),
 		}
 
-		g, err := Build(docs, reversed)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, reversed)
 		want := []model.Edge{testEdge("0003", "0002", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
@@ -186,17 +165,14 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0099", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
 		}
 	})
 
-	t.Run("a reference that cannot be normalized is recorded as dangling", func(t *testing.T) {
+	t.Run("a reference that names no identity is rejected", func(t *testing.T) {
 		docs := []*parse.Document{
 			testDoc("0002", map[string]any{
 				"status":     "accepted",
@@ -204,11 +180,8 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
-		f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingRef, model.SeverityError, "0002")
+		g := Build(docs, cfg)
+		f := testAssertSingleFinding(t, g.Findings, model.RuleInvalidRef, model.SeverityError, "0002")
 		if !strings.Contains(f.Detail, "a-reference-without-digits") {
 			t.Errorf("detail = %q, want it to name the unresolvable reference", f.Detail)
 		}
@@ -223,10 +196,7 @@ func TestBuildTypedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		if len(g.Edges) != 0 {
 			t.Fatalf("edges = %+v, want none", g.Edges)
 		}
@@ -255,14 +225,8 @@ func TestBuildTypedEdges(t *testing.T) {
 			testEdge("0003", "0002", config.EdgeSupersedes),
 		}
 
-		ascending, err := Build(order("0001", "0002", "0003"), cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
-		shuffled, err := Build(order("0003", "0001", "0002"), cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		ascending := Build(order("0001", "0002", "0003"), cfg)
+		shuffled := Build(order("0003", "0001", "0002"), cfg)
 		if !slices.Equal(ascending.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v (sorted by from, type, to)", ascending.Edges, want)
 		}
@@ -281,10 +245,7 @@ func TestBuildDerivedEdges(t *testing.T) {
 			testDoc("0003", map[string]any{"status": "accepted"}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testDerivedEdge("0003", "0002", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v (the referenced document is the new one)", g.Edges, want)
@@ -297,10 +258,7 @@ func TestBuildDerivedEdges(t *testing.T) {
 			testDoc("0003", map[string]any{"status": "accepted"}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testDerivedEdge("0003", "0002", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
@@ -313,10 +271,7 @@ func TestBuildDerivedEdges(t *testing.T) {
 			testDoc("0003", map[string]any{"status": "accepted"}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		n, ok := g.Nodes["0002"]
 		if !ok {
 			t.Fatalf("node 0002 is missing: %v", g.Nodes)
@@ -335,10 +290,7 @@ func TestBuildDerivedEdges(t *testing.T) {
 			}, ""),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0003", "0002", config.EdgeSupersedes)}
 		if !slices.Equal(g.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v (agreement collapses to the structured edge)", g.Edges, want)
@@ -355,10 +307,7 @@ func TestBuildReferenceLayer(t *testing.T) {
 			testDoc("0002", map[string]any{"status": "accepted"}, "Replaces [[0001]] entirely.\n"),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		want := []model.Edge{testRefEdge("0002", "0001")}
 		if !slices.Equal(g.RefEdges, want) {
 			t.Fatalf("reference edges = %+v, want %+v", g.RefEdges, want)
@@ -373,10 +322,7 @@ func TestBuildReferenceLayer(t *testing.T) {
 			testDoc("0001", map[string]any{"status": "accepted"}, "See [[0099]] and [[not-a-document]].\n"),
 		}
 
-		g, err := Build(docs, cfg)
-		if err != nil {
-			t.Fatalf("Build: %v", err)
-		}
+		g := Build(docs, cfg)
 		if len(g.RefEdges) != 0 {
 			t.Fatalf("reference edges = %+v, want none", g.RefEdges)
 		}
@@ -384,6 +330,204 @@ func TestBuildReferenceLayer(t *testing.T) {
 			t.Fatalf("findings = %+v, want none (the reference layer is never validated)", g.Findings)
 		}
 	})
+}
+
+func TestBuildReferenceLayerTakesOnlyIdentityShapedLinks(t *testing.T) {
+	cfg := config.ADRPreset()
+	docs := []*parse.Document{
+		testDoc("0001", map[string]any{"status": "accepted"}, ""),
+		testDoc("0002", map[string]any{"status": "accepted"},
+			"Unlike [[1]], [[upstream]] and [[tool.uv.index]], only [[0001]] names a document.\n"),
+	}
+
+	g := Build(docs, cfg)
+
+	want := []model.Edge{testRefEdge("0002", "0001")}
+	if !slices.Equal(g.RefEdges, want) {
+		t.Fatalf("reference edges = %+v, want %+v", g.RefEdges, want)
+	}
+}
+
+func TestBuildReportsAnEdgeKeyThatNamesNothing(t *testing.T) {
+	cfg := config.ADRPreset()
+	tests := []struct {
+		name  string
+		value any
+		want  bool
+	}{
+		{name: "a null value", want: true},
+		{name: "an empty list", value: []any{}, want: true},
+		{name: "a list of empty items", value: []any{"", "   "}, want: true},
+		{name: "an empty scalar", value: "", want: true},
+		{name: "a populated list", value: []any{"0001"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			docs := []*parse.Document{
+				testDoc("0001", map[string]any{"status": "accepted"}, ""),
+				testDoc("0002", map[string]any{"status": "accepted", "supersedes": tt.value}, ""),
+			}
+
+			g := Build(docs, cfg)
+
+			found := testFindingsFor(g.Findings, model.RuleEmptyEdge)
+			if !tt.want {
+				if len(found) != 0 {
+					t.Fatalf("findings = %+v, want none", found)
+				}
+				return
+			}
+			f := testAssertSingleFinding(t, g.Findings, model.RuleEmptyEdge, model.SeverityError, "0002")
+			if f.Location != testNodeLocation("0002", docs[1].KeyLines["supersedes"]) {
+				t.Errorf("location = %+v, want the line of the empty key", f.Location)
+			}
+			if !strings.Contains(f.Detail, "supersedes") {
+				t.Errorf("detail = %q, want the key named", f.Detail)
+			}
+		})
+	}
+
+	t.Run("an absent key is not an empty one", func(t *testing.T) {
+		docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted"}, "")}
+
+		if g := Build(docs, cfg); len(g.Findings) != 0 {
+			t.Fatalf("findings = %+v, want none", g.Findings)
+		}
+	})
+}
+
+func TestBuildReportsDanglingReferences(t *testing.T) {
+	withDangling := func(mode string) config.Config {
+		cfg := config.ADRPreset()
+		cfg.References.Dangling = mode
+		return cfg
+	}
+
+	t.Run("the reference layer is unvalidated by default", func(t *testing.T) {
+		docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted"}, "See [[0099]].\n")}
+
+		g := Build(docs, config.ADRPreset())
+
+		if len(g.Findings) != 0 {
+			t.Fatalf("findings = %+v, want none", g.Findings)
+		}
+	})
+
+	t.Run("an enabled corpus reports the missing target at its line", func(t *testing.T) {
+		docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted"}, "First line.\n\nSee [[0099]].\n")}
+
+		g := Build(docs, withDangling(string(model.SeverityError)))
+
+		f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingReference, model.SeverityError, "0001")
+		want := model.Location{Path: "0001.md", Line: testBodyLine + 2}
+		if f.Location != want {
+			t.Errorf("location = %+v, want %+v", f.Location, want)
+		}
+		if !strings.Contains(f.Detail, "0099") || !strings.Contains(f.Detail, string(parse.LinkWiki)) {
+			t.Errorf("detail = %q, want the link kind and the missing target", f.Detail)
+		}
+	})
+
+	t.Run("the configured mode sets the severity", func(t *testing.T) {
+		docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted"}, "See [[0099]].\n")}
+
+		g := Build(docs, withDangling(string(model.SeverityWarn)))
+
+		testAssertSingleFinding(t, g.Findings, model.RuleDanglingReference, model.SeverityWarn, "0001")
+	})
+
+	t.Run("a markdown link to a missing document is reported too", func(t *testing.T) {
+		docs := []*parse.Document{
+			testDoc("0001", map[string]any{"status": "accepted"}, "See [the queue](0099-hand-off-through-a-queue.md).\n"),
+		}
+
+		g := Build(docs, withDangling(string(model.SeverityError)))
+
+		f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingReference, model.SeverityError, "0001")
+		if !strings.Contains(f.Detail, string(parse.LinkMarkdown)) {
+			t.Errorf("detail = %q, want the markdown link kind", f.Detail)
+		}
+	})
+
+	t.Run("each link to one missing target is its own finding", func(t *testing.T) {
+		docs := []*parse.Document{
+			testDoc("0001", map[string]any{"status": "accepted"},
+				"See [[0099]].\n\nAnd [the other](0099-a-decision.md).\n"),
+		}
+
+		g := Build(docs, withDangling(string(model.SeverityError)))
+
+		findings := testFindingsFor(g.Findings, model.RuleDanglingReference)
+		if len(findings) != 2 {
+			t.Fatalf("findings = %+v, want one per link", findings)
+		}
+		if findings[0].Location.Line == findings[1].Location.Line {
+			t.Errorf("findings = %+v, want the two lines kept apart", findings)
+		}
+	})
+
+	t.Run("one link written twice on a line is one finding", func(t *testing.T) {
+		docs := []*parse.Document{
+			testDoc("0001", map[string]any{"status": "accepted"}, "See [[0099]] and [[0099]] again.\n"),
+		}
+
+		g := Build(docs, withDangling(string(model.SeverityError)))
+
+		testAssertSingleFinding(t, g.Findings, model.RuleDanglingReference, model.SeverityError, "0001")
+	})
+
+	t.Run("prose that names no identity is never dangling", func(t *testing.T) {
+		docs := []*parse.Document{
+			testDoc("0001", map[string]any{"status": "accepted"},
+				"See [[upstream]], [[3days-recap]] and `[[0099]]`.\n"),
+		}
+
+		g := Build(docs, withDangling(string(model.SeverityError)))
+
+		if len(g.Findings) != 0 {
+			t.Fatalf("findings = %+v, want none", g.Findings)
+		}
+	})
+
+	t.Run("frontmatter is scanned only when asked for", func(t *testing.T) {
+		frontmatter := map[string]any{"status": "accepted", "relates": "see [[0099]]"}
+		cfg := withDangling(string(model.SeverityError))
+
+		if g := Build([]*parse.Document{testDoc("0001", frontmatter, "")}, cfg); len(g.Findings) != 0 {
+			t.Fatalf("findings = %+v, want none while only the body is scanned", g.Findings)
+		}
+
+		cfg.References.Scan = []string{config.ScanBody, config.ScanFrontmatter}
+		doc := testDoc("0001", frontmatter, "")
+		g := Build([]*parse.Document{doc}, cfg)
+
+		f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingReference, model.SeverityError, "0001")
+		if f.Location.Line != doc.KeyLines["relates"] {
+			t.Errorf("location = %+v, want the line of the key holding the link", f.Location)
+		}
+	})
+}
+
+func TestBuildRejectsAFrontmatterReferenceThatIsNotIdentityShaped(t *testing.T) {
+	cfg := config.ADRPreset()
+	docs := []*parse.Document{
+		testDoc("0001", map[string]any{"status": "accepted"}, ""),
+		testDoc("0002", map[string]any{
+			"status":     "accepted",
+			"supersedes": []any{"see 0001"},
+		}, ""),
+	}
+
+	g := Build(docs, cfg)
+
+	f := testAssertSingleFinding(t, g.Findings, model.RuleInvalidRef, model.SeverityError, "0002")
+	if !strings.Contains(f.Detail, "see 0001") {
+		t.Errorf("detail = %q, want the reference as written", f.Detail)
+	}
+	if len(g.Edges) != 0 {
+		t.Fatalf("edges = %+v, want none: the reference names no identity", g.Edges)
+	}
 }
 
 func TestAdjacency(t *testing.T) {
@@ -540,4 +684,38 @@ func testTypedFixture() *model.Graph {
 			testRefEdge("0004", "0001"),
 		},
 	)
+}
+
+func TestBuildNodesCarryFrontmatterPositions(t *testing.T) {
+	docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted", "title": "First"}, "")}
+
+	g := Build(docs, config.ADRPreset())
+	n, ok := g.Node("0001")
+	if !ok {
+		t.Fatal("node 0001 is missing")
+	}
+	if n.Line != docs[0].FrontmatterLine {
+		t.Errorf("line = %d, want %d", n.Line, docs[0].FrontmatterLine)
+	}
+	for key, want := range docs[0].KeyLines {
+		if got := n.KeyLines[key]; got != want {
+			t.Errorf("keyLines[%s] = %d, want %d", key, got, want)
+		}
+	}
+}
+
+func TestBuildLocatesAnUnresolvableReference(t *testing.T) {
+	docs := []*parse.Document{
+		testDoc("0002", map[string]any{
+			"status":     "accepted",
+			"supersedes": []any{"a-reference-without-digits"},
+		}, ""),
+	}
+
+	g := Build(docs, config.ADRPreset())
+	f := testAssertSingleFinding(t, g.Findings, model.RuleInvalidRef, model.SeverityError, "0002")
+	want := model.Location{Path: "0002.md", Line: docs[0].KeyLines["supersedes"]}
+	if f.Location != want {
+		t.Errorf("location = %+v, want %+v", f.Location, want)
+	}
 }

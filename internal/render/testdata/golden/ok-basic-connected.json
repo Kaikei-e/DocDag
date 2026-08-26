@@ -1,0 +1,60 @@
+{
+  "nodes": [
+    {
+      "id": "0001",
+      "title": "Poll every feed on a fixed five-minute interval",
+      "status": "superseded",
+      "path": "000001.md"
+    },
+    {
+      "id": "0002",
+      "title": "Poll feeds with adaptive backoff",
+      "status": "superseded",
+      "path": "000002.md"
+    },
+    {
+      "id": "0003",
+      "title": "Use a message queue for ingestion hand-off",
+      "status": "accepted",
+      "path": "000003.md"
+    },
+    {
+      "id": "0004",
+      "title": "Schedule feed polling from the ingestion queue",
+      "status": "accepted",
+      "path": "000004.md"
+    },
+    {
+      "id": "0005",
+      "title": "Deduplicate articles by canonical URL",
+      "status": "accepted",
+      "path": "000005.md"
+    }
+  ],
+  "links": [
+    {
+      "source": "0002",
+      "target": "0001",
+      "type": "supersedes",
+      "origin": "structured"
+    },
+    {
+      "source": "0004",
+      "target": "0003",
+      "type": "depends-on",
+      "origin": "structured"
+    },
+    {
+      "source": "0004",
+      "target": "0002",
+      "type": "supersedes",
+      "origin": "structured"
+    },
+    {
+      "source": "0005",
+      "target": "0003",
+      "type": "depends-on",
+      "origin": "structured"
+    }
+  ]
+}
