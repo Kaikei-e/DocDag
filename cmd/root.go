@@ -36,12 +36,13 @@ const (
 	flagFormat      = "format"
 	flagIncludeRefs = "include-refs"
 
-	formatText    = "text"
-	formatJSON    = "json"
-	formatGitHub  = "github"
-	formatRDJSON  = "rdjson"
-	formatMermaid = "mermaid"
-	formatDOT     = "dot"
+	formatText     = "text"
+	formatJSON     = "json"
+	formatGitHub   = "github"
+	formatRDJSON   = "rdjson"
+	formatMarkdown = "md"
+	formatMermaid  = "mermaid"
+	formatDOT      = "dot"
 )
 
 // cliError carries an exit code through cobra's RunE path. An empty msg means
@@ -183,11 +184,12 @@ func newRootCmd() *cobra.Command {
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().String(flagDir, "", "documents directory (overrides config and discovery)")
 	root.PersistentFlags().String(flagConfig, "", "path to docdag.yaml")
-	root.PersistentFlags().String(flagFormat, formatText, "output format: text|json, plus github|rdjson on validate")
+	root.PersistentFlags().String(flagFormat, formatText, "output format: text|json, plus github|rdjson on validate and md on context")
 	root.AddCommand(
 		newValidateCmd(),
 		newResolveCmd(),
 		newQueryCmd(),
+		newContextCmd(),
 		newExportCmd(),
 		newStatsCmd(),
 		newNewCmd(),
