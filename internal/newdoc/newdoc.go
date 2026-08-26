@@ -43,8 +43,10 @@ date: {{ .Date }}
 // DateLayout is the frontmatter date format.
 const DateLayout = "2006-01-02"
 
-// Request describes the document to create. A zero Date means today.
+// Request describes the document to create. A zero Date means today, and an
+// empty ID takes the next free identifier.
 type Request struct {
+	ID         string
 	Title      string
 	Supersedes []string
 	DependsOn  []string
@@ -274,18 +276,24 @@ func RewriteStatusFile(path, field, status string) error {
 }
 
 // Plan is the document Create would write and the status rewrites it would
-// apply, all computed without touching the disk.
+// apply, all computed without touching the disk. An Exists plan names a
+// document the corpus already holds under the requested identifier and title:
+// there is nothing left to write.
 type Plan struct {
 	ID       model.ID
 	Path     string
 	Content  []byte
 	Rewrites []Rewrite
+	Exists   bool
 }
 
 // NewPlan computes what creating the requested document takes. Every rewrite
 // is computed before anything is written: creating the new document and then
 // failing half way through the old ones would leave a corpus nobody asked for.
 func NewPlan(g *model.Graph, cfg config.Config, req Request) (Plan, error) {
+	if err := noCollision(g); err != nil {
+		return Plan{}, err
+	}
 	superseded, err := documents(g, cfg, req.Supersedes)
 	if err != nil {
 		return Plan{}, err
@@ -293,9 +301,15 @@ func NewPlan(g *model.Graph, cfg config.Config, req Request) (Plan, error) {
 	if _, err := documents(g, cfg, req.DependsOn); err != nil {
 		return Plan{}, err
 	}
-	id, err := NextID(g, cfg)
+	id, err := identifier(g, cfg, req)
 	if err != nil {
 		return Plan{}, err
+	}
+	if n, ok := g.Node(id); ok {
+		if !sameTitle(n.Title, req.Title) {
+			return Plan{}, fmt.Errorf("document %s is titled %q, not %q: %w", id, n.Title, req.Title, model.ErrIDConflict)
+		}
+		return Plan{ID: id, Path: documentPath(cfg, n), Exists: true}, nil
 	}
 	edges, err := EdgeBlock(cfg, req)
 	if err != nil {
@@ -336,9 +350,38 @@ func NewPlan(g *model.Graph, cfg config.Config, req Request) (Plan, error) {
 	return plan, nil
 }
 
+// noCollision refuses a corpus in which two files claim one identifier: the
+// next identifier is not knowable, and neither is which file a reference names.
+func noCollision(g *model.Graph) error {
+	for _, f := range g.Findings {
+		if f.Rule == model.RuleIDCollision {
+			return fmt.Errorf("document %s %s: %w", f.ID, f.Detail, model.ErrIDConflict)
+		}
+	}
+	return nil
+}
+
+// identifier resolves the identifier a request asks for, or the next free one
+// when it asks for none.
+func identifier(g *model.Graph, cfg config.Config, req Request) (model.ID, error) {
+	if req.ID == "" {
+		return NextID(g, cfg)
+	}
+	id, ok := cfg.Normalizer().Normalize(req.ID)
+	if !ok {
+		return "", fmt.Errorf("unrecognized reference %q: %w", req.ID, model.ErrUnknownID)
+	}
+	return id, nil
+}
+
+func sameTitle(a, b string) bool { return strings.TrimSpace(a) == strings.TrimSpace(b) }
+
 // Apply writes the planned document and then the planned rewrites, returning
 // the path of the created file.
 func (p Plan) Apply() (string, error) {
+	if p.Exists {
+		return p.Path, nil
+	}
 	if err := writeNew(p.Path, p.Content); err != nil {
 		return "", err
 	}

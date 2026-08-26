@@ -9,4 +9,5 @@ var (
 	ErrNoDocuments     = errors.New("docdag: no documents directory found")
 	ErrInvalidConfig   = errors.New("docdag: invalid configuration")
 	ErrInvalidDocument = errors.New("docdag: invalid document")
+	ErrIDConflict      = errors.New("docdag: identifier claimed by another document")
 )
