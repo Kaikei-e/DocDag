@@ -130,6 +130,18 @@ func TestMermaidGolden(t *testing.T) {
 			graph:  testFanInGraph(),
 			golden: "fan-in.mmd",
 		},
+		{
+			name:   "ok-basic without the documents no typed edge touches",
+			graph:  testOKBasicGraph(),
+			opts:   Options{Connected: true},
+			golden: "ok-basic-connected.mmd",
+		},
+		{
+			name:   "ok-basic restricted to one edge type",
+			graph:  testOKBasicGraph(),
+			opts:   Options{Edges: []model.EdgeType{config.EdgeDependsOn}},
+			golden: "ok-basic-depends-on.mmd",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -169,6 +181,18 @@ func TestDOTGolden(t *testing.T) {
 			graph:  testFanInGraph(),
 			golden: "fan-in.dot",
 		},
+		{
+			name:   "ok-basic without the documents no typed edge touches",
+			graph:  testOKBasicGraph(),
+			opts:   Options{Connected: true},
+			golden: "ok-basic-connected.dot",
+		},
+		{
+			name:   "ok-basic restricted to one edge type",
+			graph:  testOKBasicGraph(),
+			opts:   Options{Edges: []model.EdgeType{config.EdgeDependsOn}},
+			golden: "ok-basic-depends-on.dot",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -199,6 +223,18 @@ func TestNodeLinkJSONGolden(t *testing.T) {
 			name:   "the fan-in of two superseded documents",
 			graph:  testFanInGraph(),
 			golden: "fan-in.json",
+		},
+		{
+			name:   "ok-basic without the documents no typed edge touches",
+			graph:  testOKBasicGraph(),
+			opts:   Options{Connected: true},
+			golden: "ok-basic-connected.json",
+		},
+		{
+			name:   "ok-basic restricted to one edge type",
+			graph:  testOKBasicGraph(),
+			opts:   Options{Edges: []model.EdgeType{config.EdgeDependsOn}},
+			golden: "ok-basic-depends-on.json",
 		},
 	}
 	for _, tt := range tests {
@@ -309,6 +345,57 @@ func TestReferenceLayerIsOmittedByDefault(t *testing.T) {
 				t.Errorf("%s output carries the reference layer without IncludeRefs (%q):\n%s", tt.format, tt.unwanted, got)
 			}
 		})
+	}
+}
+
+func TestConnectedIsDecidedByTypedEdgesAlone(t *testing.T) {
+	// 0002 is reachable only over the reference layer, so --connected must
+	// drop it whether or not the reference layer is drawn.
+	g := testGraph(
+		[]*model.Node{
+			testNode("0001", "Emit structured logs as JSON", "accepted", "0001.md"),
+			testNode("0002", "Ship logs to the aggregator", "accepted", "0002.md"),
+			testNode("0003", "Sample debug logs", "superseded", "0003.md"),
+		},
+		[]model.Edge{testEdge("0001", "0003", config.EdgeSupersedes)},
+		[]model.Edge{testRefEdge("0001", "0002")},
+	)
+	for format, fn := range testRenderers() {
+		t.Run(format, func(t *testing.T) {
+			got := testRender(t, fn, g, Options{Connected: true, IncludeRefs: true})
+			if strings.Contains(got, "0002") {
+				t.Errorf("%s output keeps a document no typed edge touches:\n%s", format, got)
+			}
+			for _, want := range []string{"0001", "0003"} {
+				if !strings.Contains(got, want) {
+					t.Errorf("%s output dropped connected document %s:\n%s", format, want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestEdgeFilterNarrowsTheConnectedSet(t *testing.T) {
+	opts := Options{Connected: true, Edges: []model.EdgeType{config.EdgeSupersedes}}
+
+	var doc NodeLink
+	if err := json.Unmarshal([]byte(testRender(t, NodeLinkJSON, testOKBasicGraph(), opts)), &doc); err != nil {
+		t.Fatalf("decode node-link JSON: %v", err)
+	}
+
+	ids := make([]model.ID, 0, len(doc.Nodes))
+	for _, n := range doc.Nodes {
+		ids = append(ids, n.ID)
+	}
+	if want := []model.ID{"0001", "0002", "0004"}; !slices.Equal(ids, want) {
+		t.Errorf("nodes = %v, want %v", ids, want)
+	}
+	want := []NodeLinkEdge{
+		{Source: "0002", Target: "0001", Type: config.EdgeSupersedes, Origin: model.OriginStructured},
+		{Source: "0004", Target: "0002", Type: config.EdgeSupersedes, Origin: model.OriginStructured},
+	}
+	if !slices.Equal(doc.Links, want) {
+		t.Errorf("links = %+v, want %+v", doc.Links, want)
 	}
 }
 

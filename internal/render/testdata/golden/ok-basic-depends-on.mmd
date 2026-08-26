@@ -1,0 +1,9 @@
+graph LR
+  0001["0001 Poll every feed on a fixed five-..."]
+  0002["0002 Poll feeds with adaptive backoff"]
+  0003["0003 Use a message queue for ingestio..."]
+  0004["0004 Schedule feed polling from the i..."]
+  0005["0005 Deduplicate articles by canonica..."]
+  0006["0006 Reject binary attachments during..."]
+  0004 -->|depends-on| 0003
+  0005 -->|depends-on| 0003
