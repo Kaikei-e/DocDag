@@ -25,7 +25,7 @@ type edgeKey struct {
 
 // Build assembles the typed constraint layer and the untyped reference layer
 // from parsed documents, recording structural findings it observes on the way.
-func Build(docs []*parse.Document, cfg config.Config) (*model.Graph, error) {
+func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 	g := model.NewGraph()
 	normalizer := cfg.Normalizer()
 	findings := CheckDocuments(docs, cfg)
@@ -80,7 +80,7 @@ func Build(docs []*parse.Document, cfg config.Config) (*model.Graph, error) {
 
 	SortFindings(findings)
 	g.Findings = findings
-	return g, nil
+	return g
 }
 
 func buildNode(doc *parse.Document, cfg config.Config) *model.Node {

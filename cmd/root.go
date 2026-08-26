@@ -129,11 +129,14 @@ func loadGraph(cmd *cobra.Command) (*model.Graph, config.Config, error) {
 	if err != nil {
 		return nil, cfg, ioErr(err)
 	}
-	g, err := graph.Build(docs, cfg)
+	root, err := os.Getwd()
 	if err != nil {
-		return nil, cfg, domainErr("build graph: %v", err)
+		return nil, cfg, ioErr(fmt.Errorf("working directory: %w", err))
 	}
-	return g, cfg, nil
+	// Findings name files the way the caller would type them, not the way
+	// discovery happened to spell them.
+	parse.Localize(docs, root)
+	return graph.Build(docs, cfg), cfg, nil
 }
 
 // requireSupersedes refuses the commands that are defined over the supersedes

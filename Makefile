@@ -4,7 +4,7 @@ PKGS := ./...
 .PHONY: build test vet fmt fmt-check check clean
 
 build:
-	go build -o $(BINARY) .
+	go build -o $(BINARY) ./cmd/docdag
 
 test:
 	go test -race -shuffle=on -count=1 $(PKGS)
@@ -21,7 +21,7 @@ fmt-check:
 		echo "gofmt needed:"; echo "$$out"; exit 1; \
 	fi
 
-check: fmt-check vet test
+check: fmt-check vet build test
 
 clean:
 	rm -f $(BINARY)

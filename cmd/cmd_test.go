@@ -239,13 +239,18 @@ func TestConfigFileOverridesThePreset(t *testing.T) {
 func TestTheCommandSetIsExactlyTheDocumentedOne(t *testing.T) {
 	want := []string{"validate", "resolve", "query", "export", "stats", "new", "help"}
 
-	for _, cmd := range newRootCmd().Commands() {
-		if !slices.Contains(want, cmd.Name()) {
-			t.Errorf("the command tree carries %q, want only %v", cmd.Name(), want)
-		}
+	// The help command is registered lazily, so ask for it before counting.
+	root := newRootCmd()
+	root.InitDefaultHelpCmd()
+	var got []string
+	for _, cmd := range root.Commands() {
+		got = append(got, cmd.Name())
 	}
-	got := run(t, "completion", "bash")
-	assertExit(t, got, 2)
+	slices.Sort(got)
+	if !slices.Equal(got, slices.Sorted(slices.Values(want))) {
+		t.Errorf("the command tree is %v, want exactly %v", got, want)
+	}
+	assertExit(t, run(t, "completion", "bash"), 2)
 }
 
 func TestAWindowsAuthoredCorpusIsManagedLikeAnyOther(t *testing.T) {
