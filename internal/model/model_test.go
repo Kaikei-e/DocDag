@@ -62,6 +62,65 @@ func TestNodeAttr(t *testing.T) {
 	}
 }
 
+func TestNodeAttrList(t *testing.T) {
+	tests := []struct {
+		name  string
+		attrs map[string]any
+		key   string
+		want  []string
+		ok    bool
+	}{
+		{
+			name:  "a list of strings",
+			attrs: map[string]any{"tags": []any{"security", "storage"}},
+			key:   "tags",
+			want:  []string{"security", "storage"},
+			ok:    true,
+		},
+		{
+			name:  "a scalar is a one element list",
+			attrs: map[string]any{"tags": "security"},
+			key:   "tags",
+			want:  []string{"security"},
+			ok:    true,
+		},
+		{
+			name:  "list items stringify like scalars",
+			attrs: map[string]any{"revisions": []any{1, true}},
+			key:   "revisions",
+			want:  []string{"1", "true"},
+			ok:    true,
+		},
+		{
+			name:  "an item that is not a scalar is dropped",
+			attrs: map[string]any{"tags": []any{"security", []any{"nested"}}},
+			key:   "tags",
+			want:  []string{"security"},
+			ok:    true,
+		},
+		{name: "an empty list is present", attrs: map[string]any{"tags": []any{}}, key: "tags", want: []string{}, ok: true},
+		{name: "a mapping is not a list", attrs: map[string]any{"meta": map[string]any{"k": "v"}}, key: "meta"},
+		{name: "an explicit null is absent", attrs: map[string]any{"tags": nil}, key: "tags"},
+		{name: "a missing key is absent", attrs: map[string]any{"tags": []any{"security"}}, key: "labels"},
+		{name: "a node without attributes", key: "tags"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := &Node{ID: "0001", Attrs: tt.attrs}
+
+			got, ok := n.AttrList(tt.key)
+
+			if ok != tt.ok {
+				t.Fatalf("ok = %v, want %v", ok, tt.ok)
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("AttrList(%q) = %q, want %q", tt.key, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGraphNode(t *testing.T) {
 	g := testGraph()
 

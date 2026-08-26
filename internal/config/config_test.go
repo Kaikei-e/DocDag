@@ -11,6 +11,7 @@ import (
 
 func testEq(v string) AttrCondition  { return AttrCondition{Eq: &v} }
 func testNot(v string) AttrCondition { return AttrCondition{Not: &v} }
+func strptr(v string) *string        { return &v }
 
 func TestConfigEdge(t *testing.T) {
 	cfg := ADRPreset()
@@ -263,6 +264,36 @@ func TestConfigValidate(t *testing.T) {
 			name: "an attribute condition setting neither eq nor not",
 			mutate: func(c *Config) {
 				c.Rules[0].When.Attr = map[string]AttrCondition{"status": {}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "an attribute condition on a list",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Attr = map[string]AttrCondition{"tags": {Contains: strptr("legacy")}}
+			},
+		},
+		{
+			name: "an attribute condition bounding a list",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Attr = map[string]AttrCondition{"tags": {SubsetOf: []string{"legacy"}}}
+			},
+		},
+		{
+			name: "an attribute condition setting a scalar and a list operand",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Attr = map[string]AttrCondition{
+					"tags": {Eq: strptr("legacy"), Contains: strptr("legacy")},
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "an attribute condition setting two list operands",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Attr = map[string]AttrCondition{
+					"tags": {Contains: strptr("legacy"), NotContains: strptr("current")},
+				}
 			},
 			wantErr: true,
 		},

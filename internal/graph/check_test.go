@@ -831,6 +831,89 @@ func TestMatchCondition(t *testing.T) {
 	}
 }
 
+func TestMatchConditionOnListAttributes(t *testing.T) {
+	tests := []struct {
+		name  string
+		attrs map[string]any
+		cond  config.AttrCondition
+		want  bool
+	}{
+		{
+			name:  "contains finds a member",
+			attrs: map[string]any{testListAttrsKey: []any{"security", "storage"}},
+			cond:  config.AttrCondition{Contains: testStr("security")},
+			want:  true,
+		},
+		{
+			name:  "contains misses a member the list does not hold",
+			attrs: map[string]any{testListAttrsKey: []any{"storage"}},
+			cond:  config.AttrCondition{Contains: testStr("security")},
+		},
+		{
+			name:  "contains reads a scalar as a one element list",
+			attrs: map[string]any{testListAttrsKey: "security"},
+			cond:  config.AttrCondition{Contains: testStr("security")},
+			want:  true,
+		},
+		{
+			name:  "contains is case-insensitive",
+			attrs: map[string]any{testListAttrsKey: []any{"Security"}},
+			cond:  config.AttrCondition{Contains: testStr("security")},
+			want:  true,
+		},
+		{
+			name:  "contains needs the attribute",
+			attrs: map[string]any{},
+			cond:  config.AttrCondition{Contains: testStr("security")},
+		},
+		{
+			name:  "not_contains holds when the member is absent",
+			attrs: map[string]any{testListAttrsKey: []any{"storage"}},
+			cond:  config.AttrCondition{NotContains: testStr("security")},
+			want:  true,
+		},
+		{
+			name:  "not_contains fails when the member is present",
+			attrs: map[string]any{testListAttrsKey: []any{"security"}},
+			cond:  config.AttrCondition{NotContains: testStr("security")},
+		},
+		{
+			name:  "an absent attribute contains nothing",
+			attrs: map[string]any{},
+			cond:  config.AttrCondition{NotContains: testStr("security")},
+			want:  true,
+		},
+		{
+			name:  "subset_of holds for a covered list",
+			attrs: map[string]any{testListAttrsKey: []any{"legacy"}},
+			cond:  config.AttrCondition{SubsetOf: []string{"legacy", "deprecated"}},
+			want:  true,
+		},
+		{
+			name:  "subset_of fails on a member outside the set",
+			attrs: map[string]any{testListAttrsKey: []any{"legacy", "security"}},
+			cond:  config.AttrCondition{SubsetOf: []string{"legacy", "deprecated"}},
+		},
+		{
+			name:  "subset_of needs the attribute",
+			attrs: map[string]any{},
+			cond:  config.AttrCondition{SubsetOf: []string{"legacy"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := testNodeAttrs("0001", config.StatusAccepted, tt.attrs)
+			g := testGraph([]*model.Node{n}, nil, nil)
+			cond := config.Condition{Attr: map[string]config.AttrCondition{testListAttrsKey: tt.cond}}
+
+			if got := MatchCondition(g, cond, "0001"); got != tt.want {
+				t.Fatalf("MatchCondition = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEvalRule(t *testing.T) {
 	cfg := config.ADRPreset()
 	g := testRulesFixture()

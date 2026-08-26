@@ -142,6 +142,8 @@ func testAttrNot(v string) config.AttrCondition {
 	return config.AttrCondition{Not: &value}
 }
 
+func testStr(v string) *string { return &v }
+
 func testAssertIDs(t *testing.T, what string, got, want []model.ID) {
 	t.Helper()
 	if !slices.Equal(got, want) {
