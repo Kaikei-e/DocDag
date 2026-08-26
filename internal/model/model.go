@@ -109,6 +109,35 @@ func (n *Node) Attr(key string) (string, bool) {
 	if !ok || raw == nil {
 		return "", false
 	}
+	return scalar(raw)
+}
+
+// AttrList reports the frontmatter value under key as a list of strings. A
+// scalar is a one-element list, so a rule reads both shapes the same way; an
+// item that is not a scalar has no string form and is dropped.
+func (n *Node) AttrList(key string) ([]string, bool) {
+	raw, ok := n.Attrs[key]
+	if !ok || raw == nil {
+		return nil, false
+	}
+	items, isList := raw.([]any)
+	if !isList {
+		value, ok := scalar(raw)
+		if !ok {
+			return nil, false
+		}
+		return []string{value}, true
+	}
+	values := make([]string, 0, len(items))
+	for _, item := range items {
+		if value, ok := scalar(item); ok {
+			values = append(values, value)
+		}
+	}
+	return values, true
+}
+
+func scalar(raw any) (string, bool) {
 	switch value := raw.(type) {
 	case string:
 		return value, true

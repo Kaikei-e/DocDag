@@ -535,15 +535,46 @@ func (ix edgeIndex) match(g *model.Graph, cond config.Condition, id model.ID) bo
 		}
 	}
 	for key, want := range cond.Attr {
-		value, present := n.Attr(key)
-		if want.Eq != nil && (!present || !strings.EqualFold(value, *want.Eq)) {
-			return false
-		}
-		if want.Not != nil && present && strings.EqualFold(value, *want.Not) {
+		if !matchAttr(n, key, want) {
 			return false
 		}
 	}
 	return true
+}
+
+// matchAttr applies one attribute clause. A positive clause needs the attribute
+// to be there; a negative one is satisfied by an attribute that is not.
+func matchAttr(n *model.Node, key string, want config.AttrCondition) bool {
+	switch {
+	case want.Eq != nil:
+		value, present := n.Attr(key)
+		return present && strings.EqualFold(value, *want.Eq)
+	case want.Not != nil:
+		value, present := n.Attr(key)
+		return !present || !strings.EqualFold(value, *want.Not)
+	case want.Contains != nil:
+		items, present := n.AttrList(key)
+		return present && containsFold(items, *want.Contains)
+	case want.NotContains != nil:
+		items, present := n.AttrList(key)
+		return !present || !containsFold(items, *want.NotContains)
+	case want.SubsetOf != nil:
+		items, present := n.AttrList(key)
+		if !present {
+			return false
+		}
+		for _, item := range items {
+			if !containsFold(want.SubsetOf, item) {
+				return false
+			}
+		}
+		return true
+	}
+	return true
+}
+
+func containsFold(items []string, want string) bool {
+	return slices.ContainsFunc(items, func(item string) bool { return strings.EqualFold(item, want) })
 }
 
 // MatchCondition reports whether one node satisfies every clause of a rule
