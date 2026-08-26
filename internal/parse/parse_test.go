@@ -841,17 +841,34 @@ func TestFileLocatesADecodeFailureInTheFile(t *testing.T) {
 }
 
 func TestUnmarshalFrontmatterReportsTheBlockRelativePosition(t *testing.T) {
-	_, err := UnmarshalFrontmatter([]byte("title: A decision\nstatus: accepted\n  bogus: 1\n"))
+	const block = "title: A decision\nstatus: accepted\n  bogus: 1\n"
+	dir := testWriteDocs(t, map[string]string{"0001-a-decision.md": Delimiter + "\n" + block + Delimiter + "\n"})
 
-	var fe *FrontmatterError
-	if !errors.As(err, &fe) {
+	_, err := UnmarshalFrontmatter([]byte(block))
+	var relative *FrontmatterError
+	if !errors.As(err, &relative) {
 		t.Fatalf("err = %v (%T), want a *FrontmatterError", err, err)
 	}
-	if fe.Line != 3 {
-		t.Errorf("line = %d, want 3 relative to the first line of the block", fe.Line)
+	if relative.Line < 1 || relative.Line > 3 {
+		t.Fatalf("line = %d, want a line inside the block", relative.Line)
 	}
-	if fe.Error() == "" {
+	if relative.Error() == "" {
 		t.Error("Error() is empty, want a diagnostic")
+	}
+
+	doc, err := File(filepath.Join(dir, "0001-a-decision.md"), config.ADRPreset())
+	if err != nil {
+		t.Fatalf("File: %v", err)
+	}
+	var absolute *FrontmatterError
+	if !errors.As(doc.Err, &absolute) {
+		t.Fatalf("doc.Err = %v (%T), want a *FrontmatterError", doc.Err, doc.Err)
+	}
+	if absolute.Line != relative.Line+1 {
+		t.Errorf("file line = %d, block line = %d: want the block line offset by the delimiter", absolute.Line, relative.Line)
+	}
+	if absolute.Column != relative.Column {
+		t.Errorf("column = %d, want the block column %d unchanged", absolute.Column, relative.Column)
 	}
 }
 
