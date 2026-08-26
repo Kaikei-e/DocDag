@@ -85,6 +85,12 @@ func TestValidateTextReport(t *testing.T) {
 			},
 		},
 		{
+			name:     "a withdrawn document is in the vocabulary and binds nothing",
+			fixture:  "withdrawn",
+			wantExit: 0,
+			summary:  "OK: 2 docs, 0 typed edges, no cycles",
+		},
+		{
 			name:     "status drift fails",
 			fixture:  "status-drift",
 			wantExit: 1,
