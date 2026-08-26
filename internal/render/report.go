@@ -198,29 +198,6 @@ func rdjsonSeverity(s model.Severity) string {
 	return "ERROR"
 }
 
-// IDsText writes one identifier per line.
-func IDsText(w io.Writer, ids []model.ID) error {
-	out := &errWriter{w: w}
-	for _, id := range ids {
-		out.printf("%s\n", id)
-	}
-	if out.err != nil {
-		return fmt.Errorf("write identifiers: %w", out.err)
-	}
-	return nil
-}
-
-// IDsJSON writes identifiers as a JSON array.
-func IDsJSON(w io.Writer, ids []model.ID) error {
-	if ids == nil {
-		ids = []model.ID{}
-	}
-	if err := writeJSON(w, ids); err != nil {
-		return fmt.Errorf("write identifiers: %w", err)
-	}
-	return nil
-}
-
 // CreatedPath writes the path of a created document, as a bare line or as the
 // JSON object every command answers with under --format json.
 func CreatedPath(w io.Writer, path string, asJSON bool) error {
@@ -234,33 +211,6 @@ func CreatedPath(w io.Writer, path string, asJSON bool) error {
 	out.printf("%s\n", path)
 	if out.err != nil {
 		return fmt.Errorf("write created path: %w", out.err)
-	}
-	return nil
-}
-
-// QueryText writes one query result per line, marking reference-layer hits.
-func QueryText(w io.Writer, results []graph.QueryResult) error {
-	out := &errWriter{w: w}
-	for _, r := range results {
-		if r.Layer == graph.LayerReference {
-			out.printf("%s (reference)\n", r.ID)
-			continue
-		}
-		out.printf("%s\n", r.ID)
-	}
-	if out.err != nil {
-		return fmt.Errorf("write query results: %w", out.err)
-	}
-	return nil
-}
-
-// QueryJSON writes query results as JSON.
-func QueryJSON(w io.Writer, results []graph.QueryResult) error {
-	if results == nil {
-		results = []graph.QueryResult{}
-	}
-	if err := writeJSON(w, results); err != nil {
-		return fmt.Errorf("write query results: %w", err)
 	}
 	return nil
 }
