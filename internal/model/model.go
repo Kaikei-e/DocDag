@@ -65,6 +65,7 @@ const (
 	RuleInvalidRef             = "invalid_ref"
 	RuleDanglingReference      = "dangling_reference"
 	RuleEmptyEdge              = "empty_edge"
+	RuleInverseMismatch        = "inverse_mismatch"
 )
 
 // Node is one managed document. Line and KeyLines are the frontmatter

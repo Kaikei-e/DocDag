@@ -87,6 +87,9 @@ type EdgeSpec struct {
 	Key       string `yaml:"key"`
 	Acyclic   bool   `yaml:"acyclic"`
 	Direction string `yaml:"direction"`
+	// Inverse is the frontmatter key the edge's target must mirror the edge
+	// under. It declares no edges of its own.
+	Inverse string `yaml:"inverse,omitempty"`
 }
 
 // DerivedEdgeSpec declares an edge inferred from a frontmatter field value.
@@ -237,6 +240,7 @@ func (c Config) validateReferences() error {
 
 func (c Config) validateEdges() error {
 	declared := make(map[string]bool, len(c.Edges))
+	keys := make(map[string]bool, len(c.Edges))
 	for _, spec := range c.Edges {
 		switch {
 		case spec.Name == "":
@@ -250,6 +254,25 @@ func (c Config) validateEdges() error {
 			return fmt.Errorf("edge %q: %w", spec.Name, err)
 		}
 		declared[spec.Name] = true
+		keys[spec.Key] = true
+	}
+	return c.validateInverseKeys(keys)
+}
+
+// validateInverseKeys keeps an inverse key out of every other role: a key that
+// also declares edges would make one relation two contradictory things.
+func (c Config) validateInverseKeys(keys map[string]bool) error {
+	inverses := make(map[string]bool, len(c.Edges))
+	for _, spec := range c.Edges {
+		switch {
+		case spec.Inverse == "":
+			continue
+		case keys[spec.Inverse]:
+			return fmt.Errorf("edge %q: inverse key %q already declares edges: %w", spec.Name, spec.Inverse, model.ErrInvalidConfig)
+		case inverses[spec.Inverse]:
+			return fmt.Errorf("edge %q: inverse key %q is already the inverse of another edge: %w", spec.Name, spec.Inverse, model.ErrInvalidConfig)
+		}
+		inverses[spec.Inverse] = true
 	}
 	return nil
 }
