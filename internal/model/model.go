@@ -67,6 +67,7 @@ const (
 	RuleEmptyEdge              = "empty_edge"
 	RuleInverseMismatch        = "inverse_mismatch"
 	RuleCardinality            = "cardinality"
+	RuleImmutableViolation     = "immutable_violation"
 )
 
 // Node is one managed document. Line and KeyLines are the frontmatter
