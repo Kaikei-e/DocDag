@@ -159,6 +159,26 @@ func TestValidateLeavesProseThatIsNotIdentityShapedAlone(t *testing.T) {
 	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
 }
 
+func TestValidateReferenceLayerIsOptIn(t *testing.T) {
+	dir := fixture(t, "dangling-reference")
+
+	t.Run("unconfigured, the reference layer never fails a build", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir)
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	})
+
+	t.Run("configured, a link that names no document is a finding", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+			"0002-retry-failed-jobs-with-backoff.md:31: ERROR dangling_reference 0002:",
+		})
+	})
+}
+
 func TestValidateRejectsAStatusThatOnlyOpensWithAVocabularyWord(t *testing.T) {
 	dir := writeDocs(t, map[string]string{
 		"0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted by the architecture board\ndate: 2025-01-01\n---\n\n# A decision\n",

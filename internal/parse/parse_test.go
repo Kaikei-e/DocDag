@@ -801,6 +801,49 @@ func TestFileRecordsFrontmatterPositions(t *testing.T) {
 	}
 }
 
+func TestFileRecordsWhereTheBodyStarts(t *testing.T) {
+	cfg := config.ADRPreset()
+	tests := []struct {
+		name    string
+		content string
+		want    int
+	}{
+		{
+			name:    "the line after the closing delimiter",
+			content: "---\ntitle: A decision\nstatus: accepted\n---\n\n# A decision\n",
+			want:    5,
+		},
+		{
+			name:    "windows line endings",
+			content: "---\r\ntitle: A decision\r\nstatus: accepted\r\n---\r\n\r\n# A decision\r\n",
+			want:    5,
+		},
+		{
+			name:    "a byte order mark does not shift the body",
+			content: "\xef\xbb\xbf---\ntitle: A decision\nstatus: accepted\n---\n# A decision\n",
+			want:    5,
+		},
+		{
+			name:    "a file without frontmatter is all body",
+			content: "# Bare\n",
+			want:    1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := testWriteDocs(t, map[string]string{"0001-a-decision.md": tt.content})
+
+			doc, err := File(filepath.Join(dir, "0001-a-decision.md"), cfg)
+			if err != nil {
+				t.Fatalf("File: %v", err)
+			}
+			if doc.BodyLine != tt.want {
+				t.Errorf("bodyLine = %d, want %d", doc.BodyLine, tt.want)
+			}
+		})
+	}
+}
+
 func TestFileWithoutFrontmatterHasNoPositions(t *testing.T) {
 	dir := testWriteDocs(t, map[string]string{"0001-bare.md": "# Bare\n"})
 

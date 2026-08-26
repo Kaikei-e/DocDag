@@ -157,6 +157,33 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:   "reference validation switched off explicitly",
+			mutate: func(c *Config) { c.References.Dangling = ReferencesOff },
+		},
+		{
+			name:   "reference validation at warning severity",
+			mutate: func(c *Config) { c.References.Dangling = string(model.SeverityWarn) },
+		},
+		{
+			name:    "an unknown reference validation mode",
+			mutate:  func(c *Config) { c.References.Dangling = "fatal" },
+			wantErr: true,
+		},
+		{
+			name:   "the scannable regions",
+			mutate: func(c *Config) { c.References.Scan = []string{ScanBody, ScanFrontmatter} },
+		},
+		{
+			name:    "an unknown reference scan region",
+			mutate:  func(c *Config) { c.References.Scan = []string{"footnotes"} },
+			wantErr: true,
+		},
+		{
+			name:    "a reference pattern that does not compile",
+			mutate:  func(c *Config) { c.References.Pattern = "(" },
+			wantErr: true,
+		},
+		{
 			name:    "a rule condition naming an undeclared edge type",
 			mutate:  func(c *Config) { c.Rules[0].When.Inbound = "relates-to" },
 			wantErr: true,

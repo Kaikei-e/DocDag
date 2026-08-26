@@ -348,6 +348,108 @@ func TestBuildReferenceLayerTakesOnlyIdentityShapedLinks(t *testing.T) {
 	}
 }
 
+func TestBuildReportsDanglingReferences(t *testing.T) {
+	withDangling := func(mode string) config.Config {
+		cfg := config.ADRPreset()
+		cfg.References.Dangling = mode
+		return cfg
+	}
+
+	t.Run("the reference layer is unvalidated by default", func(t *testing.T) {
+		docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted"}, "See [[0099]].\n")}
+
+		g := Build(docs, config.ADRPreset())
+
+		if len(g.Findings) != 0 {
+			t.Fatalf("findings = %+v, want none", g.Findings)
+		}
+	})
+
+	t.Run("an enabled corpus reports the missing target at its line", func(t *testing.T) {
+		docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted"}, "First line.\n\nSee [[0099]].\n")}
+
+		g := Build(docs, withDangling(string(model.SeverityError)))
+
+		f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingReference, model.SeverityError, "0001")
+		want := model.Location{Path: "0001.md", Line: testBodyLine + 2}
+		if f.Location != want {
+			t.Errorf("location = %+v, want %+v", f.Location, want)
+		}
+		if !strings.Contains(f.Detail, "0099") || !strings.Contains(f.Detail, string(parse.LinkWiki)) {
+			t.Errorf("detail = %q, want the link kind and the missing target", f.Detail)
+		}
+	})
+
+	t.Run("the configured mode sets the severity", func(t *testing.T) {
+		docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted"}, "See [[0099]].\n")}
+
+		g := Build(docs, withDangling(string(model.SeverityWarn)))
+
+		testAssertSingleFinding(t, g.Findings, model.RuleDanglingReference, model.SeverityWarn, "0001")
+	})
+
+	t.Run("a markdown link to a missing document is reported too", func(t *testing.T) {
+		docs := []*parse.Document{
+			testDoc("0001", map[string]any{"status": "accepted"}, "See [the queue](0099-hand-off-through-a-queue.md).\n"),
+		}
+
+		g := Build(docs, withDangling(string(model.SeverityError)))
+
+		f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingReference, model.SeverityError, "0001")
+		if !strings.Contains(f.Detail, string(parse.LinkMarkdown)) {
+			t.Errorf("detail = %q, want the markdown link kind", f.Detail)
+		}
+	})
+
+	t.Run("each link to one missing target is its own finding", func(t *testing.T) {
+		docs := []*parse.Document{
+			testDoc("0001", map[string]any{"status": "accepted"},
+				"See [[0099]].\n\nAnd [the other](0099-a-decision.md).\n"),
+		}
+
+		g := Build(docs, withDangling(string(model.SeverityError)))
+
+		findings := testFindingsFor(g.Findings, model.RuleDanglingReference)
+		if len(findings) != 2 {
+			t.Fatalf("findings = %+v, want one per link", findings)
+		}
+		if findings[0].Location.Line == findings[1].Location.Line {
+			t.Errorf("findings = %+v, want the two lines kept apart", findings)
+		}
+	})
+
+	t.Run("prose that names no identity is never dangling", func(t *testing.T) {
+		docs := []*parse.Document{
+			testDoc("0001", map[string]any{"status": "accepted"},
+				"See [[upstream]], [[3days-recap]] and `[[0099]]`.\n"),
+		}
+
+		g := Build(docs, withDangling(string(model.SeverityError)))
+
+		if len(g.Findings) != 0 {
+			t.Fatalf("findings = %+v, want none", g.Findings)
+		}
+	})
+
+	t.Run("frontmatter is scanned only when asked for", func(t *testing.T) {
+		frontmatter := map[string]any{"status": "accepted", "relates": "see [[0099]]"}
+		cfg := withDangling(string(model.SeverityError))
+
+		if g := Build([]*parse.Document{testDoc("0001", frontmatter, "")}, cfg); len(g.Findings) != 0 {
+			t.Fatalf("findings = %+v, want none while only the body is scanned", g.Findings)
+		}
+
+		cfg.References.Scan = []string{config.ScanBody, config.ScanFrontmatter}
+		doc := testDoc("0001", frontmatter, "")
+		g := Build([]*parse.Document{doc}, cfg)
+
+		f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingReference, model.SeverityError, "0001")
+		if f.Location.Line != doc.KeyLines["relates"] {
+			t.Errorf("location = %+v, want the line of the key holding the link", f.Location)
+		}
+	})
+}
+
 func TestBuildRejectsAFrontmatterReferenceThatIsNotIdentityShaped(t *testing.T) {
 	cfg := config.ADRPreset()
 	docs := []*parse.Document{
