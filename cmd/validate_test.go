@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"maps"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -174,6 +176,90 @@ func TestValidateLeavesProseThatIsNotIdentityShapedAlone(t *testing.T) {
 
 	assertExit(t, got, 0)
 	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+}
+
+const testAcceptedDocument = "---\ntitle: Serve images from the application\nstatus: accepted\ndate: 2025-01-01\n---\n\n" +
+	"# Serve images from the application\n\n## Decision Outcome\n\nThe application resizes and serves images itself.\n"
+
+// gitRepo commits an ADR corpus so a history check has a revision to compare
+// against. Identity comes from flags, so a runner without a git identity works.
+func gitRepo(t *testing.T, files map[string]string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not on PATH")
+	}
+	dir := writeDocs(t, files)
+	git(t, dir, "init", "--quiet")
+	git(t, dir, "add", "-A")
+	git(t, dir,
+		"-c", "user.name=DocDag Test",
+		"-c", "user.email=test@example.test",
+		"-c", "commit.gpgsign=false",
+		"commit", "--quiet", "-m", "the first revision")
+	return dir
+}
+
+func git(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+filepath.Join(dir, "nonexistent-gitconfig"), "GIT_CONFIG_NOSYSTEM=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v: %s", strings.Join(args, " "), err, out)
+	}
+}
+
+func TestValidateImmutableSince(t *testing.T) {
+	corpus := map[string]string{"docs/adr/0001-serve-images-from-the-application.md": testAcceptedDocument}
+
+	t.Run("an untouched history passes", func(t *testing.T) {
+		t.Chdir(gitRepo(t, corpus))
+
+		got := run(t, "validate", "--immutable-since", "HEAD")
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	})
+
+	t.Run("a rewritten accepted document fails", func(t *testing.T) {
+		dir := gitRepo(t, corpus)
+		t.Chdir(dir)
+		rewritten := strings.Replace(testAcceptedDocument, "The application resizes", "A CDN resizes", 1)
+		if err := os.WriteFile(filepath.Join(dir, "docs", "adr", "0001-serve-images-from-the-application.md"), []byte(rewritten), 0o600); err != nil {
+			t.Fatalf("rewrite: %v", err)
+		}
+
+		got := run(t, "validate", "--immutable-since", "HEAD")
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+			"0001-serve-images-from-the-application.md:11: ERROR immutable_violation 0001:",
+		})
+	})
+
+	t.Run("the check is off unless it is asked for", func(t *testing.T) {
+		dir := gitRepo(t, corpus)
+		t.Chdir(dir)
+		rewritten := strings.Replace(testAcceptedDocument, "The application resizes", "A CDN resizes", 1)
+		if err := os.WriteFile(filepath.Join(dir, "docs", "adr", "0001-serve-images-from-the-application.md"), []byte(rewritten), 0o600); err != nil {
+			t.Fatalf("rewrite: %v", err)
+		}
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	})
+
+	t.Run("a corpus outside a repository is a configuration error", func(t *testing.T) {
+		t.Chdir(writeDocs(t, corpus))
+
+		got := run(t, "validate", "--immutable-since", "HEAD")
+
+		assertExit(t, got, 3)
+		if got.stderr == "" {
+			t.Error("stderr is empty, want a diagnostic naming the missing repository")
+		}
+	})
 }
 
 func TestValidateRuleAlternativesAndNegation(t *testing.T) {
