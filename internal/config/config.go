@@ -106,11 +106,29 @@ type DerivedEdgeSpec struct {
 	Direction string `yaml:"direction"`
 }
 
-// AttrCondition matches one frontmatter attribute. Exactly one of Eq or Not is
-// set.
+// AttrCondition matches one frontmatter attribute. Exactly one operand is set.
+// Eq and Not read a scalar; the rest read the value as a list, a scalar being a
+// one-element list.
 type AttrCondition struct {
-	Eq  *string `yaml:"eq,omitempty"`
-	Not *string `yaml:"not,omitempty"`
+	Eq          *string  `yaml:"eq,omitempty"`
+	Not         *string  `yaml:"not,omitempty"`
+	Contains    *string  `yaml:"contains,omitempty"`
+	NotContains *string  `yaml:"not_contains,omitempty"`
+	SubsetOf    []string `yaml:"subset_of,omitempty"`
+}
+
+// Operands counts the operands an attribute condition sets, which must be one.
+func (a AttrCondition) Operands() int {
+	set := 0
+	for _, operand := range []*string{a.Eq, a.Not, a.Contains, a.NotContains} {
+		if operand != nil {
+			set++
+		}
+	}
+	if a.SubsetOf != nil {
+		set++
+	}
+	return set
 }
 
 // Condition is the fixed, tiny rule vocabulary. Every populated field is ANDed.
@@ -347,9 +365,9 @@ func (c Config) validateRules() error {
 			}
 		}
 		for _, key := range slices.Sorted(maps.Keys(rule.When.Attr)) {
-			cond := rule.When.Attr[key]
-			if (cond.Eq == nil) == (cond.Not == nil) {
-				return fmt.Errorf("rule %q: attribute %q needs exactly one of eq and not: %w", rule.Name, key, model.ErrInvalidConfig)
+			if rule.When.Attr[key].Operands() != 1 {
+				return fmt.Errorf("rule %q: attribute %q needs exactly one of eq, not, contains, not_contains and subset_of: %w",
+					rule.Name, key, model.ErrInvalidConfig)
 			}
 		}
 	}
