@@ -3,7 +3,6 @@
 package graph
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 
@@ -41,12 +40,12 @@ func Build(docs []*parse.Document, cfg config.Config) (*model.Graph, error) {
 			t := model.EdgeType(spec.Name)
 			refs, invalid := parse.Refs(doc.Frontmatter, spec.Key)
 			for _, entry := range invalid {
-				findings = append(findings, unresolvableRef(doc.ID, t, entry))
+				findings = append(findings, unresolvableRef(doc, spec.Key, t, entry))
 			}
 			for _, ref := range refs {
 				target, ok := normalizer.Normalize(ref)
 				if !ok {
-					findings = append(findings, unresolvableRef(doc.ID, t, ref))
+					findings = append(findings, unresolvableRef(doc, spec.Key, t, ref))
 					continue
 				}
 				recordEdge(origins, doc.ID, target, t, spec.Direction, model.OriginStructured)
@@ -56,7 +55,7 @@ func Build(docs []*parse.Document, cfg config.Config) (*model.Graph, error) {
 			t := model.EdgeType(derived.Spec.Edge)
 			target, ok := normalizer.Normalize(derived.Target)
 			if !ok {
-				findings = append(findings, unresolvableRef(doc.ID, t, derived.Target))
+				findings = append(findings, unresolvableRef(doc, derived.Field, t, derived.Target))
 				continue
 			}
 			recordEdge(origins, doc.ID, target, t, derived.Spec.Direction, model.OriginDerived)
@@ -86,9 +85,11 @@ func Build(docs []*parse.Document, cfg config.Config) (*model.Graph, error) {
 
 func buildNode(doc *parse.Document, cfg config.Config) *model.Node {
 	n := &model.Node{
-		ID:    doc.ID,
-		Path:  doc.Path,
-		Attrs: make(map[string]any, len(doc.Frontmatter)),
+		ID:       doc.ID,
+		Path:     doc.Path,
+		Attrs:    make(map[string]any, len(doc.Frontmatter)),
+		Line:     doc.FrontmatterLine,
+		KeyLines: doc.KeyLines,
 	}
 	for key, value := range doc.Frontmatter {
 		n.Attrs[key] = value
@@ -121,12 +122,13 @@ func recordEdge(origins map[edgeKey]model.Origin, doc, target model.ID, t model.
 	origins[k] = origin
 }
 
-func unresolvableRef(id model.ID, t model.EdgeType, ref string) model.Finding {
+func unresolvableRef(doc *parse.Document, key string, t model.EdgeType, ref string) model.Finding {
 	return model.Finding{
 		Severity: model.SeverityError,
 		Rule:     model.RuleDanglingRef,
-		ID:       id,
-		Detail:   fmt.Sprintf("%s reference %q does not name a document", t, ref),
+		ID:       doc.ID,
+		Detail:   danglingDetail(t, ref),
+		Location: model.Locate(doc.Path, doc.FrontmatterLine, doc.KeyLines, key),
 	}
 }
 

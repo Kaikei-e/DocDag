@@ -258,7 +258,7 @@ func TestValidateJSONReport(t *testing.T) {
 	}
 }
 
-func TestValidateOrdersFindingsBySeverityRuleThenID(t *testing.T) {
+func TestValidateOrdersFindingsBySeverityThenLocation(t *testing.T) {
 	dir := writeDocs(t, map[string]string{
 		"0001-alpha.md":   "---\ntitle: Alpha\nstatus: superseded\ndate: 2025-01-01\n---\n\n# Alpha\n",
 		"0002-beta.md":    "---\ntitle: Beta\nstatus: accepted\nsupersedes:\n  - 0009\ndate: 2025-01-02\n---\n\n# Beta\n",
@@ -271,8 +271,8 @@ func TestValidateOrdersFindingsBySeverityRuleThenID(t *testing.T) {
 	assertExit(t, got, 1)
 	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
 		"ERROR dangling_ref 0002:",
-		"ERROR dangling_ref 0005:",
 		"ERROR status_drift 0003:",
+		"ERROR dangling_ref 0005:",
 		"WARN superseded_orphan 0001:",
 	})
 

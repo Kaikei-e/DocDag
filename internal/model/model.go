@@ -64,14 +64,37 @@ const (
 	RuleSupersededOrphan       = "superseded_orphan"
 )
 
-// Node is one managed document.
+// Node is one managed document. Line and KeyLines are the frontmatter
+// positions the parser recorded, so a finding can point at the key it is about.
 type Node struct {
-	ID     ID             `json:"id"`
-	Path   string         `json:"path"`
-	Title  string         `json:"title"`
-	Status string         `json:"status"`
-	Date   string         `json:"date"`
-	Attrs  map[string]any `json:"-"`
+	ID       ID             `json:"id"`
+	Path     string         `json:"path"`
+	Title    string         `json:"title"`
+	Status   string         `json:"status"`
+	Date     string         `json:"date"`
+	Attrs    map[string]any `json:"-"`
+	Line     int            `json:"-"`
+	KeyLines map[string]int `json:"-"`
+}
+
+// Location returns where a finding about this document belongs: the line of
+// the first named frontmatter key that the document carries, or the opening
+// delimiter when it carries none of them.
+func (n *Node) Location(keys ...string) Location {
+	return Locate(n.Path, n.Line, n.KeyLines, keys...)
+}
+
+// Locate resolves a finding position inside a file: the line of the first
+// named key the file carries, or fallback when it carries none of them.
+func Locate(path string, fallback int, lines map[string]int, keys ...string) Location {
+	loc := Location{Path: path, Line: fallback}
+	for _, key := range keys {
+		if line, ok := lines[key]; ok {
+			loc.Line = line
+			break
+		}
+	}
+	return loc
 }
 
 // Attr reports the scalar frontmatter value stored under key. A list or mapping
@@ -99,12 +122,24 @@ type Edge struct {
 	Origin Origin   `json:"origin"`
 }
 
-// Finding is one validation result.
+// Location is a position in a file. Line and Column are 1-based; zero means
+// the position is unknown.
+type Location struct {
+	Path   string `json:"path"`
+	Line   int    `json:"line,omitempty"`
+	Column int    `json:"column,omitempty"`
+}
+
+// Finding is one validation result. Location is where the reader should look;
+// Related names the other files the finding involves.
 type Finding struct {
-	Severity Severity `json:"severity"`
-	Rule     string   `json:"rule"`
-	ID       ID       `json:"id"`
-	Detail   string   `json:"detail"`
+	Severity Severity   `json:"severity"`
+	Rule     string     `json:"rule"`
+	ID       ID         `json:"id"`
+	Detail   string     `json:"detail"`
+	Location Location   `json:"location"`
+	Related  []Location `json:"related,omitempty"`
+	Fix      string     `json:"fix,omitempty"`
 }
 
 // Summary is the aggregate reported alongside validation findings.
