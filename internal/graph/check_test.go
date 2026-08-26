@@ -431,6 +431,54 @@ func TestCheckCyclesOverTheUnionOfAcyclicEdgeTypes(t *testing.T) {
 		}
 	})
 
+	t.Run("a cross-type cycle sharing a component with a single-type one is still reported", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNode("0001", config.StatusSuperseded),
+				testNode("0002", config.StatusSuperseded),
+				testNode("0003", config.StatusAccepted),
+			},
+			[]model.Edge{
+				testEdge("0001", "0002", config.EdgeSupersedes),
+				testEdge("0002", "0001", config.EdgeSupersedes),
+				testEdge("0002", "0003", config.EdgeDependsOn),
+				testEdge("0003", "0001", config.EdgeDependsOn),
+			},
+			nil,
+		)
+
+		got := testFindingsFor(CheckCycles(g, union()), model.RuleCycle)
+
+		if len(got) != 2 {
+			t.Fatalf("findings = %+v, want the supersedes cycle and the one only the union closes", got)
+		}
+		details := strings.Join([]string{got[0].Detail, got[1].Detail}, "\n")
+		for _, want := range []string{"supersedes cycle: 0001 -> 0002 -> 0001", "cycle over supersedes, depends-on: 0001 -> 0002 -> 0003 -> 0001"} {
+			if !strings.Contains(details, want) {
+				t.Errorf("details = %q, want them to carry %q", details, want)
+			}
+		}
+	})
+
+	t.Run("a cycle every edge type carries on its own is not a union cycle", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0001", config.StatusSuperseded), testNode("0002", config.StatusSuperseded)},
+			[]model.Edge{
+				testEdge("0001", "0002", config.EdgeSupersedes),
+				testEdge("0002", "0001", config.EdgeSupersedes),
+				testEdge("0001", "0002", config.EdgeDependsOn),
+				testEdge("0002", "0001", config.EdgeDependsOn),
+			},
+			nil,
+		)
+
+		got := testFindingsFor(CheckCycles(g, union()), model.RuleCycle)
+
+		if len(got) != 2 {
+			t.Fatalf("findings = %+v, want one cycle per edge type and nothing extra", got)
+		}
+	})
+
 	t.Run("a cycle inside one edge type is reported once", func(t *testing.T) {
 		g := testGraph(
 			[]*model.Node{testNode("0001", config.StatusSuperseded), testNode("0002", config.StatusSuperseded)},
