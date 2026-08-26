@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -91,13 +92,20 @@ func Kebab(title string) string {
 	return b.String()
 }
 
-// Filename builds the `<id>-<kebab-title>.md` file name.
-func Filename(id model.ID, title string) string {
+// separatedSlug matches the slug placeholder together with the separator that
+// joins it to the identifier, so a title yielding no slug leaves no orphan
+// separator behind.
+var separatedSlug = regexp.MustCompile(`[-_]?\{slug\}[-_]?`)
+
+// Filename builds a document name from the configured name template.
+func Filename(cfg config.Config, id model.ID, title string) string {
+	name := cfg.FilenameTemplate()
 	slug := Kebab(title)
 	if slug == "" {
-		return id.String() + ".md"
+		name = separatedSlug.ReplaceAllString(name, "")
 	}
-	return id.String() + "-" + slug + ".md"
+	name = strings.ReplaceAll(name, "{slug}", slug)
+	return strings.ReplaceAll(name, "{id}", id.String())
 }
 
 // LoadTemplate reads the configured template file, falling back to
@@ -313,7 +321,7 @@ func Create(g *model.Graph, cfg config.Config, req Request) (string, error) {
 		rewrites = append(rewrites, planned)
 	}
 
-	path := filepath.Join(cfg.Dir, Filename(id, req.Title))
+	path := filepath.Join(cfg.Dir, Filename(cfg, id, req.Title))
 	if err := writeNew(path, doc); err != nil {
 		return "", err
 	}

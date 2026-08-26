@@ -123,6 +123,9 @@ func Merge(base, override Config) Config {
 	if override.Template != "" {
 		merged.Template = override.Template
 	}
+	if override.Filename != "" {
+		merged.Filename = override.Filename
+	}
 	if len(override.StatusValues) > 0 {
 		merged.StatusValues = slices.Clone(override.StatusValues)
 	}

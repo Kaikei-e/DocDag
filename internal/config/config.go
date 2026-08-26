@@ -7,6 +7,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/Kaikei-e/DocDag/internal/model"
 )
@@ -129,6 +130,36 @@ type Config struct {
 	DerivedEdges []DerivedEdgeSpec `yaml:"derived_edges,omitempty"`
 	Rules        []Rule            `yaml:"rules,omitempty"`
 	Template     string            `yaml:"template,omitempty"`
+	Filename     string            `yaml:"filename,omitempty"`
+}
+
+// DefaultFilename is the name template a created document is written under.
+// `{id}` is the padded identifier and `{slug}` the kebab-cased title.
+const DefaultFilename = "{id}-{slug}.md"
+
+// FilenameTemplate returns the configured document name template, or the
+// default when the corpus configures none.
+func (c Config) FilenameTemplate() string {
+	if c.Filename == "" {
+		return DefaultFilename
+	}
+	return c.Filename
+}
+
+// validateFilename holds the name template to what discovery can find again:
+// a document is identified by the identifier in its name, and it lives in the
+// documents directory rather than below it.
+func (c Config) validateFilename() error {
+	if c.Filename == "" {
+		return nil
+	}
+	if !strings.Contains(c.Filename, "{id}") {
+		return fmt.Errorf("filename %q carries no {id}: %w", c.Filename, model.ErrInvalidConfig)
+	}
+	if strings.ContainsAny(c.Filename, `/\`) {
+		return fmt.Errorf("filename %q carries a path separator: %w", c.Filename, model.ErrInvalidConfig)
+	}
+	return nil
 }
 
 // Edge returns the spec of one typed edge.
@@ -171,6 +202,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validateRules(); err != nil {
+		return err
+	}
+	if err := c.validateFilename(); err != nil {
 		return err
 	}
 	return c.validateDerivedEdges()
