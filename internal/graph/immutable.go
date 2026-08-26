@@ -113,8 +113,12 @@ type change struct {
 func frontmatterChanges(cfg config.Config, was, now map[string]any) []change {
 	inverse := inverseKeys(cfg)
 	keys := make(map[string]bool, len(was)+len(now))
-	maps.Copy(keys, boolSet(was))
-	maps.Copy(keys, boolSet(now))
+	for key := range was {
+		keys[key] = true
+	}
+	for key := range now {
+		keys[key] = true
+	}
 
 	changes := []change{}
 	for _, key := range slices.Sorted(maps.Keys(keys)) {
@@ -200,12 +204,4 @@ func reportedPath(root, repoRoot, path string) string {
 		return filepath.ToSlash(abs)
 	}
 	return filepath.ToSlash(rel)
-}
-
-func boolSet(m map[string]any) map[string]bool {
-	keys := make(map[string]bool, len(m))
-	for key := range m {
-		keys[key] = true
-	}
-	return keys
 }

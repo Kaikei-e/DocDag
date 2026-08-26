@@ -627,7 +627,9 @@ func ruleLocation(cfg config.Config, n *model.Node, cond config.Condition) model
 	attrs := make(map[string]bool)
 	var edges []string
 	for _, nested := range cond.Conditions() {
-		maps.Copy(attrs, boolKeys(nested.Attr))
+		for key := range nested.Attr {
+			attrs[key] = true
+		}
 		for _, clause := range nested.EdgeClauses() {
 			if spec, ok := cfg.Edge(model.EdgeType(clause.Edge)); ok {
 				edges = append(edges, spec.Key)
@@ -636,14 +638,6 @@ func ruleLocation(cfg config.Config, n *model.Node, cond config.Condition) model
 	}
 	keys := append(slices.Sorted(maps.Keys(attrs)), edges...)
 	return n.Location(append(keys, statusField(cfg))...)
-}
-
-func boolKeys(attr map[string]config.AttrCondition) map[string]bool {
-	keys := make(map[string]bool, len(attr))
-	for key := range attr {
-		keys[key] = true
-	}
-	return keys
 }
 
 // Validate runs the structural checks and the configured rules, returning the
