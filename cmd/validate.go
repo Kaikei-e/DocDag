@@ -21,7 +21,7 @@ func newValidateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			findings := graph.Validate(g, cfg)
+			findings := graph.Suggest(graph.Validate(g, cfg), g, cfg)
 			summary := graph.Summarize(g, findings)
 			out := cmd.OutOrStdout()
 			switch format {

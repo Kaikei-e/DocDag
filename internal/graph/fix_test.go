@@ -44,7 +44,7 @@ func TestSuggestNamesWhatToType(t *testing.T) {
 				Detail:   `supersedes reference "0002x" does not name a document`,
 				Location: model.Location{Path: "0001.md", Line: 4},
 			},
-			want: "did you mean 0002, 0001 or 0003?",
+			want: "did you mean 0002, 0003 or 0042?",
 		},
 		{
 			name: "a reference-layer dangling link is suggested for too",

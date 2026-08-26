@@ -140,8 +140,8 @@ func TestValidateSuggestsAFixUnderTheFinding(t *testing.T) {
 	if len(all) != 2 {
 		t.Fatalf("stdout = %q, want the finding and its fix", got.stdout)
 	}
-	if all[1] != "  fix: did you mean 0002 or 0001?" {
-		t.Errorf("fix line = %q, want the nearest documents suggested", all[1])
+	if all[1] != "  fix: did you mean 0001?" {
+		t.Errorf("fix line = %q, want the nearest document suggested", all[1])
 	}
 }
 
