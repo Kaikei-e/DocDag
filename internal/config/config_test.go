@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -254,6 +255,68 @@ func TestConfigValidate(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("Validate = %v, want no error", err)
+			}
+		})
+	}
+}
+
+func TestConditionEdgeClauses(t *testing.T) {
+	tests := []struct {
+		name string
+		cond Condition
+		want []EdgeClause
+	}{
+		{name: "an empty condition names no edge"},
+		{
+			name: "every clause of the vocabulary, in declaration order",
+			cond: Condition{
+				Inbound:     "supersedes",
+				NotInbound:  "depends-on",
+				Outbound:    "amends",
+				NotOutbound: "relates-to",
+			},
+			want: []EdgeClause{
+				{Edge: "supersedes", Inbound: true},
+				{Edge: "depends-on", Inbound: true, Negate: true},
+				{Edge: "amends"},
+				{Edge: "relates-to", Negate: true},
+			},
+		},
+		{
+			name: "only the populated clauses come back",
+			cond: Condition{NotInbound: "supersedes", Attr: map[string]AttrCondition{"status": testEq("superseded")}},
+			want: []EdgeClause{{Edge: "supersedes", Inbound: true, Negate: true}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cond.EdgeClauses(); !slices.Equal(got, tt.want) {
+				t.Fatalf("EdgeClauses = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsAnUndeclaredEdgeInEveryClause(t *testing.T) {
+	clauses := map[string]func(edge string) Condition{
+		"inbound":      func(edge string) Condition { return Condition{Inbound: edge} },
+		"not_inbound":  func(edge string) Condition { return Condition{NotInbound: edge} },
+		"outbound":     func(edge string) Condition { return Condition{Outbound: edge} },
+		"not_outbound": func(edge string) Condition { return Condition{NotOutbound: edge} },
+	}
+	for name, build := range clauses {
+		t.Run(name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.Rules = []Rule{{Name: "r", Severity: model.SeverityWarn, When: build("relates-to"), Message: "m"}}
+
+			err := cfg.Validate()
+
+			if !errors.Is(err, model.ErrInvalidConfig) {
+				t.Fatalf("Validate = %v, want an invalid configuration error", err)
+			}
+			if !strings.Contains(err.Error(), "relates-to") {
+				t.Errorf("error = %v, want it to name the undeclared edge type", err)
 			}
 		})
 	}
