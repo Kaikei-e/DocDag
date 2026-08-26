@@ -68,7 +68,7 @@ func newValidateCmd() *cobra.Command {
 				return ioErr(err)
 			}
 			if hidden := len(findings) - len(reported); hidden > 0 {
-				fmt.Fprintf(cmd.ErrOrStderr(), "(%d findings hidden)\n", hidden)
+				fmt.Fprintf(cmd.ErrOrStderr(), "(%d %s hidden)\n", hidden, plural(hidden, "finding"))
 			}
 			if summary.Errors > 0 {
 				return &cliError{code: exitFailure}
@@ -79,6 +79,13 @@ func newValidateCmd() *cobra.Command {
 	cmd.Flags().StringArray(flagTouching, nil, "report only the findings about these files or directories (repeatable)")
 	cmd.Flags().String(flagImmutableSince, "", "check that documents closed at <rev> only grew since")
 	return cmd
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return noun
+	}
+	return noun + "s"
 }
 
 // immutableFindings runs the append-only history check when a revision names
