@@ -273,6 +273,16 @@ func testCorpus(t *testing.T) (string, *model.Graph, config.Config) {
 	return dir, g, cfg
 }
 
+// testCreate plans a document and applies the plan, which is the sequence the
+// CLI runs.
+func testCreate(g *model.Graph, cfg config.Config, req Request) (string, error) {
+	plan, err := NewPlan(g, cfg, req)
+	if err != nil {
+		return "", err
+	}
+	return plan.Apply()
+}
+
 func testFixedDate() time.Time {
 	return time.Date(2026, time.January, 5, 0, 0, 0, 0, time.UTC)
 }
@@ -296,7 +306,7 @@ date: 2026-01-05
 `
 
 	dir, g, cfg := testCorpus(t)
-	path, err := Create(g, cfg, Request{Title: "Rotate signing keys weekly", Date: testFixedDate()})
+	path, err := testCreate(g, cfg, Request{Title: "Rotate signing keys weekly", Date: testFixedDate()})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -340,7 +350,7 @@ depends-on:
 	superseded := filepath.Join(dir, "0001-authenticate-with-session-cookies.md")
 	untouched := filepath.Join(dir, "0002-authenticate-with-api-keys.md")
 
-	path, err := Create(g, cfg, Request{
+	path, err := testCreate(g, cfg, Request{
 		Title:      "Rotate signing keys weekly",
 		Supersedes: []string{"0001"},
 		DependsOn:  []string{"0002"},
@@ -379,7 +389,7 @@ depends-on:
 func TestCreateUnknownSupersedesReference(t *testing.T) {
 	dir, g, cfg := testCorpus(t)
 
-	path, err := Create(g, cfg, Request{
+	path, err := testCreate(g, cfg, Request{
 		Title:      "Rotate signing keys weekly",
 		Supersedes: []string{"0009"},
 		Date:       testFixedDate(),
@@ -396,7 +406,7 @@ func TestCreateRefusesToOverwrite(t *testing.T) {
 	_, g, cfg := testCorpus(t)
 	req := Request{Title: "Rotate signing keys weekly", Date: testFixedDate()}
 
-	path, err := Create(g, cfg, req)
+	path, err := testCreate(g, cfg, req)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -405,7 +415,7 @@ func TestCreateRefusesToOverwrite(t *testing.T) {
 		t.Fatalf("read created document: %v", err)
 	}
 
-	if _, err := Create(g, cfg, req); err == nil {
+	if _, err := testCreate(g, cfg, req); err == nil {
 		t.Error("Create overwrote an existing document without an error")
 	}
 	after, err := os.ReadFile(path)
@@ -420,7 +430,7 @@ func TestCreateRefusesToOverwrite(t *testing.T) {
 func TestCreateWithoutADateUsesToday(t *testing.T) {
 	_, g, cfg := testCorpus(t)
 
-	path, err := Create(g, cfg, Request{Title: "Rotate signing keys weekly"})
+	path, err := testCreate(g, cfg, Request{Title: "Rotate signing keys weekly"})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -449,7 +459,7 @@ func TestCreateLeavesNothingHalfApplied(t *testing.T) {
 		t.Fatalf("write malformed document: %v", err)
 	}
 
-	path, err := Create(g, cfg, Request{
+	path, err := testCreate(g, cfg, Request{
 		Title:      "Rotate signing keys weekly",
 		Supersedes: []string{"0001", "0002"},
 		Date:       testFixedDate(),

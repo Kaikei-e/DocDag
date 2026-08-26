@@ -393,16 +393,6 @@ func (p Plan) Apply() (string, error) {
 	return p.Path, nil
 }
 
-// Create writes the new document and rewrites the status of every document it
-// supersedes. It returns the path of the created file.
-func Create(g *model.Graph, cfg config.Config, req Request) (string, error) {
-	plan, err := NewPlan(g, cfg, req)
-	if err != nil {
-		return "", err
-	}
-	return plan.Apply()
-}
-
 // writeNew refuses to touch an existing document: creating a decision must
 // never overwrite one.
 func writeNew(path string, content []byte) error {

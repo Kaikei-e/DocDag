@@ -12,12 +12,6 @@ import (
 	"github.com/Kaikei-e/DocDag/internal/model"
 )
 
-// Rule names and vocabulary this pass knows a remedy for but does not own.
-const (
-	ruleDanglingReference = "dangling_reference"
-	statusWithdrawn       = "withdrawn"
-)
-
 // suggestionCandidates is how many existing documents a "did you mean" names.
 const suggestionCandidates = 3
 
@@ -36,13 +30,13 @@ func Suggest(findings []model.Finding, g *model.Graph, cfg config.Config) []mode
 
 func suggestion(f model.Finding, g *model.Graph, cfg config.Config) string {
 	switch f.Rule {
-	case model.RuleDanglingRef, ruleDanglingReference:
+	case model.RuleDanglingRef, model.RuleDanglingReference:
 		return didYouMean(g, f.Detail, f.ID)
 	case model.RuleStatusDrift:
 		return fmt.Sprintf("set %s: %s in %s", statusField(cfg), config.StatusSuperseded, f.Location.Path)
 	case model.RuleSupersededOrphan:
 		return fmt.Sprintf("declare %s: %s in the replacing document, or set %s: %s",
-			supersedesKey(cfg), f.ID, statusField(cfg), statusWithdrawn)
+			supersedesKey(cfg), f.ID, statusField(cfg), config.StatusWithdrawn)
 	case model.RuleUnstructuredSupersedes:
 		return declareEdge(g, cfg, f.ID)
 	case model.RuleUnknownStatus:
