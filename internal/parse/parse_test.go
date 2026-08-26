@@ -915,6 +915,27 @@ func TestUnmarshalFrontmatterReportsTheBlockRelativePosition(t *testing.T) {
 	}
 }
 
+func TestFileOffsetsThePositionADecodeFailureEmbeds(t *testing.T) {
+	dir := testWriteDocs(t, map[string]string{
+		"0001-a-decision.md": Delimiter + "\ntitle: A decision\nstatus: accepted\ntitle: Again\n" + Delimiter + "\n",
+	})
+
+	doc, err := File(filepath.Join(dir, "0001-a-decision.md"), config.ADRPreset())
+	if err != nil {
+		t.Fatalf("File: %v", err)
+	}
+	var fe *FrontmatterError
+	if !errors.As(doc.Err, &fe) {
+		t.Fatalf("doc.Err = %v (%T), want a *FrontmatterError", doc.Err, doc.Err)
+	}
+	if fe.Line != 4 {
+		t.Errorf("line = %d, want the file line the duplicate key sits on", fe.Line)
+	}
+	if !strings.Contains(fe.Message, "[2:1]") {
+		t.Errorf("message = %q, want the position it embeds counted from the file, not from the block", fe.Message)
+	}
+}
+
 func TestLocalize(t *testing.T) {
 	base := filepath.Join(string(filepath.Separator), "repo", "root")
 	tests := []struct {
