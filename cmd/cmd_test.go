@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -56,12 +57,30 @@ func lines(s string) []string {
 	return out
 }
 
+// findingPattern splits a finding line into its location and the rest, and
+// lineSuffix peels the line number off that location, so an expectation can
+// name a file without the temporary directory it happens to live in.
+var (
+	findingPattern = regexp.MustCompile(`^(?:(.+?): )?((?:ERROR|WARN) \S+ .*)$`)
+	lineSuffix     = regexp.MustCompile(`:\d+$`)
+)
+
 func findingLines(s string) []string {
 	var out []string
 	for _, l := range lines(s) {
-		if strings.HasPrefix(l, "ERROR ") || strings.HasPrefix(l, "WARN ") {
-			out = append(out, l)
+		m := findingPattern.FindStringSubmatch(l)
+		switch {
+		case m == nil:
+			continue
+		case m[1] == "":
+			out = append(out, m[2])
+			continue
 		}
+		path, suffix := m[1], ""
+		if at := lineSuffix.FindStringIndex(path); at != nil {
+			path, suffix = path[:at[0]], path[at[0]:]
+		}
+		out = append(out, filepath.Base(path)+suffix+": "+m[2])
 	}
 	return out
 }
@@ -281,7 +300,7 @@ func TestARenamedStatusFieldCarriesThePresetRules(t *testing.T) {
 	got := run(t, "validate")
 
 	assertExit(t, got, 0)
-	assertPrefixes(t, "findings", findingLines(got.stdout), []string{"WARN unstructured_supersedes 0003:"})
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0003-derived.md:3: WARN unstructured_supersedes 0003:"})
 	want := "OK: 3 docs, 2 typed edges, no cycles"
 	if ls := lines(got.stdout); len(ls) == 0 || ls[len(ls)-1] != want {
 		t.Errorf("summary line = %q, want %q", got.stdout, want)
