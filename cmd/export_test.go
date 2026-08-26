@@ -92,6 +92,93 @@ func TestExportNodeLinkJSON(t *testing.T) {
 	}
 }
 
+func TestExportConnectedAndEdgeFilters(t *testing.T) {
+	tests := []struct {
+		name  string
+		args  []string
+		nodes []model.ID
+		links []string
+	}{
+		{
+			name:  "only documents a typed edge touches",
+			args:  []string{"--connected"},
+			nodes: []model.ID{"0001", "0002", "0003", "0004", "0005"},
+			links: []string{
+				"0002|supersedes|0001|structured",
+				"0004|depends-on|0003|structured",
+				"0004|supersedes|0002|structured",
+				"0005|depends-on|0003|structured",
+			},
+		},
+		{
+			name:  "one edge type keeps every document",
+			args:  []string{"--edge", "depends-on"},
+			nodes: []model.ID{"0001", "0002", "0003", "0004", "0005", "0006"},
+			links: []string{
+				"0004|depends-on|0003|structured",
+				"0005|depends-on|0003|structured",
+			},
+		},
+		{
+			name:  "the edge filter narrows the connected set",
+			args:  []string{"--connected", "--edge", "supersedes"},
+			nodes: []model.ID{"0001", "0002", "0004"},
+			links: []string{
+				"0002|supersedes|0001|structured",
+				"0004|supersedes|0002|structured",
+			},
+		},
+		{
+			name:  "a repeated edge filter unions the types",
+			args:  []string{"--connected", "--edge", "supersedes", "--edge", "depends-on"},
+			nodes: []model.ID{"0001", "0002", "0003", "0004", "0005"},
+			links: []string{
+				"0002|supersedes|0001|structured",
+				"0004|depends-on|0003|structured",
+				"0004|supersedes|0002|structured",
+				"0005|depends-on|0003|structured",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append([]string{"export", "--format", "json"}, tt.args...)
+			args = append(args, "--dir", fixture(t, "ok-basic"))
+			got := run(t, args...)
+			assertExit(t, got, 0)
+			doc := decodeJSON[render.NodeLink](t, got.stdout)
+			if !slices.Equal(nodeIDs(doc), tt.nodes) {
+				t.Errorf("nodes = %v, want %v", nodeIDs(doc), tt.nodes)
+			}
+			if !slices.Equal(linkKeys(doc), tt.links) {
+				t.Errorf("links = %v, want %v", linkKeys(doc), tt.links)
+			}
+		})
+	}
+}
+
+func TestExportRejectsAnUnknownEdgeType(t *testing.T) {
+	got := run(t, "export", "--edge", "relates-to", "--dir", fixture(t, "ok-basic"))
+
+	assertExit(t, got, 2)
+	if !strings.Contains(got.stderr, "relates-to") {
+		t.Errorf("stderr = %q, want it to name the unknown edge type", got.stderr)
+	}
+}
+
+func TestExportConnectedInEveryFormat(t *testing.T) {
+	dir := fixture(t, "ok-basic")
+	for _, format := range []string{"mermaid", "dot", "json"} {
+		t.Run(format, func(t *testing.T) {
+			got := run(t, "export", "--format", format, "--connected", "--dir", dir)
+			assertExit(t, got, 0)
+			if strings.Contains(got.stdout, "0006") {
+				t.Errorf("%s output keeps a document no typed edge touches:\n%s", format, got.stdout)
+			}
+		})
+	}
+}
+
 func TestExportMermaidIsTheDefault(t *testing.T) {
 	got := run(t, "export", "--dir", fixture(t, "ok-basic"))
 	assertExit(t, got, 0)
