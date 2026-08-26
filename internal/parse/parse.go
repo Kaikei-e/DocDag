@@ -25,8 +25,8 @@ const Delimiter = "---"
 const markdownExt = ".md"
 
 // Document is one Markdown file after parsing and before graph construction.
-// FrontmatterLine and KeyLines are 1-based file lines, zero when unknown, so a
-// finding can name the exact key it is about.
+// FrontmatterLine, BodyLine and KeyLines are 1-based file lines, zero when
+// unknown, so a finding can name the exact key or body line it is about.
 type Document struct {
 	Path            string
 	Name            string
@@ -36,6 +36,7 @@ type Document struct {
 	HasFrontmatter  bool
 	MatchesPattern  bool
 	FrontmatterLine int
+	BodyLine        int
 	KeyLines        map[string]int
 	Err             error
 }
@@ -184,6 +185,9 @@ func File(path string, cfg config.Config) (*Document, error) {
 
 	frontmatter, body, ok := SplitFrontmatter(src)
 	doc.Body = string(body)
+	// The body is a suffix of the file, so what precedes it locates its first
+	// line without re-walking the block.
+	doc.BodyLine = 1 + bytes.Count(src[:len(src)-len(body)], []byte("\n"))
 	if !ok {
 		return doc, nil
 	}

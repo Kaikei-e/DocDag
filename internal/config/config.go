@@ -60,6 +60,26 @@ const (
 	ScanFrontmatter = "frontmatter"
 )
 
+// ReferenceSeverity reports the severity reference-layer findings carry, and
+// whether the reference layer is validated at all.
+func (c Config) ReferenceSeverity() (model.Severity, bool) {
+	switch c.References.Dangling {
+	case string(model.SeverityWarn):
+		return model.SeverityWarn, true
+	case string(model.SeverityError):
+		return model.SeverityError, true
+	}
+	return "", false
+}
+
+// Scans reports whether a region of a document feeds the reference layer.
+func (c Config) Scans(region string) bool {
+	if len(c.References.Scan) == 0 {
+		return region == ScanBody
+	}
+	return slices.Contains(c.References.Scan, region)
+}
+
 // EdgeSpec declares one typed constraint edge and the frontmatter key that
 // carries its references.
 type EdgeSpec struct {
@@ -189,7 +209,30 @@ func (c Config) Validate() error {
 	if err := c.validateRules(); err != nil {
 		return err
 	}
+	if err := c.validateReferences(); err != nil {
+		return err
+	}
 	return c.validateDerivedEdges()
+}
+
+func (c Config) validateReferences() error {
+	if _, on := c.ReferenceSeverity(); !on && c.References.Dangling != "" && c.References.Dangling != ReferencesOff {
+		return fmt.Errorf("references: unknown dangling mode %q, want %s, %s or %s: %w",
+			c.References.Dangling, ReferencesOff, model.SeverityWarn, model.SeverityError, model.ErrInvalidConfig)
+	}
+	for _, region := range c.References.Scan {
+		if region != ScanBody && region != ScanFrontmatter {
+			return fmt.Errorf("references: unknown scan region %q, want %s or %s: %w",
+				region, ScanBody, ScanFrontmatter, model.ErrInvalidConfig)
+		}
+	}
+	if c.References.Pattern == "" {
+		return nil
+	}
+	if _, err := regexp.Compile(c.References.Pattern); err != nil {
+		return fmt.Errorf("references: pattern %q: %v: %w", c.References.Pattern, err, model.ErrInvalidConfig)
+	}
+	return nil
 }
 
 func (c Config) validateEdges() error {
