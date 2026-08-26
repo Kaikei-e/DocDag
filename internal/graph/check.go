@@ -138,18 +138,37 @@ func CheckCycles(g *model.Graph, cfg config.Config) []model.Finding {
 }
 
 // unionCycles reports the cycles that need more than one edge type to close.
-// A cycle inside a single type is already a finding of its own.
+// A cycle inside a single type is already a finding of its own, and it may
+// share a component with one that is not, so each component is searched for a
+// cycle no single type covers rather than for any cycle at all.
 func unionCycles(g *model.Graph, cfg config.Config, types []model.EdgeType) []model.Finding {
+	adj := Adjacency(g, types...)
+	labels, all := edgeLabels(g, types)
 	findings := []model.Finding{}
-	for _, cycle := range FindCycles(Adjacency(g, types...)) {
-		crossed := cycleTypes(g, cycle, types)
-		if len(crossed) < 2 {
+	for _, component := range cyclicComponents(adj) {
+		cycle := uncoveredCycle(inducedSubgraph(adj, component), labels, all)
+		if cycle == nil {
 			continue
 		}
 		findings = append(findings, cycleFinding(g, cfg, cycle,
-			fmt.Sprintf("cycle over %s: %s", strings.Join(crossed, ", "), joinIDs(cycle, " -> ")), types...))
+			fmt.Sprintf("cycle over %s: %s", strings.Join(cycleTypes(g, cycle, types), ", "), joinIDs(cycle, " -> ")), types...))
 	}
 	return findings
+}
+
+// edgeLabels marks each arc with the edge types that carry it, one bit per
+// type, so asking whether a single type covers a whole cycle is one bitwise
+// intersection.
+func edgeLabels(g *model.Graph, types []model.EdgeType) (labels map[edgeKey]uint, all uint) {
+	labels = make(map[edgeKey]uint, len(g.Edges))
+	for i, t := range types {
+		bit := uint(1) << uint(i)
+		all |= bit
+		for _, e := range g.EdgesOfType(t) {
+			labels[edgeKey{from: e.From, to: e.To}] |= bit
+		}
+	}
+	return labels, all
 }
 
 // cycleTypes names the edge types a closed path travels on, in configuration
