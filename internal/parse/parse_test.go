@@ -749,3 +749,144 @@ func TestRefsReportsEntriesThatAreNotReferences(t *testing.T) {
 		}
 	}
 }
+
+func TestFileRecordsFrontmatterPositions(t *testing.T) {
+	cfg := config.ADRPreset()
+	tests := []struct {
+		name     string
+		content  string
+		wantKeys map[string]int
+	}{
+		{
+			name:     "unix line endings",
+			content:  "---\ntitle: A decision\nstatus: accepted\nsupersedes:\n  - 0001\ndate: 2025-01-01\n---\n\n# A decision\n",
+			wantKeys: map[string]int{"title": 2, "status": 3, "supersedes": 4, "date": 6},
+		},
+		{
+			name:     "windows line endings",
+			content:  "---\r\ntitle: A decision\r\nstatus: accepted\r\nsupersedes:\r\n  - 0001\r\ndate: 2025-01-01\r\n---\r\n\r\n# A decision\r\n",
+			wantKeys: map[string]int{"title": 2, "status": 3, "supersedes": 4, "date": 6},
+		},
+		{
+			name:     "a byte order mark does not shift the block",
+			content:  "\xef\xbb\xbf---\ntitle: A decision\nstatus: accepted\n---\n\n# A decision\n",
+			wantKeys: map[string]int{"title": 2, "status": 3},
+		},
+		{
+			name:     "a comment and a blank line inside the block are counted",
+			content:  "---\n# a note\n\ntitle: A decision\n\nstatus: accepted\n---\n\n# A decision\n",
+			wantKeys: map[string]int{"title": 4, "status": 6},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := testWriteDocs(t, map[string]string{"0001-a-decision.md": tt.content})
+
+			doc, err := File(filepath.Join(dir, "0001-a-decision.md"), cfg)
+			if err != nil {
+				t.Fatalf("File: %v", err)
+			}
+			if doc.FrontmatterLine != 1 {
+				t.Errorf("frontmatterLine = %d, want 1", doc.FrontmatterLine)
+			}
+			for key, want := range tt.wantKeys {
+				if got := doc.KeyLines[key]; got != want {
+					t.Errorf("keyLines[%s] = %d, want %d (all lines: %v)", key, got, want, doc.KeyLines)
+				}
+			}
+			if len(doc.KeyLines) != len(tt.wantKeys) {
+				t.Errorf("keyLines = %v, want exactly %v", doc.KeyLines, tt.wantKeys)
+			}
+		})
+	}
+}
+
+func TestFileWithoutFrontmatterHasNoPositions(t *testing.T) {
+	dir := testWriteDocs(t, map[string]string{"0001-bare.md": "# Bare\n"})
+
+	doc, err := File(filepath.Join(dir, "0001-bare.md"), config.ADRPreset())
+	if err != nil {
+		t.Fatalf("File: %v", err)
+	}
+	if doc.FrontmatterLine != 0 {
+		t.Errorf("frontmatterLine = %d, want 0", doc.FrontmatterLine)
+	}
+	if len(doc.KeyLines) != 0 {
+		t.Errorf("keyLines = %v, want none", doc.KeyLines)
+	}
+}
+
+func TestFileLocatesADecodeFailureInTheFile(t *testing.T) {
+	doc, err := File(testFixtureFile(t, "invalid-yaml", "0002-negotiate-api-versions-by-header.md"), config.ADRPreset())
+	if err != nil {
+		t.Fatalf("File: %v", err)
+	}
+
+	var fe *FrontmatterError
+	if !errors.As(doc.Err, &fe) {
+		t.Fatalf("doc.Err = %v (%T), want a *FrontmatterError", doc.Err, doc.Err)
+	}
+	if fe.Line != 2 {
+		t.Errorf("line = %d, want 2: the offending key sits on the second line of the file", fe.Line)
+	}
+	if fe.Column < 1 {
+		t.Errorf("column = %d, want a 1-based column", fe.Column)
+	}
+	if strings.ContainsAny(fe.Message, "\n\r") {
+		t.Errorf("message = %q, want one line without the source excerpt", fe.Message)
+	}
+	if strings.Contains(fe.Message, "[") {
+		t.Errorf("message = %q, want the position carried by the fields, not the text", fe.Message)
+	}
+}
+
+func TestUnmarshalFrontmatterReportsTheBlockRelativePosition(t *testing.T) {
+	_, err := UnmarshalFrontmatter([]byte("title: A decision\nstatus: accepted\n  bogus: 1\n"))
+
+	var fe *FrontmatterError
+	if !errors.As(err, &fe) {
+		t.Fatalf("err = %v (%T), want a *FrontmatterError", err, err)
+	}
+	if fe.Line != 3 {
+		t.Errorf("line = %d, want 3 relative to the first line of the block", fe.Line)
+	}
+	if fe.Error() == "" {
+		t.Error("Error() is empty, want a diagnostic")
+	}
+}
+
+func TestLocalize(t *testing.T) {
+	base := filepath.Join(string(filepath.Separator), "repo", "root")
+	tests := []struct {
+		name string
+		path string
+		want string
+	}{
+		{
+			name: "a document under the base becomes relative with forward slashes",
+			path: filepath.Join(base, "docs", "adr", "0001-a.md"),
+			want: "docs/adr/0001-a.md",
+		},
+		{
+			name: "a document outside the base keeps its absolute path",
+			path: filepath.Join(string(filepath.Separator), "elsewhere", "0001-a.md"),
+			want: filepath.ToSlash(filepath.Join(string(filepath.Separator), "elsewhere", "0001-a.md")),
+		},
+		{
+			name: "an already relative path only loses its separators",
+			path: filepath.Join("..", "..", "testdata", "0001-a.md"),
+			want: "../../testdata/0001-a.md",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			docs := []*Document{{Path: tt.path}}
+
+			Localize(docs, base)
+
+			if docs[0].Path != tt.want {
+				t.Fatalf("path = %q, want %q", docs[0].Path, tt.want)
+			}
+		})
+	}
+}
