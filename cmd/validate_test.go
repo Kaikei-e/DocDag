@@ -170,6 +170,17 @@ func TestValidateLeavesProseThatIsNotIdentityShapedAlone(t *testing.T) {
 	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
 }
 
+func TestValidateRuleAlternativesAndNegation(t *testing.T) {
+	dir := fixture(t, "any-of")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0001-run-nightly-reports-on-the-primary.md:3: WARN unexplained_retirement 0001:",
+	})
+}
+
 func TestValidateRulesOverListAttributes(t *testing.T) {
 	dir := fixture(t, "list-attrs")
 
