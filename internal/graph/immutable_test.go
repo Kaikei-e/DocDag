@@ -17,6 +17,7 @@ const (
 		"# Serve images from the application\n\n## Decision Outcome\n\nThe application resizes and serves images itself.\n"
 	testProposedDoc = "---\ntitle: Serve images from a CDN\nstatus: proposed\ndate: 2025-02-01\n---\n\n" +
 		"# Serve images from a CDN\n\n## Decision Outcome\n\nA CDN fronts the image endpoint.\n"
+	testBodylessDoc = "---\ntitle: Serve images from the application\nstatus: accepted\ndate: 2025-01-01\n---\n"
 )
 
 // testImmutableRepo commits an ADR corpus and returns the repository directory
@@ -121,6 +122,16 @@ func TestCheckImmutable(t *testing.T) {
 		testWriteFiles(t, dir, map[string]string{
 			"docs/adr/0001-serve-images-from-the-application.md": testAcceptedDoc + "\n## Consequences\n\nImage traffic shares the request pool.\n",
 		})
+
+		if got := testCheckImmutable(t, dir, repo); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("appending to a document that had no body is allowed", func(t *testing.T) {
+		name := "docs/adr/0001-serve-images-from-the-application.md"
+		dir, repo := testImmutableRepo(t, map[string]string{name: testBodylessDoc})
+		testWriteFiles(t, dir, map[string]string{name: testBodylessDoc + "# Serve images from the application\n"})
 
 		if got := testCheckImmutable(t, dir, repo); len(got) != 0 {
 			t.Fatalf("findings = %+v, want none", got)
