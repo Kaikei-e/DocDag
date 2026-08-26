@@ -136,6 +136,9 @@ func Merge(base, override Config) Config {
 		merged.Rules = slices.Clone(override.Rules)
 	}
 	merged.References = mergeReferences(base.References, override.References)
+	if override.AcyclicUnion {
+		merged.AcyclicUnion = true
+	}
 	if merged.StatusField != base.StatusField {
 		if len(override.Rules) == 0 {
 			merged.Rules = retargetRules(base.Rules, base.StatusField, merged.StatusField)
