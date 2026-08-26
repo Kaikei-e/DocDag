@@ -120,6 +120,9 @@ func TestPluginHookIgnoresPathsOutsideTheDocumentsDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the hook is a POSIX shell script")
 	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("the hook reads its payload with jq")
+	}
 	script := filepath.Join(repoRoot(t), "scripts", "docdag-validate.sh")
 	if info, err := os.Stat(script); err != nil {
 		t.Fatalf("hook script: %v", err)
