@@ -549,6 +549,79 @@ func TestPlanApplyWritesWhatWasPlanned(t *testing.T) {
 	}
 }
 
+func TestNewPlanUsesTheRequestedIdentifier(t *testing.T) {
+	dir, g, cfg := testCorpus(t)
+
+	plan, err := NewPlan(g, cfg, Request{ID: "42", Title: "Rotate signing keys weekly", Date: testFixedDate()})
+	if err != nil {
+		t.Fatalf("NewPlan: %v", err)
+	}
+
+	if plan.ID != "0042" {
+		t.Errorf("ID = %q, want the requested identifier %q", plan.ID, "0042")
+	}
+	if want := filepath.Join(dir, "0042-rotate-signing-keys-weekly.md"); plan.Path != want {
+		t.Errorf("Path = %q, want %q", plan.Path, want)
+	}
+	if plan.Exists {
+		t.Error("Exists is true for an identifier the corpus does not hold")
+	}
+}
+
+func TestNewPlanForAnExistingDocumentWithTheSameTitleWritesNothing(t *testing.T) {
+	_, g, cfg := testCorpus(t)
+	existing := g.Nodes["0001"]
+	existing.Title = "Authenticate browsers with session cookies"
+
+	plan, err := NewPlan(g, cfg, Request{ID: "0001", Title: existing.Title, Date: testFixedDate()})
+	if err != nil {
+		t.Fatalf("NewPlan: %v", err)
+	}
+
+	if !plan.Exists {
+		t.Error("Exists is false for a document the corpus already holds")
+	}
+	if plan.Path != existing.Path {
+		t.Errorf("Path = %q, want the existing document %q", plan.Path, existing.Path)
+	}
+	if plan.Content != nil || len(plan.Rewrites) != 0 {
+		t.Errorf("plan = %+v, want nothing to write", plan)
+	}
+}
+
+func TestNewPlanRefusesADifferentTitleUnderAnExistingIdentifier(t *testing.T) {
+	_, g, cfg := testCorpus(t)
+	g.Nodes["0001"].Title = "Authenticate browsers with session cookies"
+
+	plan, err := NewPlan(g, cfg, Request{ID: "0001", Title: "Rotate signing keys weekly", Date: testFixedDate()})
+
+	if !errors.Is(err, model.ErrIDConflict) {
+		t.Fatalf("NewPlan = (%+v, %v), want an error wrapping %v", plan, err, model.ErrIDConflict)
+	}
+	if !strings.Contains(err.Error(), "Authenticate browsers with session cookies") {
+		t.Errorf("error = %v, want it to name the title already under the identifier", err)
+	}
+}
+
+func TestNewPlanRefusesACorpusWithAnIdentifierCollision(t *testing.T) {
+	_, g, cfg := testCorpus(t)
+	g.Findings = []model.Finding{{
+		Severity: model.SeverityError,
+		Rule:     model.RuleIDCollision,
+		ID:       "0001",
+		Detail:   "shares its identifier with 0001-again.md",
+	}}
+
+	plan, err := NewPlan(g, cfg, Request{Title: "Rotate signing keys weekly", Date: testFixedDate()})
+
+	if !errors.Is(err, model.ErrIDConflict) {
+		t.Fatalf("NewPlan = (%+v, %v), want an error wrapping %v", plan, err, model.ErrIDConflict)
+	}
+	if !strings.Contains(err.Error(), "0001") {
+		t.Errorf("error = %v, want it to name the colliding identifier", err)
+	}
+}
+
 func TestRewriteStatusRefusesADocumentRatherThanAConfiguration(t *testing.T) {
 	for _, src := range []string{"# No frontmatter\n", "---\ntitle: Unterminated\n"} {
 		err := func() error {

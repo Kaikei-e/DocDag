@@ -195,6 +195,86 @@ func TestNewRejectsAnUnknownFormat(t *testing.T) {
 	}
 }
 
+func TestNewWithAnExplicitIdentifier(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--id", "42", "--dir", dir)
+
+	assertExit(t, got, 0)
+	wantPath := filepath.Join(dir, "0042-adopt-content-addressed-cache-keys.md")
+	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
+	if _, err := os.Stat(wantPath); err != nil {
+		t.Errorf("stat created document: %v", err)
+	}
+}
+
+func TestNewWithAnExistingIdentifierAndTitleIsIdempotent(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+	existing := filepath.Join(dir, "000004.md")
+	before, err := os.ReadFile(existing)
+	if err != nil {
+		t.Fatalf("read %s: %v", existing, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+
+	got := run(t, "new", "Schedule feed polling from the ingestion queue", "--id", "0004", "--dir", dir)
+
+	assertExit(t, got, 0)
+	assertLines(t, "existing path", lines(got.stdout), []string{existing})
+	after, err := os.ReadFile(existing)
+	if err != nil {
+		t.Fatalf("read %s: %v", existing, err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("the existing document was rewritten:\ngot:\n%s\nwant:\n%s", after, before)
+	}
+	now, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read %s: %v", dir, err)
+	}
+	if len(now) != len(entries) {
+		t.Errorf("the corpus holds %d documents, want the %d it started with", len(now), len(entries))
+	}
+}
+
+func TestNewWithAnExistingIdentifierAndADifferentTitleFails(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--id", "0004", "--dir", dir)
+
+	assertExit(t, got, 1)
+	if !strings.Contains(got.stderr, "Schedule feed polling from the ingestion queue") {
+		t.Errorf("stderr = %q, want it to name the title already under the identifier", got.stderr)
+	}
+}
+
+func TestNewRefusesACorpusWithAnIdentifierCollision(t *testing.T) {
+	dir := copyFixture(t, "id-collision")
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--dir", dir)
+
+	assertExit(t, got, 1)
+	if !strings.Contains(got.stderr, "0004") {
+		t.Errorf("stderr = %q, want it to name the colliding identifier", got.stderr)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "0005-adopt-content-addressed-cache-keys.md")); !os.IsNotExist(err) {
+		t.Error("new wrote a document into a corpus with an identifier collision")
+	}
+}
+
+func TestNewDryRunOfAnExistingDocumentPlansNoWrite(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+	existing := filepath.Join(dir, "000004.md")
+
+	got := run(t, "new", "Schedule feed polling from the ingestion queue", "--id", "0004", "--dry-run", "--dir", dir)
+
+	assertExit(t, got, 0)
+	assertLines(t, "plan", lines(got.stdout), []string{"exists 0004 " + existing})
+}
+
 func TestNewDryRunPrintsThePlanAndWritesNothing(t *testing.T) {
 	dir := copyFixture(t, "ok-basic")
 	superseded := filepath.Join(dir, "000004.md")
