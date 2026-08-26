@@ -1,0 +1,92 @@
+name: DocDag
+description: Validate a typed graph of Markdown decision records with docdag.
+author: Kaikei-e
+
+branding:
+  icon: git-merge
+  color: blue
+
+inputs:
+  version:
+    description: Release tag to install, or "latest" for the newest release.
+    required: false
+    default: latest
+  args:
+    description: Arguments passed to docdag.
+    required: false
+    default: validate --format github
+  working-directory:
+    description: Directory to run docdag in.
+    required: false
+    default: .
+
+runs:
+  using: composite
+  steps:
+    # Linux and macOS runners only. Windows is refused with a diagnostic
+    # rather than silently skipped: a green step that validated nothing is
+    # worse than a red one.
+    - name: Install docdag
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        DOCDAG_REPOSITORY: ${{ github.action_repository }}
+        DOCDAG_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        case "$RUNNER_OS" in
+          Linux) goos=linux ;;
+          macOS) goos=darwin ;;
+          *) echo "::error::docdag's action runs on Linux and macOS runners; this one is $RUNNER_OS. Install docdag with 'go install github.com/Kaikei-e/DocDag/cmd/docdag@<version>' instead." >&2; exit 1 ;;
+        esac
+        case "$RUNNER_ARCH" in
+          X64) goarch=amd64 ;;
+          ARM64) goarch=arm64 ;;
+          *) echo "::error::docdag publishes amd64 and arm64 binaries; this runner is $RUNNER_ARCH." >&2; exit 1 ;;
+        esac
+
+        repository="${DOCDAG_REPOSITORY:-Kaikei-e/DocDag}"
+        tag="$DOCDAG_VERSION"
+        if [ "$tag" = latest ]; then
+          tag=$(gh release view --repo "$repository" --json tagName --jq .tagName)
+        fi
+
+        # goreleaser v2 names an archive from the default template
+        # {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}, where
+        # .Version is the tag without its leading "v".
+        archive="docdag_${tag#v}_${goos}_${goarch}.tar.gz"
+
+        download="$RUNNER_TEMP/docdag-download"
+        rm -rf "$download"
+        mkdir -p "$download"
+        gh release download "$tag" \
+          --repo "$repository" \
+          --dir "$download" \
+          --pattern "$archive" \
+          --pattern checksums.txt
+
+        cd "$download"
+        if command -v sha256sum >/dev/null 2>&1; then
+          sha256sum -c --ignore-missing checksums.txt
+        else
+          # A macOS runner without GNU coreutils ships only Perl's shasum,
+          # which has no --ignore-missing: hand it the one line it can check.
+          grep " ${archive}\$" checksums.txt | shasum -a 256 -c -
+        fi
+
+        bin="$RUNNER_TEMP/docdag-bin"
+        rm -rf "$bin"
+        mkdir -p "$bin"
+        tar -xzf "$archive" -C "$bin" docdag
+        chmod +x "$bin/docdag"
+        echo "$bin" >> "$GITHUB_PATH"
+
+    - name: Run docdag
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        DOCDAG_ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+        docdag $DOCDAG_ARGS

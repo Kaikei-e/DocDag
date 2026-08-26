@@ -1,0 +1,8 @@
+- id: docdag-validate
+  name: docdag validate
+  description: Enforce the DAG invariants of a Markdown decision-record corpus.
+  entry: docdag validate
+  language: golang
+  pass_filenames: false
+  always_run: false
+  files: '\.md$|docdag\.ya?ml$'
