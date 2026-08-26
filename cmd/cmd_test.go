@@ -157,6 +157,10 @@ func copyFixture(t *testing.T, name string) string {
 	return dst
 }
 
+// docPath names a file the way docdag prints one, whatever separator the
+// platform joins paths with.
+func docPath(elem ...string) string { return filepath.ToSlash(filepath.Join(elem...)) }
+
 func decodeJSON[T any](t *testing.T, payload string) T {
 	t.Helper()
 	var v T
