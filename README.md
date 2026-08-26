@@ -36,12 +36,15 @@ a derived `supersedes` edge, so the invariants hold as the files already are.
 
 ## Install
 
+In CI, use the composite action — see [Continuous integration](#continuous-integration). Locally,
+install a pinned version:
+
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@latest
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.2.0
 ```
 
-This installs `docdag` into `$(go env GOPATH)/bin`. Prebuilt binaries for tagged versions are
-attached to the repository's Releases page.
+This installs `docdag` into `$(go env GOPATH)/bin`. Prebuilt binaries for tagged versions, and the
+`checksums.txt` that covers them, are attached to the repository's Releases page.
 
 ## Quickstart
 
@@ -95,14 +98,28 @@ with its own `mermaid|dot|json`.
 | `docdag resolve <ref>` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it | exit 1 on an unknown reference or a supersedes cycle |
 | `docdag query <ref> [--ancestors\|--descendants] [--edge <type>] [--include-refs]` | the reachable set over typed edges, descendants by default; reference-layer hits are suffixed ` (reference)` | exit 1 unknown reference, exit 2 unknown edge type or conflicting flags |
 | `docdag query --binding` | every binding document | exit 2 if combined with a walk flag |
-| `docdag export [--format mermaid\|dot\|json] [--include-refs] [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 3 if the output file cannot be written |
+| `docdag export [--format mermaid\|dot\|json] [--include-refs] [--connected] [--edge <type>]... [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 2 on an unknown edge type, exit 3 if the output file cannot be written |
 | `docdag stats` | document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree | — |
-| `docdag new <title> [--supersedes <ref>]... [--depends-on <ref>]...` | the path of the created document | exit 1 on an unknown reference, exit 3 on a write error |
+| `docdag new <title> [--id <ref>] [--supersedes <ref>]... [--depends-on <ref>]... [--dry-run]` | the path of the created document, or the plan under `--dry-run` | exit 1 on an unknown reference or a claimed identifier, exit 3 on a write error |
+
+`docdag export --edge <type>` keeps only the named edge types, repeat it to keep several, and
+`--connected` drops every document no remaining typed edge touches — the two compose, so
+`--connected --edge supersedes` draws the supersession chains alone.
 
 `docdag new` takes the next free identifier, writes `<id>-<kebab-title>.md` from the template with
 `status: proposed` and today's date, and rewrites **only** the `status:` value of each superseded
 document: bodies and line endings stay byte-identical, and every rewrite is computed before any file
-is touched.
+is touched. The name comes from the `filename:` template, so a corpus of bare `NNNNNN.md` files
+configures `filename: "{id}.md"` and keeps that shape.
+
+`--dry-run` runs every computation, writes nothing and prints the plan, as `create <id> <path>`
+followed by one `rewrite <path> status: superseded` line each, or as JSON under `--format json`. It
+exits exactly as the real run would, so it is a safe way to see what a creation would cost.
+
+`--id <ref>` creates the document under a chosen identifier instead of the next free one. If that
+identifier already names a document with the same title, `new` prints its path and writes nothing,
+so re-running an agent's command is harmless; a different title under that identifier is an error.
+`new` also refuses to run at all while the corpus carries an `id_collision`.
 
 Exit codes: `0` success (warnings allowed), `1` domain failure, `2` usage error, `3` I/O or config
 error — including "no documents directory found", so a repository without one needs `--dir`.
@@ -153,6 +170,7 @@ dir: docs/decisions            # default: discovered, see above
 id_width: 4
 status_field: status
 status_values: [proposed, accepted, rejected, deprecated, superseded]
+filename: "{id}-{slug}.md"     # what `docdag new` names a document
 
 edges:
   - name: supersedes
@@ -190,10 +208,14 @@ rules:
 A rule's `when` block ANDs its conditions. The vocabulary is fixed and complete: `inbound`,
 `not_inbound`, `outbound`, `not_outbound` — each naming a declared edge type — and
 `attr: {<key>: {eq|not: <value>}}`. There is no expression language. Set `template: <path>` to
-replace the document template `docdag new` uses. Structural checks are not rules and cannot be
-disabled.
+replace the document template `docdag new` uses, and `filename:` to change what it names the
+result — the template must carry `{id}`, may carry `{slug}`, and may not carry a path separator.
+Structural checks are not rules and cannot be disabled.
 
 ## Continuous integration
+
+The composite action downloads the release binary for the runner, verifies it against the release's
+`checksums.txt` before running it, and needs no Go toolchain:
 
 ```yaml
 name: decisions
@@ -204,12 +226,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: Kaikei-e/DocDag@v0.2.0
         with:
-          go-version: '1.26'
-      - run: go install github.com/Kaikei-e/DocDag/cmd/docdag@latest
-      - run: docdag validate
+          version: v0.2.0                  # default: latest
+          args: validate --format github   # this is the default
+          working-directory: .             # this is the default
 ```
+
+A tag can be moved, so pin the action by commit SHA when the supply chain matters —
+`uses: Kaikei-e/DocDag@<40-char-sha> # v0.2.0`. This repository pins the actions it uses that way.
+
+The action runs on Linux and macOS runners, amd64 and arm64. On a Windows runner it fails with a
+diagnostic rather than passing silently; install with `go install` there instead.
+
+A [pre-commit](https://pre-commit.com) hook is also shipped:
+
+```yaml
+repos:
+  - repo: https://github.com/Kaikei-e/DocDag
+    rev: v0.2.0
+    hooks:
+      - id: docdag-validate
+```
+
+Hooks are advisory: `git commit --no-verify` walks straight past them, and a contributor who never
+ran `pre-commit install` never had them. CI is the gate; the hook only shortens the loop.
 
 ## MADR compatibility
 
