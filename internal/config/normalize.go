@@ -20,16 +20,30 @@ var (
 	// documentLink is the file name shape a Markdown link target must have to
 	// name a managed document.
 	documentLink = regexp.MustCompile(`^[0-9]{3,6}(-[^/\\]*)?\.md$`)
+	// wikilink is an Obsidian-style wrapper around a reference, with an optional
+	// alias or anchor after it.
+	wikilink = regexp.MustCompile(`^\[\[([^\[\]|#]*)(?:[|#][^\[\]]*)?\]\]$`)
 
 	defaultReference = regexp.MustCompile(DefaultReferencePattern)
 	referencePattern sync.Map
 )
 
 // IDShaped reports whether the whole reference names an identity, so that prose
-// such as "see 0042" never counts as one.
+// such as "see 0042" never counts as one. An Obsidian wikilink is unwrapped
+// first: a corpus that writes `[[0042]]` in frontmatter means 0042.
 func IDShaped(ref string) bool {
-	ref = strings.TrimSpace(ref)
+	ref = unwrap(ref)
 	return ref != "" && idShape.MatchString(ref)
+}
+
+// unwrap returns the reference a frontmatter value names, with an Obsidian
+// wikilink wrapper and its alias removed.
+func unwrap(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if inside := wikilink.FindStringSubmatch(ref); inside != nil {
+		return strings.TrimSpace(inside[1])
+	}
+	return ref
 }
 
 // IsDocumentLink reports whether a Markdown link target names a managed
