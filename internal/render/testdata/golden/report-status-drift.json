@@ -9,7 +9,8 @@
       "location": {
         "path": "../../testdata/fixtures/status-drift/0001-serve-images-from-the-application-server.md",
         "line": 3
-      }
+      },
+      "fix": "set status: superseded in ../../testdata/fixtures/status-drift/0001-serve-images-from-the-application-server.md"
     }
   ],
   "summary": {

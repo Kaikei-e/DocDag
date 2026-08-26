@@ -32,6 +32,9 @@ func FindingsText(w io.Writer, findings []model.Finding, summary model.Summary) 
 	out := &errWriter{w: w}
 	for _, f := range findings {
 		out.printf("%s%s %s %s: %s\n", locationPrefix(f.Location), strings.ToUpper(string(f.Severity)), f.Rule, f.ID, f.Detail)
+		if f.Fix != "" {
+			out.printf("  fix: %s\n", f.Fix)
+		}
 	}
 	writeSummary(out, summary)
 	if out.err != nil {
