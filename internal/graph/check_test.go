@@ -538,7 +538,7 @@ func TestEvalRule(t *testing.T) {
 			{Severity: drift.Severity, Rule: drift.Name, ID: "0004", Detail: drift.Message, Location: testNodeLocation("0004", testStatusLine)},
 		}
 
-		testAssertFindings(t, "EvalRule", EvalRule(g, drift), want)
+		testAssertFindings(t, "EvalRule", EvalRule(g, cfg, drift), want)
 	})
 
 	t.Run("a rule matching nothing reports nothing", func(t *testing.T) {
@@ -549,7 +549,7 @@ func TestEvalRule(t *testing.T) {
 			Message:  "no document has this status",
 		}
 
-		if got := EvalRule(g, unmatched); len(got) != 0 {
+		if got := EvalRule(g, cfg, unmatched); len(got) != 0 {
 			t.Fatalf("EvalRule = %+v, want none", got)
 		}
 	})
@@ -845,17 +845,15 @@ func TestCheckDanglingLocatesTheDeclaringKey(t *testing.T) {
 	})
 
 	t.Run("a derived edge is located on the field it was read from", func(t *testing.T) {
-		n := testNode("0002", "superseded by 0099")
-		delete(n.KeyLines, "supersedes")
 		g := testGraph(
-			[]*model.Node{n},
+			[]*model.Node{testNode("0002", "superseded by 0099")},
 			[]model.Edge{testDerivedEdge("0099", "0002", config.EdgeSupersedes)},
 			nil,
 		)
 
 		f := testAssertSingleFinding(t, CheckDangling(g, cfg), model.RuleDanglingRef, model.SeverityError, "0002")
 		if want := testNodeLocation("0002", testStatusLine); f.Location != want {
-			t.Errorf("location = %+v, want the status field line", f.Location)
+			t.Errorf("location = %+v, want the field the edge was derived from", f.Location)
 		}
 	})
 }
@@ -888,7 +886,9 @@ func TestEvalRuleLocatesTheClauseItRead(t *testing.T) {
 	g := testRulesFixture()
 
 	t.Run("an attribute clause points at its key", func(t *testing.T) {
-		got := EvalRule(g, config.ADRPreset().Rules[0])
+		cfg := config.ADRPreset()
+
+		got := EvalRule(g, cfg, cfg.Rules[0])
 
 		if len(got) == 0 {
 			t.Fatal("findings = none, want the drifted documents")
@@ -906,7 +906,7 @@ func TestEvalRuleLocatesTheClauseItRead(t *testing.T) {
 			Message:  "supersedes another document",
 		}
 
-		got := EvalRule(g, rule)
+		got := EvalRule(g, config.ADRPreset(), rule)
 
 		if len(got) == 0 {
 			t.Fatal("findings = none, want the superseding document")
