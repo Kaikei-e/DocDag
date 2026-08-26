@@ -11,7 +11,10 @@ import (
 	"github.com/Kaikei-e/DocDag/internal/render"
 )
 
-const flagOut = "out"
+const (
+	flagOut       = "out"
+	flagConnected = "connected"
+)
 
 func newExportCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -22,6 +25,8 @@ func newExportCmd() *cobra.Command {
 	}
 	cmd.Flags().String(flagFormat, formatMermaid, "output format: mermaid|dot|json")
 	cmd.Flags().Bool(flagIncludeRefs, false, "include the reference layer")
+	cmd.Flags().Bool(flagConnected, false, "emit only documents a typed edge touches")
+	cmd.Flags().StringArray(flagEdge, nil, "restrict the typed edges to one type (repeatable)")
 	cmd.Flags().String(flagOut, "-", "output file, or - for stdout")
 	return cmd
 }
@@ -39,13 +44,26 @@ func runExport(cmd *cobra.Command, _ []string) error {
 	if opts.IncludeRefs, err = flags.GetBool(flagIncludeRefs); err != nil {
 		return usageErr("%v", err)
 	}
+	if opts.Connected, err = flags.GetBool(flagConnected); err != nil {
+		return usageErr("%v", err)
+	}
+	edges, err := flags.GetStringArray(flagEdge)
+	if err != nil {
+		return usageErr("%v", err)
+	}
 	target, err := flags.GetString(flagOut)
 	if err != nil {
 		return usageErr("%v", err)
 	}
-	g, _, err := loadGraph(cmd)
+	g, cfg, err := loadGraph(cmd)
 	if err != nil {
 		return err
+	}
+	for _, name := range edges {
+		if _, ok := cfg.Edge(model.EdgeType(name)); !ok {
+			return usageErr("unknown edge type %q", name)
+		}
+		opts.Edges = append(opts.Edges, model.EdgeType(name))
 	}
 
 	if target == "" || target == "-" {
