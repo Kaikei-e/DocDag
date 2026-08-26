@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -13,6 +14,7 @@ import (
 	"github.com/goccy/go-yaml"
 
 	"github.com/Kaikei-e/DocDag/internal/newdoc"
+	"github.com/Kaikei-e/DocDag/internal/render"
 )
 
 func splitDocument(t *testing.T, src []byte) (map[string]any, string) {
@@ -191,6 +193,62 @@ func TestNewRejectsAnUnknownFormat(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "0004-rotate-signing-keys-weekly.md")); !os.IsNotExist(err) {
 		t.Error("new created a document despite a usage error")
 	}
+}
+
+func TestNewDryRunPrintsThePlanAndWritesNothing(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+	superseded := filepath.Join(dir, "000004.md")
+	before, err := os.ReadFile(superseded)
+	if err != nil {
+		t.Fatalf("read %s: %v", superseded, err)
+	}
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--supersedes", "0004", "--dry-run", "--dir", dir)
+
+	assertExit(t, got, 0)
+	created := filepath.Join(dir, "0007-adopt-content-addressed-cache-keys.md")
+	assertLines(t, "plan", lines(got.stdout), []string{
+		"create 0007 " + created,
+		"rewrite " + superseded + " status: superseded",
+	})
+	if _, err := os.Stat(created); !os.IsNotExist(err) {
+		t.Error("--dry-run created the document it only planned")
+	}
+	after, err := os.ReadFile(superseded)
+	if err != nil {
+		t.Fatalf("read %s: %v", superseded, err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("--dry-run rewrote a document:\ngot:\n%s\nwant:\n%s", after, before)
+	}
+}
+
+func TestNewDryRunJSONPlan(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--supersedes", "0004", "--dry-run", "--format", "json", "--dir", dir)
+
+	assertExit(t, got, 0)
+	plan := decodeJSON[render.Plan](t, got.stdout)
+	want := render.Plan{
+		SchemaVersion: render.PlanSchemaVersion,
+		ID:            "0007",
+		Path:          filepath.Join(dir, "0007-adopt-content-addressed-cache-keys.md"),
+		Rewrites: []render.PlanRewrite{
+			{Path: filepath.Join(dir, "000004.md"), Status: "superseded"},
+		},
+	}
+	if !reflect.DeepEqual(plan, want) {
+		t.Errorf("plan = %+v, want %+v", plan, want)
+	}
+}
+
+func TestNewDryRunKeepsTheExitCodesOfARealRun(t *testing.T) {
+	dir := copyFixture(t, "ok-basic")
+
+	got := run(t, "new", "Adopt content addressed cache keys", "--supersedes", "0009", "--dry-run", "--dir", dir)
+
+	assertExit(t, got, 1)
 }
 
 func TestNewHonoursTheConfiguredFilenameTemplate(t *testing.T) {

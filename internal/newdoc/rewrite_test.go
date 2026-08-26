@@ -470,6 +470,85 @@ func TestCreateLeavesNothingHalfApplied(t *testing.T) {
 	}
 }
 
+func TestNewPlanComputesEverythingWithoutWriting(t *testing.T) {
+	dir, g, cfg := testCorpus(t)
+	superseded := filepath.Join(dir, "0001-authenticate-with-session-cookies.md")
+
+	plan, err := NewPlan(g, cfg, Request{
+		Title:      "Rotate signing keys weekly",
+		Supersedes: []string{"0001"},
+		Date:       testFixedDate(),
+	})
+	if err != nil {
+		t.Fatalf("NewPlan: %v", err)
+	}
+
+	if plan.ID != "0003" {
+		t.Errorf("ID = %q, want %q", plan.ID, "0003")
+	}
+	if want := filepath.Join(dir, "0003-rotate-signing-keys-weekly.md"); plan.Path != want {
+		t.Errorf("Path = %q, want %q", plan.Path, want)
+	}
+	if len(plan.Rewrites) != 1 {
+		t.Fatalf("Rewrites = %+v, want one entry", plan.Rewrites)
+	}
+	if plan.Rewrites[0].Path != superseded {
+		t.Errorf("rewrite path = %q, want %q", plan.Rewrites[0].Path, superseded)
+	}
+	if plan.Rewrites[0].Status != config.StatusSuperseded {
+		t.Errorf("rewrite status = %q, want %q", plan.Rewrites[0].Status, config.StatusSuperseded)
+	}
+	if !strings.Contains(string(plan.Content), "title: Rotate signing keys weekly") {
+		t.Errorf("Content =\n%s\nwant the rendered document", plan.Content)
+	}
+
+	if _, err := os.Stat(plan.Path); !errors.Is(err, os.ErrNotExist) {
+		t.Error("NewPlan wrote the document it only planned")
+	}
+	kept, err := os.ReadFile(superseded)
+	if err != nil {
+		t.Fatalf("read superseded document: %v", err)
+	}
+	if string(kept) != corpusFirst {
+		t.Errorf("NewPlan rewrote a document:\ngot:\n%s\nwant:\n%s", kept, corpusFirst)
+	}
+}
+
+func TestPlanApplyWritesWhatWasPlanned(t *testing.T) {
+	dir, g, cfg := testCorpus(t)
+
+	plan, err := NewPlan(g, cfg, Request{
+		Title:      "Rotate signing keys weekly",
+		Supersedes: []string{"0001"},
+		Date:       testFixedDate(),
+	})
+	if err != nil {
+		t.Fatalf("NewPlan: %v", err)
+	}
+	path, err := plan.Apply()
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	if path != plan.Path {
+		t.Errorf("Apply = %q, want the planned path %q", path, plan.Path)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read created document: %v", err)
+	}
+	if !bytes.Equal(got, plan.Content) {
+		t.Errorf("created document =\n%s\nwant the planned content:\n%s", got, plan.Content)
+	}
+	rewritten, err := os.ReadFile(filepath.Join(dir, "0001-authenticate-with-session-cookies.md"))
+	if err != nil {
+		t.Fatalf("read superseded document: %v", err)
+	}
+	if !strings.Contains(string(rewritten), "status: superseded") {
+		t.Errorf("superseded document was not rewritten:\n%s", rewritten)
+	}
+}
+
 func TestRewriteStatusRefusesADocumentRatherThanAConfiguration(t *testing.T) {
 	for _, src := range []string{"# No frontmatter\n", "---\ntitle: Unterminated\n"} {
 		err := func() error {
