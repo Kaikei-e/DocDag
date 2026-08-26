@@ -43,6 +43,7 @@ const (
 	StatusRejected   = "rejected"
 	StatusDeprecated = "deprecated"
 	StatusSuperseded = "superseded"
+	StatusWithdrawn  = "withdrawn"
 )
 
 // ReferencesSpec configures reference-layer validation, which is off unless a
