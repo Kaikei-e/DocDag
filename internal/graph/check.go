@@ -221,17 +221,14 @@ func (ix edgeIndex) match(g *model.Graph, cond config.Condition, id model.ID) bo
 	if !ok {
 		return false
 	}
-	if cond.Inbound != "" && !ix.inbound[id][model.EdgeType(cond.Inbound)] {
-		return false
-	}
-	if cond.NotInbound != "" && ix.inbound[id][model.EdgeType(cond.NotInbound)] {
-		return false
-	}
-	if cond.Outbound != "" && !ix.outbound[id][model.EdgeType(cond.Outbound)] {
-		return false
-	}
-	if cond.NotOutbound != "" && ix.outbound[id][model.EdgeType(cond.NotOutbound)] {
-		return false
+	for _, clause := range cond.EdgeClauses() {
+		types := ix.outbound
+		if clause.Inbound {
+			types = ix.inbound
+		}
+		if types[id][model.EdgeType(clause.Edge)] == clause.Negate {
+			return false
+		}
 	}
 	for key, want := range cond.Attr {
 		value, present := n.Attr(key)
