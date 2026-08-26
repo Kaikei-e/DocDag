@@ -55,6 +55,7 @@ No configuration is needed. From the root of a repository whose decisions live i
 ```console
 $ docdag validate
 docs/decisions/0002-store-thumbnails-on-the-local-disk.md:3: WARN unstructured_supersedes 0002: supersedes edge 0003 -> 0002 comes from a field value; declare it in frontmatter
+  fix: declare supersedes: 0002 in 0003
 OK: 4 docs, 3 typed edges, no cycles
 
 $ docdag resolve 0002          # what replaced this decision?
@@ -97,7 +98,7 @@ replaces the format flag with its own `mermaid|dot|json`.
 
 | Command | What it prints | Notable failures |
 | --- | --- | --- |
-| `docdag validate [--touching <path>]... [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` | exit 1 if any finding is an error |
+| `docdag validate [--touching <path>]... [--immutable-since <rev>] [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` | exit 1 if any finding is an error, exit 3 if `--immutable-since` is given outside a git repository or without `git` |
 | `docdag resolve <ref> [--fields <list>]` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it | exit 1 on an unknown reference or a supersedes cycle |
 | `docdag query <ref> [--ancestors\|--descendants] [--edge <type>] [--include-refs] [--fields <list>]` | the reachable set over typed edges, descendants by default; reference-layer hits are suffixed ` (reference)` | exit 1 unknown reference, exit 2 unknown edge type or conflicting flags |
 | `docdag query --binding [--fields <list>]` | every binding document | exit 2 if combined with a walk flag |
@@ -118,7 +119,10 @@ configures `filename: "{id}.md"` and keeps that shape.
 
 `--dry-run` runs every computation, writes nothing and prints the plan, as `create <id> <path>`
 followed by one `rewrite <path> status: superseded` line each, or as JSON under `--format json`. It
-exits exactly as the real run would, so it is a safe way to see what a creation would cost.
+exits exactly as the real run would, so it is a safe way to see what a creation would cost. The
+plan names its files the way a finding does, relative to the working directory, and its JSON always
+carries `exists` — `true` when the corpus already holds the document and nothing would be written,
+where the text form says `exists` instead of `create`.
 
 `--id <ref>` creates the document under a chosen identifier instead of the next free one. If that
 identifier already names a document with the same title, `new` prints its path and writes nothing,
@@ -131,7 +135,7 @@ error — including "no documents directory found", so a repository without one 
 ## validate output
 
 A finding with a mechanical remedy carries one, indented under the finding in `text` and as a `fix`
-key in `json` and `rdjson`:
+key in `json`:
 
 ```
 docs/decisions/0002-ship-logs.md:4: ERROR dangling_ref 0002: supersedes reference "0009" does not name a document
@@ -151,7 +155,8 @@ the peers of a collision, the rest of a cycle:
       "rule": "status_drift",
       "id": "0001",
       "detail": "has inbound supersedes but status is not superseded",
-      "location": { "path": "docs/decisions/0001-serve-images-from-the-app.md", "line": 3 }
+      "location": { "path": "docs/decisions/0001-serve-images-from-the-app.md", "line": 3 },
+      "fix": "set status: superseded in docs/decisions/0001-serve-images-from-the-app.md"
     }
   ],
   "summary": { "documents": 2, "edges": 1, "errors": 1, "warnings": 0, "cycles": 0 }
@@ -169,7 +174,8 @@ A workflow step renders at most ten annotations, so a corpus with more findings 
 second `--format text` run written into `$GITHUB_STEP_SUMMARY` to show the rest.
 
 `--format rdjson` writes the [reviewdog](https://github.com/reviewdog/reviewdog) diagnostic format
-as a single `DiagnosticResult`, for `reviewdog -f=rdjson`. It carries no summary line.
+as a single `DiagnosticResult`, for `reviewdog -f=rdjson`. It carries neither a summary line nor a
+remedy: the format has no field for one.
 
 ## docdag.yaml
 
@@ -220,7 +226,7 @@ rules:
 Every other key is optional, and off unless the file says otherwise:
 
 ```yaml
-acyclic_union: true            # also check for cycles over the union of the acyclic edge types
+acyclic_union: true            # also report a cycle that only the union of the acyclic types closes
 
 references:                    # reference-layer validation; without it the layer is unvalidated
   dangling: error              # off (default) | warn | error
@@ -253,8 +259,9 @@ rules:
     message: "is retired, nothing supersedes it, and it carries no explained tag"
 ```
 
-The `edges:` and `rules:` lists above show where the new keys go; writing either one replaces the
-preset's list rather than adding to it.
+The `edges:` and `rules:` lists above show where the new keys go; writing one of them — or
+`derived_edges:` — replaces the preset's list rather than adding to it, and writing it as an
+explicit empty list (`derived_edges: []`) clears the preset's without putting anything in its place.
 
 A rule's `when` block ANDs its top-level clauses. The vocabulary is fixed and complete: `inbound`,
 `not_inbound`, `outbound`, `not_outbound` — each naming a declared edge type — `attr: {<key>:
@@ -283,7 +290,7 @@ that does not exist, is a configuration error (exit 3), and no check can be disa
 
 Anything else — another frontmatter key changed, added or removed; an inverse entry removed; a line
 of the existing body rewritten; the file deleted — is an `immutable_violation` error naming what
-changed:
+changed. Renames are not followed, so moving a closed document reads as the deletion it is:
 
 ```console
 $ docdag validate --immutable-since origin/main
@@ -351,7 +358,9 @@ A conventional MADR repository needs no changes:
 - An edge key written down and then left empty — `supersedes:` with nothing under it, `[]`, or a list
   of blank items — is `empty_edge`, because it reads as a declared relation and builds none.
 - A `supersedes:` entry that is not an identifier (`see 0042`, a sentence, a slug) is `invalid_ref`;
-  one that is an identifier the corpus does not hold is `dangling_ref`.
+  one that is an identifier the corpus does not hold is `dangling_ref`. A wikilink around an
+  identifier is unwrapped first, so an Obsidian vault writing `supersedes: ["[[0042]]"]` or
+  `[[0042|alias]]` names document 0042 like everyone else.
 - Body links stay in the reference layer, so prose cannot fail a build unless `references.dangling`
   opts in — and even then `[[upstream]]`, `[[3days-recap]]` and a link inside a code fence are not
   references at all.
@@ -404,7 +413,8 @@ $ docdag query --binding --fields id,title,status
 the findings about that file, the files a finding relates to it, and the documents one typed edge
 away — what changing it can break. The flag repeats and accepts a directory. The exit code still
 answers for the corpus, so a narrowed report never turns a failing repository into a passing one,
-and the number of findings withheld goes to stderr.
+and the number of findings withheld goes to stderr. The summary line and the `summary` object
+answer for the corpus too: only the list of findings narrows.
 
 **The plugin.** This repository is a Claude Code plugin. It installs a skill teaching the
 vocabulary above and which command answers which question, plus a `PostToolUse` hook that runs
