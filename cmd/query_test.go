@@ -174,7 +174,11 @@ func TestQueryFieldsKeepTheGivenOrder(t *testing.T) {
 	got := run(t, "query", "0004", "--descendants", "--fields", "status,id", "--dir", fixture(t, "ok-madr"))
 
 	assertExit(t, got, 0)
-	assertLines(t, "query", lines(got.stdout), []string{"accepted\t0003"})
+	assertLines(t, "query", lines(got.stdout), []string{
+		"accepted\t0001",
+		"superseded\t0002",
+		"accepted\t0003",
+	})
 }
 
 func TestQueryFieldsMarkAReferenceLayerHit(t *testing.T) {
