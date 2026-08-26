@@ -172,7 +172,13 @@ func droppedRefs(was, now map[string]any, key string) string {
 // continuing the committed one. Trailing whitespace is not content, so a body
 // that only gained lines at the end continues it.
 func bodyDivergence(was, now string) (int, bool) {
-	before := strings.Split(strings.TrimRight(was, " \t\r\n"), "\n")
+	trimmed := strings.TrimRight(was, " \t\r\n")
+	// A document that carried no body is continued by every body, and splitting
+	// the empty string would claim one empty line of content it never had.
+	if trimmed == "" {
+		return 0, false
+	}
+	before := strings.Split(trimmed, "\n")
 	after := strings.Split(now, "\n")
 	for i, line := range before {
 		if i >= len(after) {
