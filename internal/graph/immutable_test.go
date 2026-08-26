@@ -225,6 +225,18 @@ func TestCheckImmutable(t *testing.T) {
 		}
 	})
 
+	t.Run("renaming a closed document and rewriting it is a violation", func(t *testing.T) {
+		dir, repo := testImmutableRepo(t, corpus)
+		renamed := "docs/adr/0001-serve-images-ourselves.md"
+		testGit(t, dir, "mv", "docs/adr/0001-serve-images-from-the-application.md", renamed)
+		testWriteFiles(t, dir, map[string]string{
+			renamed: strings.Replace(testAcceptedDoc, "The application resizes", "A CDN resizes", 1),
+		})
+
+		testAssertSingleFinding(t, testCheckImmutable(t, dir, repo),
+			model.RuleImmutableViolation, model.SeverityError, "0001")
+	})
+
 	t.Run("findings name the document the way a caller would type it", func(t *testing.T) {
 		dir, repo := testImmutableRepo(t, corpus)
 		if err := os.Remove(filepath.Join(dir, "docs", "adr", "0001-serve-images-from-the-application.md")); err != nil {
