@@ -9,7 +9,8 @@
       "location": {
         "path": "../../testdata/fixtures/ok-madr/0002-store-thumbnails-on-the-local-disk.md",
         "line": 3
-      }
+      },
+      "fix": "declare supersedes: 0002 in 0003"
     }
   ],
   "summary": {

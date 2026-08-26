@@ -1,0 +1,14 @@
+{
+  "name": "docdag",
+  "description": "The DocDag plugin: decision records as a typed graph, in Claude Code",
+  "owner": {
+    "name": "Kaikei-e"
+  },
+  "plugins": [
+    {
+      "name": "docdag",
+      "source": "./",
+      "description": "Read, query and validate a repository's decision records as a typed graph"
+    }
+  ]
+}

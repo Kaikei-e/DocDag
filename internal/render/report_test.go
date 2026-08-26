@@ -31,7 +31,7 @@ func testReport(t *testing.T, fixture string) ([]model.Finding, model.Summary) {
 	}
 	parse.Localize(docs, root)
 	g := graph.Build(docs, cfg)
-	findings := graph.Validate(g, cfg)
+	findings := graph.Suggest(graph.Validate(g, cfg), g, cfg)
 	return findings, graph.Summarize(g, findings)
 }
 
