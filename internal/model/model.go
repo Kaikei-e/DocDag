@@ -64,6 +64,7 @@ const (
 	RuleSupersededOrphan       = "superseded_orphan"
 	RuleInvalidRef             = "invalid_ref"
 	RuleDanglingReference      = "dangling_reference"
+	RuleEmptyEdge              = "empty_edge"
 )
 
 // Node is one managed document. Line and KeyLines are the frontmatter
