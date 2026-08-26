@@ -83,12 +83,16 @@ func idCollision(id model.ID, colliding []string) model.Finding {
 // edgeKeyLocation points at the frontmatter key that declares an edge type,
 // falling back to the field a derived edge reads it from and then to the
 // status field.
-func edgeKeyLocation(cfg config.Config, n *model.Node, t model.EdgeType) model.Location {
-	keys := make([]string, 0, 3)
-	if spec, ok := cfg.Edge(t); ok {
-		keys = append(keys, spec.Key)
+func edgeKeyLocation(cfg config.Config, n *model.Node, types ...model.EdgeType) model.Location {
+	keys := make([]string, 0, 2*len(types)+1)
+	for _, t := range types {
+		if spec, ok := cfg.Edge(t); ok {
+			keys = append(keys, spec.Key)
+		}
 	}
-	keys = append(keys, derivedFields(cfg, t)...)
+	for _, t := range types {
+		keys = append(keys, derivedFields(cfg, t)...)
+	}
 	return n.Location(append(keys, statusField(cfg))...)
 }
 
@@ -115,32 +119,73 @@ func derivedFields(cfg config.Config, t model.EdgeType) []string {
 	return fields
 }
 
-// CheckCycles reports one finding per cycle found in an acyclic edge type.
+// CheckCycles reports one finding per cycle found in an acyclic edge type, and
+// per cycle that only the union of those types closes.
 func CheckCycles(g *model.Graph, cfg config.Config) []model.Finding {
 	findings := []model.Finding{}
-	for _, t := range cfg.AcyclicEdgeTypes() {
+	types := cfg.AcyclicEdgeTypes()
+	for _, t := range types {
 		for _, cycle := range FindCycles(Adjacency(g, t)) {
-			findings = append(findings, cycleFinding(g, cfg, t, cycle))
+			findings = append(findings, cycleFinding(g, cfg, cycle,
+				fmt.Sprintf("%s cycle: %s", t, joinIDs(cycle, " -> ")), t))
 		}
+	}
+	if cfg.AcyclicUnion && len(types) > 1 {
+		findings = append(findings, unionCycles(g, cfg, types)...)
 	}
 	SortFindings(findings)
 	return findings
 }
 
+// unionCycles reports the cycles that need more than one edge type to close.
+// A cycle inside a single type is already a finding of its own.
+func unionCycles(g *model.Graph, cfg config.Config, types []model.EdgeType) []model.Finding {
+	findings := []model.Finding{}
+	for _, cycle := range FindCycles(Adjacency(g, types...)) {
+		crossed := cycleTypes(g, cycle, types)
+		if len(crossed) < 2 {
+			continue
+		}
+		findings = append(findings, cycleFinding(g, cfg, cycle,
+			fmt.Sprintf("cycle over %s: %s", strings.Join(crossed, ", "), joinIDs(cycle, " -> ")), types...))
+	}
+	return findings
+}
+
+// cycleTypes names the edge types a closed path travels on, in configuration
+// order, so a reader knows which keys to look at.
+func cycleTypes(g *model.Graph, cycle []model.ID, types []model.EdgeType) []string {
+	used := make(map[model.EdgeType]bool, len(types))
+	for i := 1; i < len(cycle); i++ {
+		for _, e := range g.Edges {
+			if e.From == cycle[i-1] && e.To == cycle[i] && slices.Contains(types, e.Type) {
+				used[e.Type] = true
+			}
+		}
+	}
+	names := make([]string, 0, len(used))
+	for _, t := range types {
+		if used[t] {
+			names = append(names, t.String())
+		}
+	}
+	return names
+}
+
 // cycleFinding files a cycle against its lexically smallest member and relates
 // the others, so a reader opens one file and sees every edge on the path.
-func cycleFinding(g *model.Graph, cfg config.Config, t model.EdgeType, cycle []model.ID) model.Finding {
+func cycleFinding(g *model.Graph, cfg config.Config, cycle []model.ID, detail string, types ...model.EdgeType) model.Finding {
 	f := model.Finding{
 		Severity: model.SeverityError,
 		Rule:     model.RuleCycle,
 		ID:       cycle[0],
-		Detail:   fmt.Sprintf("%s cycle: %s", t, joinIDs(cycle, " -> ")),
+		Detail:   detail,
 	}
 	members := slices.Compact(slices.Sorted(slices.Values(cycle)))
 	locations := make([]model.Location, 0, len(members))
 	for _, id := range members {
 		if n, ok := g.Node(id); ok {
-			locations = append(locations, edgeKeyLocation(cfg, n, t))
+			locations = append(locations, edgeKeyLocation(cfg, n, types...))
 		}
 	}
 	if len(locations) > 0 {

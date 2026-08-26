@@ -172,6 +172,7 @@ type Config struct {
 	Rules        []Rule            `yaml:"rules,omitempty"`
 	Template     string            `yaml:"template,omitempty"`
 	References   ReferencesSpec    `yaml:"references,omitempty"`
+	AcyclicUnion bool              `yaml:"acyclic_union,omitempty"`
 }
 
 // Edge returns the spec of one typed edge.
