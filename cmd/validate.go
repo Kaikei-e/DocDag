@@ -13,7 +13,7 @@ func newValidateCmd() *cobra.Command {
 		Short: "Run the structural checks and the configured rules",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			format, err := outputFormat(cmd)
+			format, err := outputFormat(cmd, formatText, formatJSON, formatGitHub, formatRDJSON)
 			if err != nil {
 				return err
 			}
@@ -24,9 +24,14 @@ func newValidateCmd() *cobra.Command {
 			findings := graph.Validate(g, cfg)
 			summary := graph.Summarize(g, findings)
 			out := cmd.OutOrStdout()
-			if format == formatJSON {
+			switch format {
+			case formatJSON:
 				err = render.FindingsJSON(out, findings, summary)
-			} else {
+			case formatGitHub:
+				err = render.FindingsGitHub(out, findings, summary)
+			case formatRDJSON:
+				err = render.FindingsRDJSON(out, findings, summary)
+			default:
 				err = render.FindingsText(out, findings, summary)
 			}
 			if err != nil {

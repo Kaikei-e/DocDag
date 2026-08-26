@@ -38,6 +38,8 @@ const (
 
 	formatText    = "text"
 	formatJSON    = "json"
+	formatGitHub  = "github"
+	formatRDJSON  = "rdjson"
 	formatMermaid = "mermaid"
 	formatDOT     = "dot"
 )
@@ -85,13 +87,14 @@ func validFormat(format string, allowed ...string) error {
 	return usageErr("invalid --%s %q (allowed: %v)", flagFormat, format, allowed)
 }
 
-// outputFormat reads and validates the text/json output format.
-func outputFormat(cmd *cobra.Command) (string, error) {
+// outputFormat reads the output format and holds it to the set the calling
+// command answers in.
+func outputFormat(cmd *cobra.Command, allowed ...string) (string, error) {
 	format, err := cmd.Flags().GetString(flagFormat)
 	if err != nil {
 		return "", usageErr("%v", err)
 	}
-	if err := validFormat(format, formatText, formatJSON); err != nil {
+	if err := validFormat(format, allowed...); err != nil {
 		return "", err
 	}
 	return format, nil
@@ -180,7 +183,7 @@ func newRootCmd() *cobra.Command {
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().String(flagDir, "", "documents directory (overrides config and discovery)")
 	root.PersistentFlags().String(flagConfig, "", "path to docdag.yaml")
-	root.PersistentFlags().String(flagFormat, formatText, "output format: text|json")
+	root.PersistentFlags().String(flagFormat, formatText, "output format: text|json, plus github|rdjson on validate")
 	root.AddCommand(
 		newValidateCmd(),
 		newResolveCmd(),
