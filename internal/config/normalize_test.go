@@ -130,6 +130,97 @@ func TestADRNormalizerMatchesFilename(t *testing.T) {
 	}
 }
 
+func TestIDShaped(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  string
+		want bool
+	}{
+		{name: "a padded identifier", ref: "0042", want: true},
+		{name: "a bare number", ref: "42", want: true},
+		{name: "a prefixed identifier", ref: "ADR-0042", want: true},
+		{name: "a lowercase prefix", ref: "adr0042", want: true},
+		{name: "a file name", ref: "0042-title.md", want: true},
+		{name: "a file stem", ref: "0042-title", want: true},
+		{name: "prose around a reference", ref: "see 0042"},
+		{name: "a reference in a sentence", ref: "0042 and 0043"},
+		{name: "a slug that opens with digits", ref: "3days-recap"},
+		{name: "a dotted name", ref: "tool.uv.index"},
+		{name: "a word", ref: "upstream"},
+		{name: "a path", ref: "docs/adr/0042.md"},
+		{name: "an empty reference"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IDShaped(tt.ref); got != tt.want {
+				t.Fatalf("IDShaped(%q) = %v, want %v", tt.ref, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsDocumentLink(t *testing.T) {
+	tests := []struct {
+		name   string
+		target string
+		want   bool
+	}{
+		{name: "a managed file name", target: "0042-title.md", want: true},
+		{name: "a bare managed file name", target: "000042.md", want: true},
+		{name: "a dot-relative target", target: "./0042-title.md", want: true},
+		{name: "a parent-relative target", target: "../adr/0042-title.md", want: true},
+		{name: "a title suffix with any punctuation", target: "0042-title_v2.md", want: true},
+		{name: "a narrow digit run", target: "42-title.md"},
+		{name: "a wide digit run", target: "1234567-title.md"},
+		{name: "an unmanaged file", target: "README.md"},
+		{name: "a slug that opens with digits", target: "3days-recap.md"},
+		{name: "an empty target"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsDocumentLink(tt.target); got != tt.want {
+				t.Fatalf("IsDocumentLink(%q) = %v, want %v", tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigIsReference(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		target  string
+		want    bool
+	}{
+		{name: "a padded identifier", target: "000042", want: true},
+		{name: "a four digit identifier", target: "0042", want: true},
+		{name: "a three digit identifier", target: "042", want: true},
+		{name: "a prefixed identifier", target: "ADR-0042", want: true},
+		{name: "an unhyphenated prefix", target: "adr0042", want: true},
+		{name: "a single digit is not wide enough", target: "1"},
+		{name: "a file stem carrying a title", target: "0042-title"},
+		{name: "a slug that opens with digits", target: "3days-recap"},
+		{name: "a word", target: "upstream"},
+		{name: "a dotted name", target: "tool.uv.index"},
+		{name: "prose", target: "see 0042"},
+		{name: "an empty target"},
+		{name: "a widened pattern accepts a title", pattern: `^(\d{3,6})(?:-.*)?$`, target: "0042-title", want: true},
+		{name: "a widened pattern still rejects a word", pattern: `^(\d{3,6})(?:-.*)?$`, target: "upstream"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.References.Pattern = tt.pattern
+			if got := cfg.IsReference(tt.target); got != tt.want {
+				t.Fatalf("IsReference(%q) = %v, want %v", tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestADRNormalizerWidth(t *testing.T) {
 	if got := (ADRNormalizer{Pad: 6}).Width(); got != 6 {
 		t.Fatalf("Width = %d, want 6", got)
