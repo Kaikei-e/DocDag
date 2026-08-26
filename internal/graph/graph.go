@@ -3,6 +3,7 @@
 package graph
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -43,6 +44,10 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 				findings = append(findings, unresolvableRef(doc, spec.Key, t, entry))
 			}
 			for _, ref := range refs {
+				if !config.IDShaped(ref) {
+					findings = append(findings, invalidRef(doc, spec.Key, t, ref))
+					continue
+				}
 				target, ok := normalizer.Normalize(ref)
 				if !ok {
 					findings = append(findings, unresolvableRef(doc, spec.Key, t, ref))
@@ -66,7 +71,11 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 	refs := make(map[edgeKey]bool)
 	for _, doc := range docs {
 		for _, link := range parse.Links(doc.Body) {
-			target, ok := normalizer.Normalize(link.Target)
+			ref, ok := referenceTarget(cfg, link)
+			if !ok {
+				continue
+			}
+			target, ok := normalizer.Normalize(ref)
 			if !ok {
 				continue
 			}
@@ -130,6 +139,28 @@ func unresolvableRef(doc *parse.Document, key string, t model.EdgeType, ref stri
 		Detail:   danglingDetail(t, ref),
 		Location: model.Locate(doc.Path, doc.FrontmatterLine, doc.KeyLines, key),
 	}
+}
+
+func invalidRef(doc *parse.Document, key string, t model.EdgeType, ref string) model.Finding {
+	return model.Finding{
+		Severity: model.SeverityError,
+		Rule:     model.RuleInvalidRef,
+		ID:       doc.ID,
+		Detail:   fmt.Sprintf("%s reference %q is not an identifier", t, ref),
+		Location: model.Locate(doc.Path, doc.FrontmatterLine, doc.KeyLines, key),
+	}
+}
+
+// referenceTarget reports the raw reference a body link names, and whether the
+// link is an identity reference at all: prose links carry no identity, and only
+// a managed file name makes a Markdown link one.
+func referenceTarget(cfg config.Config, link parse.Link) (string, bool) {
+	if link.Kind == parse.LinkMarkdown {
+		return link.Target, config.IsDocumentLink(link.Target)
+	}
+	ref, _, _ := strings.Cut(link.Target, "#")
+	ref = strings.TrimSpace(ref)
+	return ref, cfg.IsReference(ref)
 }
 
 func sortedEdges(origins map[edgeKey]model.Origin) []model.Edge {

@@ -45,6 +45,21 @@ const (
 	StatusSuperseded = "superseded"
 )
 
+// ReferencesSpec configures reference-layer validation, which is off unless a
+// configuration asks for it.
+type ReferencesSpec struct {
+	Dangling string   `yaml:"dangling,omitempty"`
+	Pattern  string   `yaml:"pattern,omitempty"`
+	Scan     []string `yaml:"scan,omitempty"`
+}
+
+// Reference-layer validation modes and the scannable regions.
+const (
+	ReferencesOff   = "off"
+	ScanBody        = "body"
+	ScanFrontmatter = "frontmatter"
+)
+
 // EdgeSpec declares one typed constraint edge and the frontmatter key that
 // carries its references.
 type EdgeSpec struct {
@@ -129,6 +144,7 @@ type Config struct {
 	DerivedEdges []DerivedEdgeSpec `yaml:"derived_edges,omitempty"`
 	Rules        []Rule            `yaml:"rules,omitempty"`
 	Template     string            `yaml:"template,omitempty"`
+	References   ReferencesSpec    `yaml:"references,omitempty"`
 }
 
 // Edge returns the spec of one typed edge.
