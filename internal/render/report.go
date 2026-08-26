@@ -242,12 +242,15 @@ func CreatedPath(w io.Writer, path string, asJSON bool) error {
 // writes.
 const PlanSchemaVersion = 1
 
-// Plan is what `docdag new` would write, reported instead of written.
+// Plan is what `docdag new` would write, reported instead of written. Exists
+// marks the path as a document the corpus already holds, so it stays out of
+// the JSON a consumer reads the plan from.
 type Plan struct {
 	SchemaVersion int           `json:"schema_version"`
 	ID            model.ID      `json:"id"`
 	Path          string        `json:"path"`
 	Rewrites      []PlanRewrite `json:"rewrites"`
+	Exists        bool          `json:"-"`
 }
 
 // PlanRewrite is one status change a plan applies to a superseded document.
@@ -270,7 +273,11 @@ func CreationPlan(w io.Writer, plan Plan, field string, asJSON bool) error {
 		return nil
 	}
 	out := &errWriter{w: w}
-	out.printf("create %s %s\n", plan.ID, plan.Path)
+	verb := "create"
+	if plan.Exists {
+		verb = "exists"
+	}
+	out.printf("%s %s %s\n", verb, plan.ID, plan.Path)
 	for _, r := range plan.Rewrites {
 		out.printf("rewrite %s %s: %s\n", r.Path, field, r.Status)
 	}

@@ -15,6 +15,7 @@ const (
 	flagSupersedes = "supersedes"
 	flagDependsOn  = "depends-on"
 	flagDryRun     = "dry-run"
+	flagID         = "id"
 )
 
 func newNewCmd() *cobra.Command {
@@ -27,6 +28,7 @@ func newNewCmd() *cobra.Command {
 	cmd.Flags().StringArray(flagSupersedes, nil, "reference this document supersedes (repeatable)")
 	cmd.Flags().StringArray(flagDependsOn, nil, "reference this document depends on (repeatable)")
 	cmd.Flags().Bool(flagDryRun, false, "print what would be written and write nothing")
+	cmd.Flags().String(flagID, "", "identifier to create the document under, instead of the next free one")
 	return cmd
 }
 
@@ -48,11 +50,16 @@ func runNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return usageErr("%v", err)
 	}
+	id, err := flags.GetString(flagID)
+	if err != nil {
+		return usageErr("%v", err)
+	}
 	g, cfg, err := loadGraph(cmd)
 	if err != nil {
 		return err
 	}
-	plan, err := newdoc.NewPlan(g, cfg, newdoc.Request{Title: args[0], Supersedes: supersedes, DependsOn: dependsOn})
+	req := newdoc.Request{ID: id, Title: args[0], Supersedes: supersedes, DependsOn: dependsOn}
+	plan, err := newdoc.NewPlan(g, cfg, req)
 	if err != nil {
 		return creationErr(err)
 	}
@@ -74,17 +81,22 @@ func runNew(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// creationErr keeps an unknown reference a domain failure and everything else
+// creationErr keeps what the corpus says a domain failure and everything else
 // an I/O one, whether it surfaced while planning or while writing.
 func creationErr(err error) error {
-	if errors.Is(err, model.ErrUnknownID) {
+	if errors.Is(err, model.ErrUnknownID) || errors.Is(err, model.ErrIDConflict) {
 		return domainErr("%v", err)
 	}
 	return ioErr(fmt.Errorf("create document: %w", err))
 }
 
 func planReport(plan newdoc.Plan) render.Plan {
-	out := render.Plan{ID: plan.ID, Path: plan.Path, Rewrites: make([]render.PlanRewrite, 0, len(plan.Rewrites))}
+	out := render.Plan{
+		ID:       plan.ID,
+		Path:     plan.Path,
+		Exists:   plan.Exists,
+		Rewrites: make([]render.PlanRewrite, 0, len(plan.Rewrites)),
+	}
 	for _, r := range plan.Rewrites {
 		out.Rewrites = append(out.Rewrites, render.PlanRewrite{Path: r.Path, Status: r.Status})
 	}
