@@ -188,6 +188,111 @@ func danglingDetail(t model.EdgeType, ref string) string {
 	return fmt.Sprintf("%s reference %q does not name a document", t, ref)
 }
 
+// CheckInverse reports frontmatter that disagrees with the edges it mirrors:
+// an edge whose target does not name its source under the inverse key, and an
+// entry under the inverse key that no edge backs.
+func CheckInverse(g *model.Graph, cfg config.Config) []model.Finding {
+	findings := []model.Finding{}
+	for _, spec := range cfg.Edges {
+		if spec.Inverse == "" {
+			continue
+		}
+		findings = append(findings, checkInverseKey(g, cfg, spec)...)
+	}
+	SortFindings(findings)
+	return findings
+}
+
+func checkInverseKey(g *model.Graph, cfg config.Config, spec config.EdgeSpec) []model.Finding {
+	findings := []model.Finding{}
+	t := model.EdgeType(spec.Name)
+	normalizer := cfg.Normalizer()
+	listed := make(map[edgeKey]bool)
+
+	for _, id := range g.NodeIDs() {
+		n := g.Nodes[id]
+		loc := n.Location(spec.Inverse, spec.Key, statusField(cfg))
+		refs, invalid := parse.Refs(n.Attrs, spec.Inverse)
+		for _, entry := range append(slices.Clone(invalid), unshaped(refs)...) {
+			findings = append(findings, model.Finding{
+				Severity: model.SeverityError,
+				Rule:     model.RuleInvalidRef,
+				ID:       id,
+				Detail:   fmt.Sprintf("%s reference %q is not an identifier", spec.Inverse, entry),
+				Location: loc,
+			})
+		}
+		for _, ref := range refs {
+			source, ok := normalizer.Normalize(ref)
+			if !ok || !config.IDShaped(ref) {
+				continue
+			}
+			if _, known := g.Node(source); !known {
+				findings = append(findings, model.Finding{
+					Severity: model.SeverityError,
+					Rule:     model.RuleDanglingRef,
+					ID:       id,
+					Detail:   danglingDetail(model.EdgeType(spec.Inverse), ref),
+					Location: loc,
+				})
+				continue
+			}
+			listed[edgeKey{from: source, to: id, t: t}] = true
+		}
+	}
+
+	for _, e := range g.EdgesOfType(t) {
+		if _, known := g.Node(e.To); !known {
+			continue
+		}
+		if listed[edgeKey{from: e.From, to: e.To, t: t}] {
+			continue
+		}
+		findings = append(findings, inverseMismatch(g, cfg, spec, e.To, e.From,
+			fmt.Sprintf("%s does not list %s, which declares %s", spec.Inverse, e.From, spec.Key)))
+	}
+
+	declared := make(map[edgeKey]bool, len(g.Edges))
+	for _, e := range g.EdgesOfType(t) {
+		declared[edgeKey{from: e.From, to: e.To, t: t}] = true
+	}
+	for k := range listed {
+		if declared[k] {
+			continue
+		}
+		findings = append(findings, inverseMismatch(g, cfg, spec, k.to, k.from,
+			fmt.Sprintf("%s lists %s, which declares no %s edge to this document", spec.Inverse, k.from, t)))
+	}
+	return findings
+}
+
+func inverseMismatch(g *model.Graph, cfg config.Config, spec config.EdgeSpec, owner, peer model.ID, detail string) model.Finding {
+	f := model.Finding{
+		Severity: model.SeverityError,
+		Rule:     model.RuleInverseMismatch,
+		ID:       owner,
+		Detail:   detail,
+	}
+	if n, ok := g.Node(owner); ok {
+		f.Location = n.Location(spec.Inverse, spec.Key, statusField(cfg))
+	}
+	if n, ok := g.Node(peer); ok {
+		f.Related = []model.Location{n.Location(spec.Key, statusField(cfg))}
+	}
+	return f
+}
+
+// unshaped returns the references that name no identity at all.
+func unshaped(refs []string) []string {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if !config.IDShaped(ref) {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
 // CheckStatusVocabulary reports statuses outside the configured vocabulary.
 func CheckStatusVocabulary(g *model.Graph, cfg config.Config) []model.Finding {
 	findings := []model.Finding{}
@@ -275,6 +380,7 @@ func Check(g *model.Graph, cfg config.Config) []model.Finding {
 	findings := []model.Finding{}
 	findings = append(findings, CheckCycles(g, cfg)...)
 	findings = append(findings, CheckDangling(g, cfg)...)
+	findings = append(findings, CheckInverse(g, cfg)...)
 	findings = append(findings, CheckStatusVocabulary(g, cfg)...)
 	findings = append(findings, CheckDerived(g, cfg)...)
 	SortFindings(findings)

@@ -44,6 +44,11 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 			if declaresNothing(doc, spec.Key, refs, invalid) {
 				findings = append(findings, emptyEdge(doc, spec.Key))
 			}
+			if spec.Inverse != "" {
+				if mirrored, bad := parse.Refs(doc.Frontmatter, spec.Inverse); declaresNothing(doc, spec.Inverse, mirrored, bad) {
+					findings = append(findings, emptyEdge(doc, spec.Inverse))
+				}
+			}
 			for _, entry := range invalid {
 				findings = append(findings, unresolvableRef(doc, spec.Key, t, entry))
 			}
