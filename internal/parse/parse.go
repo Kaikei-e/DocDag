@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -134,6 +135,24 @@ func frontmatterError(err error) *FrontmatterError {
 	return fe
 }
 
+// embeddedPosition matches the position a decode failure writes into its own
+// text, such as the earlier definition a duplicate key names.
+var embeddedPosition = regexp.MustCompile(`\[(\d+):(\d+)\]`)
+
+// offsetBy moves a block-relative failure onto the file. The message counts
+// from the block's first line too, so a reader is not told two positions.
+func (e *FrontmatterError) offsetBy(first int) *FrontmatterError {
+	message := embeddedPosition.ReplaceAllStringFunc(e.Message, func(match string) string {
+		parts := embeddedPosition.FindStringSubmatch(match)
+		line, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return match
+		}
+		return fmt.Sprintf("[%d:%s]", first+line, parts[2])
+	})
+	return &FrontmatterError{Message: message, Line: first + e.Line, Column: e.Column}
+}
+
 // KeyLines reports the line of every top-level key in a frontmatter block,
 // 1-based and relative to the first line of the block. A block that does not
 // parse has no keys; the decode failure is reported separately.
@@ -199,7 +218,7 @@ func File(path string, cfg config.Config) (*Document, error) {
 	if err != nil {
 		var fe *FrontmatterError
 		errors.As(err, &fe)
-		doc.Err = &FrontmatterError{Message: fe.Message, Line: doc.FrontmatterLine + fe.Line, Column: fe.Column}
+		doc.Err = fe.offsetBy(doc.FrontmatterLine)
 		return doc, nil
 	}
 	doc.Frontmatter = fm
