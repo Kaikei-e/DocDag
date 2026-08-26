@@ -640,3 +640,12 @@ func TestDiscoverHonorsOnDiskCasing(t *testing.T) {
 		t.Errorf("Discover = %q, want %q", got, want)
 	}
 }
+
+func TestMergeOverridesTheFilenameTemplate(t *testing.T) {
+	if merged := Merge(ADRPreset(), Config{Filename: "{id}.md"}); merged.Filename != "{id}.md" {
+		t.Errorf("Filename = %q, want the override %q", merged.Filename, "{id}.md")
+	}
+	if kept := Merge(ADRPreset(), Config{}); kept.Filename != ADRPreset().Filename {
+		t.Errorf("Filename = %q, want the base %q", kept.Filename, ADRPreset().Filename)
+	}
+}
