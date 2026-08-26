@@ -30,17 +30,24 @@ func testImmutableRepo(t *testing.T, files map[string]string) (string, *vcs.Repo
 	dir := t.TempDir()
 	testGit(t, dir, "init", "--quiet")
 	testWriteFiles(t, dir, files)
-	testGit(t, dir, "add", "-A")
-	testGit(t, dir,
-		"-c", "user.name=DocDag Test",
-		"-c", "user.email=test@example.test",
-		"-c", "commit.gpgsign=false",
-		"commit", "--quiet", "-m", "the first revision")
+	testCommit(t, dir, "the first revision")
 	repo, err := vcs.Open(dir)
 	if err != nil {
 		t.Fatalf("open repository: %v", err)
 	}
 	return dir, repo
+}
+
+// testCommit records the working tree. Identity comes from flags, so a runner
+// without a git identity commits like any other.
+func testCommit(t *testing.T, dir, message string) {
+	t.Helper()
+	testGit(t, dir, "add", "-A")
+	testGit(t, dir,
+		"-c", "user.name=DocDag Test",
+		"-c", "user.email=test@example.test",
+		"-c", "commit.gpgsign=false",
+		"commit", "--quiet", "-m", message)
 }
 
 func testGit(t *testing.T, dir string, args ...string) string {
@@ -158,6 +165,76 @@ func TestCheckImmutable(t *testing.T) {
 
 		if got := testCheckImmutable(t, dir, repo); len(got) != 0 {
 			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("converting the file to CRLF is allowed", func(t *testing.T) {
+		name := "docs/adr/0001-serve-images-from-the-application.md"
+		dir, repo := testImmutableRepo(t, corpus)
+		testWriteFiles(t, dir, map[string]string{name: strings.ReplaceAll(testAcceptedDoc, "\n", "\r\n")})
+
+		if got := testCheckImmutable(t, dir, repo); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("reordering frontmatter keys without changing a value is allowed", func(t *testing.T) {
+		name := "docs/adr/0001-serve-images-from-the-application.md"
+		dir, repo := testImmutableRepo(t, corpus)
+		reordered := strings.Replace(testAcceptedDoc,
+			"title: Serve images from the application\nstatus: accepted\ndate: 2025-01-01\n",
+			"date: 2025-01-01\nstatus: accepted\ntitle: Serve images from the application\n", 1)
+		testWriteFiles(t, dir, map[string]string{name: reordered})
+
+		if got := testCheckImmutable(t, dir, repo); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("gaining a trailing newline is allowed", func(t *testing.T) {
+		name := "docs/adr/0001-serve-images-from-the-application.md"
+		dir, repo := testImmutableRepo(t, corpus)
+		testWriteFiles(t, dir, map[string]string{name: testAcceptedDoc + "\n"})
+
+		if got := testCheckImmutable(t, dir, repo); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a document outside the documents directory is not the check's business", func(t *testing.T) {
+		note := "notes/0002-a-note.md"
+		dir, repo := testImmutableRepo(t, map[string]string{
+			"docs/adr/0001-serve-images-from-the-application.md": testAcceptedDoc,
+			note: testAcceptedDoc,
+		})
+		testWriteFiles(t, dir, map[string]string{
+			note: strings.Replace(testAcceptedDoc, "The application resizes", "A CDN resizes", 1),
+		})
+
+		if got := testCheckImmutable(t, dir, repo); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a diverged branch is compared against the merge base", func(t *testing.T) {
+		name := "docs/adr/0001-serve-images-from-the-application.md"
+		dir, repo := testImmutableRepo(t, corpus)
+		trunk := strings.TrimSpace(testGit(t, dir, "rev-parse", "--abbrev-ref", "HEAD"))
+		testGit(t, dir, "checkout", "--quiet", "-b", "other")
+		testWriteFiles(t, dir, map[string]string{
+			name: testAcceptedDoc + "\n## Consequences\n\nImage traffic shares the request pool.\n",
+		})
+		testCommit(t, dir, "the branch revision")
+		testGit(t, dir, "checkout", "--quiet", trunk)
+
+		findings, err := CheckImmutable(repo, testImmutableConfig(dir), "other", dir)
+		if err != nil {
+			t.Fatalf("CheckImmutable: %v", err)
+		}
+		// The working tree is the merge base, so it has grown by nothing; only a
+		// comparison against the branch tip would call that a rewrite.
+		if len(findings) != 0 {
+			t.Fatalf("findings = %+v, want none", findings)
 		}
 	})
 

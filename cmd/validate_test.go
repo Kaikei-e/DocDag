@@ -302,6 +302,18 @@ func TestValidateImmutableSince(t *testing.T) {
 			t.Error("stderr is empty, want a diagnostic naming the missing repository")
 		}
 	})
+
+	t.Run("a machine without git is a configuration error", func(t *testing.T) {
+		t.Chdir(gitRepo(t, corpus))
+		t.Setenv("PATH", t.TempDir())
+
+		got := run(t, "validate", "--immutable-since", "HEAD")
+
+		assertExit(t, got, 3)
+		if got.stderr == "" {
+			t.Error("stderr is empty, want a diagnostic naming the missing git")
+		}
+	})
 }
 
 func TestValidateRuleAlternativesAndNegation(t *testing.T) {
