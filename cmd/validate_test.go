@@ -676,6 +676,20 @@ func TestValidateTouchingExitsOnTheWholeCorpus(t *testing.T) {
 	}
 }
 
+func TestValidateTouchingCountsASingleHiddenFindingInTheSingular(t *testing.T) {
+	dir := testMixedCorpus(t)
+
+	got := run(t, "validate",
+		"--touching", filepath.Join(dir, "0001-alpha.md"),
+		"--touching", filepath.Join(dir, "0002-beta.md"),
+		"--dir", dir)
+
+	assertExit(t, got, 1)
+	if !strings.Contains(got.stderr, "(1 finding hidden)") {
+		t.Errorf("stderr = %q, want the one hidden finding counted in the singular", got.stderr)
+	}
+}
+
 func TestValidateTouchingTakesADirectoryAndSeveralPaths(t *testing.T) {
 	dir := testMixedCorpus(t)
 
