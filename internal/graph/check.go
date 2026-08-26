@@ -293,6 +293,62 @@ func unshaped(refs []string) []string {
 	return out
 }
 
+// CheckCardinality reports documents whose edge degree leaves the bounds the
+// configuration puts on an edge type.
+func CheckCardinality(g *model.Graph, cfg config.Config) []model.Finding {
+	findings := []model.Finding{}
+	for _, spec := range cfg.Edges {
+		if spec.MaxInbound == 0 && spec.MaxOutbound == 0 && spec.MinOutbound == 0 {
+			continue
+		}
+		t := model.EdgeType(spec.Name)
+		inbound, outbound := degrees(g, t)
+		for _, id := range g.NodeIDs() {
+			findings = append(findings, cardinality(g, cfg, spec, id, inbound[id], outbound[id])...)
+		}
+	}
+	SortFindings(findings)
+	return findings
+}
+
+// degrees counts the edges of one type at each known document. An edge with an
+// unknown endpoint is a dangling reference, reported on its own; it still
+// counts at the endpoint that exists.
+func degrees(g *model.Graph, t model.EdgeType) (inbound, outbound map[model.ID]int) {
+	inbound = make(map[model.ID]int, len(g.Nodes))
+	outbound = make(map[model.ID]int, len(g.Nodes))
+	for _, e := range g.EdgesOfType(t) {
+		outbound[e.From]++
+		inbound[e.To]++
+	}
+	return inbound, outbound
+}
+
+func cardinality(g *model.Graph, cfg config.Config, spec config.EdgeSpec, id model.ID, inbound, outbound int) []model.Finding {
+	t := model.EdgeType(spec.Name)
+	var details []string
+	if spec.MaxInbound > 0 && inbound > spec.MaxInbound {
+		details = append(details, fmt.Sprintf("%d inbound %s edges exceed max_inbound %d", inbound, t, spec.MaxInbound))
+	}
+	if spec.MaxOutbound > 0 && outbound > spec.MaxOutbound {
+		details = append(details, fmt.Sprintf("%d outbound %s edges exceed max_outbound %d", outbound, t, spec.MaxOutbound))
+	}
+	if outbound < spec.MinOutbound {
+		details = append(details, fmt.Sprintf("%d outbound %s edges fall short of min_outbound %d", outbound, t, spec.MinOutbound))
+	}
+	findings := make([]model.Finding, 0, len(details))
+	for _, detail := range details {
+		findings = append(findings, model.Finding{
+			Severity: model.SeverityError,
+			Rule:     model.RuleCardinality,
+			ID:       id,
+			Detail:   detail,
+			Location: edgeKeyLocation(cfg, g.Nodes[id], t),
+		})
+	}
+	return findings
+}
+
 // CheckStatusVocabulary reports statuses outside the configured vocabulary.
 func CheckStatusVocabulary(g *model.Graph, cfg config.Config) []model.Finding {
 	findings := []model.Finding{}
@@ -381,6 +437,7 @@ func Check(g *model.Graph, cfg config.Config) []model.Finding {
 	findings = append(findings, CheckCycles(g, cfg)...)
 	findings = append(findings, CheckDangling(g, cfg)...)
 	findings = append(findings, CheckInverse(g, cfg)...)
+	findings = append(findings, CheckCardinality(g, cfg)...)
 	findings = append(findings, CheckStatusVocabulary(g, cfg)...)
 	findings = append(findings, CheckDerived(g, cfg)...)
 	SortFindings(findings)

@@ -90,6 +90,10 @@ type EdgeSpec struct {
 	// Inverse is the frontmatter key the edge's target must mirror the edge
 	// under. It declares no edges of its own.
 	Inverse string `yaml:"inverse,omitempty"`
+	// Degree bounds on this edge type. Zero means unbounded.
+	MaxInbound  int `yaml:"max_inbound,omitempty"`
+	MaxOutbound int `yaml:"max_outbound,omitempty"`
+	MinOutbound int `yaml:"min_outbound,omitempty"`
 }
 
 // DerivedEdgeSpec declares an edge inferred from a frontmatter field value.
@@ -253,6 +257,9 @@ func (c Config) validateEdges() error {
 		if err := validDirection(spec.Direction); err != nil {
 			return fmt.Errorf("edge %q: %w", spec.Name, err)
 		}
+		if err := validBounds(spec); err != nil {
+			return err
+		}
 		declared[spec.Name] = true
 		keys[spec.Key] = true
 	}
@@ -318,6 +325,27 @@ func (c Config) validateDerivedEdges() error {
 		if err := validDirection(spec.Direction); err != nil {
 			return fmt.Errorf("derived edge on %q: %w", spec.Field, err)
 		}
+	}
+	return nil
+}
+
+func validBounds(spec EdgeSpec) error {
+	bounds := []struct {
+		name  string
+		value int
+	}{
+		{"max_inbound", spec.MaxInbound},
+		{"max_outbound", spec.MaxOutbound},
+		{"min_outbound", spec.MinOutbound},
+	}
+	for _, bound := range bounds {
+		if bound.value < 0 {
+			return fmt.Errorf("edge %q: %s %d is negative: %w", spec.Name, bound.name, bound.value, model.ErrInvalidConfig)
+		}
+	}
+	if spec.MaxOutbound > 0 && spec.MinOutbound > spec.MaxOutbound {
+		return fmt.Errorf("edge %q: min_outbound %d is above max_outbound %d: %w",
+			spec.Name, spec.MinOutbound, spec.MaxOutbound, model.ErrInvalidConfig)
 	}
 	return nil
 }
