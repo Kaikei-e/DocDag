@@ -157,6 +157,20 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:   "an edge with cardinality bounds",
+			mutate: func(c *Config) { c.Edges[0].MaxInbound, c.Edges[0].MinOutbound = 1, 1 },
+		},
+		{
+			name:    "a negative bound",
+			mutate:  func(c *Config) { c.Edges[0].MaxInbound = -1 },
+			wantErr: true,
+		},
+		{
+			name:    "a minimum above the maximum",
+			mutate:  func(c *Config) { c.Edges[0].MinOutbound, c.Edges[0].MaxOutbound = 2, 1 },
+			wantErr: true,
+		},
+		{
 			name:   "an edge with an inverse key",
 			mutate: func(c *Config) { c.Edges[0].Inverse = "superseded_by" },
 		},

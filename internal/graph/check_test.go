@@ -360,6 +360,101 @@ func TestCheckInverse(t *testing.T) {
 	})
 }
 
+func TestCheckCardinality(t *testing.T) {
+	bounded := func(mutate func(*config.EdgeSpec)) config.Config {
+		cfg := config.ADRPreset()
+		mutate(&cfg.Edges[0])
+		return cfg
+	}
+	fanIn := testGraph(
+		[]*model.Node{
+			testNode("0001", config.StatusSuperseded),
+			testNode("0002", config.StatusAccepted),
+			testNode("0003", config.StatusAccepted),
+		},
+		[]model.Edge{
+			testEdge("0002", "0001", config.EdgeSupersedes),
+			testEdge("0003", "0001", config.EdgeSupersedes),
+		},
+		nil,
+	)
+
+	t.Run("an unbounded edge type reports nothing", func(t *testing.T) {
+		if got := CheckCardinality(fanIn, config.ADRPreset()); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("too many inbound edges is an error on the target", func(t *testing.T) {
+		cfg := bounded(func(s *config.EdgeSpec) { s.MaxInbound = 1 })
+
+		f := testAssertSingleFinding(t, CheckCardinality(fanIn, cfg), model.RuleCardinality, model.SeverityError, "0001")
+		if !strings.Contains(f.Detail, "max_inbound") || !strings.Contains(f.Detail, "2") {
+			t.Errorf("detail = %q, want the count and the bound", f.Detail)
+		}
+		if f.Location != testNodeLocation("0001", testSupersedesLine) {
+			t.Errorf("location = %+v, want the edge key line", f.Location)
+		}
+	})
+
+	t.Run("too many outbound edges is an error on the source", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNode("0001", config.StatusSuperseded),
+				testNode("0002", config.StatusSuperseded),
+				testNode("0003", config.StatusAccepted),
+			},
+			[]model.Edge{
+				testEdge("0003", "0001", config.EdgeSupersedes),
+				testEdge("0003", "0002", config.EdgeSupersedes),
+			},
+			nil,
+		)
+		cfg := bounded(func(s *config.EdgeSpec) { s.MaxOutbound = 1 })
+
+		f := testAssertSingleFinding(t, CheckCardinality(g, cfg), model.RuleCardinality, model.SeverityError, "0003")
+		if !strings.Contains(f.Detail, "max_outbound") {
+			t.Errorf("detail = %q, want the bound named", f.Detail)
+		}
+	})
+
+	t.Run("too few outbound edges is an error on every document short of the minimum", func(t *testing.T) {
+		cfg := bounded(func(s *config.EdgeSpec) { s.MinOutbound = 1 })
+
+		got := CheckCardinality(fanIn, cfg)
+
+		testAssertIDs(t, "cardinality ids", testFindingIDs(got, model.RuleCardinality), testIDs("0001"))
+		if !strings.Contains(got[0].Detail, "min_outbound") {
+			t.Errorf("detail = %q, want the bound named", got[0].Detail)
+		}
+	})
+
+	t.Run("the bound is per edge type", func(t *testing.T) {
+		cfg := config.ADRPreset()
+		cfg.Edges[1].MaxInbound = 1
+
+		if got := CheckCardinality(fanIn, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none: the bound is on another edge type", got)
+		}
+	})
+
+	t.Run("findings are sorted", func(t *testing.T) {
+		cfg := bounded(func(s *config.EdgeSpec) { s.MinOutbound = 1 })
+		g := testGraph(
+			[]*model.Node{testNode("0002", config.StatusAccepted), testNode("0001", config.StatusAccepted)},
+			nil,
+			nil,
+		)
+
+		got := CheckCardinality(g, cfg)
+
+		if len(got) != 2 {
+			t.Fatalf("findings = %+v, want 2", got)
+		}
+		testAssertSortedFindings(t, got)
+	})
+}
+
 func TestCheckStatusVocabularyRejectsProseAroundAVocabularyWord(t *testing.T) {
 	cfg := config.ADRPreset()
 	// Only a status that a derived-edge pattern claims may project onto a

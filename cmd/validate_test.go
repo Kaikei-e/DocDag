@@ -169,6 +169,26 @@ func TestValidateLeavesProseThatIsNotIdentityShapedAlone(t *testing.T) {
 	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
 }
 
+func TestValidateEdgeCardinality(t *testing.T) {
+	dir := fixture(t, "cardinality")
+
+	t.Run("unbounded by default", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir)
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	})
+
+	t.Run("a bound the corpus breaks is an error on the document that carries it", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+			"0001-rate-limit-per-api-key.md:3: ERROR cardinality 0001:",
+		})
+	})
+}
+
 func TestValidateInverseKeysMustAgreeWithTheEdges(t *testing.T) {
 	dir := fixture(t, "inverse-mismatch")
 
