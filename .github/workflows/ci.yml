@@ -59,3 +59,20 @@ jobs:
         with:
           version: "~> v2"
           args: check
+
+  distribution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # v0.1.0 is the only published release, and its validate answers in text
+      # and json alone, so the action's own default format is not asked for.
+      - uses: ./
+        with:
+          version: v0.1.0
+          args: validate --dir testdata/fixtures/ok-madr
+      - name: Plugin manifests parse as JSON
+        run: |
+          for file in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json; do
+            jq empty "$file"
+          done
