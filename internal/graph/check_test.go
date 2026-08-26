@@ -360,6 +360,39 @@ func TestCheckInverse(t *testing.T) {
 	})
 }
 
+func TestStructuralSeverityEscalation(t *testing.T) {
+	escalated := config.ADRPreset()
+	escalated.Structural = map[string]model.Severity{
+		model.RuleMissingFrontmatter:     model.SeverityError,
+		model.RuleUnstructuredSupersedes: model.SeverityError,
+	}
+
+	t.Run("a warned file-level check becomes an error", func(t *testing.T) {
+		docs := []*parse.Document{{Path: "0001.md", ID: "0001", MatchesPattern: true}}
+
+		testAssertSingleFinding(t, CheckDocuments(docs, escalated),
+			model.RuleMissingFrontmatter, model.SeverityError, "0001")
+	})
+
+	t.Run("a warned graph check becomes an error", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0002", config.StatusSuperseded), testNode("0003", config.StatusAccepted)},
+			[]model.Edge{testDerivedEdge("0003", "0002", config.EdgeSupersedes)},
+			nil,
+		)
+
+		testAssertSingleFinding(t, CheckDerived(g, escalated),
+			model.RuleUnstructuredSupersedes, model.SeverityError, "0002")
+	})
+
+	t.Run("an unescalated corpus keeps the default severity", func(t *testing.T) {
+		docs := []*parse.Document{{Path: "0001.md", ID: "0001", MatchesPattern: true}}
+
+		testAssertSingleFinding(t, CheckDocuments(docs, config.ADRPreset()),
+			model.RuleMissingFrontmatter, model.SeverityWarn, "0001")
+	})
+}
+
 func TestCheckCyclesOverTheUnionOfAcyclicEdgeTypes(t *testing.T) {
 	union := func() config.Config {
 		cfg := config.ADRPreset()

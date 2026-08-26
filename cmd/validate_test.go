@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"maps"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -167,6 +168,46 @@ func TestValidateLeavesProseThatIsNotIdentityShapedAlone(t *testing.T) {
 
 	assertExit(t, got, 0)
 	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+}
+
+func TestValidateStructuralSeverityEscalation(t *testing.T) {
+	files := map[string]string{
+		"docs/adr/0001-with-frontmatter.md": "---\ntitle: With frontmatter\nstatus: accepted\ndate: 2025-01-01\n---\n\n# With frontmatter\n",
+		"docs/adr/0002-bare.md":             "# Bare\n\nThis file matches the document filename pattern but carries no frontmatter.\n",
+	}
+
+	t.Run("a missing frontmatter block is a warning by default", func(t *testing.T) {
+		t.Chdir(writeDocs(t, files))
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0002-bare.md:1: WARN missing_frontmatter 0002:"})
+	})
+
+	t.Run("an escalated check fails the build", func(t *testing.T) {
+		escalated := maps.Clone(files)
+		escalated["docdag.yaml"] = "structural:\n  missing_frontmatter: error\n"
+		t.Chdir(writeDocs(t, escalated))
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0002-bare.md:1: ERROR missing_frontmatter 0002:"})
+	})
+
+	t.Run("lowering a check is a configuration error", func(t *testing.T) {
+		lowered := maps.Clone(files)
+		lowered["docdag.yaml"] = "structural:\n  cycle: warn\n"
+		t.Chdir(writeDocs(t, lowered))
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 3)
+		if !strings.Contains(got.stderr, "cycle") {
+			t.Errorf("stderr = %q, want it to name the check", got.stderr)
+		}
+	})
 }
 
 func TestValidateUnionAcyclicity(t *testing.T) {

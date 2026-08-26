@@ -157,6 +157,25 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:   "a structural check escalated to an error",
+			mutate: func(c *Config) { c.Structural = map[string]model.Severity{model.RuleMissingFrontmatter: model.SeverityError} },
+		},
+		{
+			name:    "a structural check lowered to a warning",
+			mutate:  func(c *Config) { c.Structural = map[string]model.Severity{model.RuleCycle: model.SeverityWarn} },
+			wantErr: true,
+		},
+		{
+			name:    "a structural check at an unknown severity",
+			mutate:  func(c *Config) { c.Structural = map[string]model.Severity{model.RuleCycle: "fatal"} },
+			wantErr: true,
+		},
+		{
+			name:    "a structural check nobody runs",
+			mutate:  func(c *Config) { c.Structural = map[string]model.Severity{"status_drift": model.SeverityError} },
+			wantErr: true,
+		},
+		{
 			name:   "an edge with cardinality bounds",
 			mutate: func(c *Config) { c.Edges[0].MaxInbound, c.Edges[0].MinOutbound = 1, 1 },
 		},
@@ -317,6 +336,41 @@ func TestConfigValidate(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("Validate = %v, want no error", err)
+			}
+		})
+	}
+}
+
+func TestConfigSeverity(t *testing.T) {
+	tests := []struct {
+		name       string
+		structural map[string]model.Severity
+		rule       string
+		want       model.Severity
+	}{
+		{name: "an unconfigured warning", rule: model.RuleMissingFrontmatter, want: model.SeverityWarn},
+		{name: "an unconfigured error", rule: model.RuleCycle, want: model.SeverityError},
+		{
+			name:       "an escalated warning",
+			structural: map[string]model.Severity{model.RuleMissingFrontmatter: model.SeverityError},
+			rule:       model.RuleMissingFrontmatter,
+			want:       model.SeverityError,
+		},
+		{
+			name:       "a check the escalation does not name",
+			structural: map[string]model.Severity{model.RuleMissingFrontmatter: model.SeverityError},
+			rule:       model.RuleUnstructuredSupersedes,
+			want:       model.SeverityWarn,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.Structural = tt.structural
+
+			if got := cfg.Severity(tt.rule); got != tt.want {
+				t.Fatalf("Severity(%q) = %q, want %q", tt.rule, got, tt.want)
 			}
 		})
 	}
