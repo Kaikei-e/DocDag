@@ -166,6 +166,19 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("an empty list in the file clears the preset list", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docdag.yaml": "derived_edges: []\n"})
+
+		file, err := Load(filepath.Join(root, "docdag.yaml"))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+
+		if got := Merge(ADRPreset(), file); len(got.DerivedEdges) != 0 {
+			t.Fatalf("derived_edges = %+v, want the preset list cleared", got.DerivedEdges)
+		}
+	})
+
 	t.Run("every key decodes", func(t *testing.T) {
 		file := `preset: adr
 dir: docs/decisions
@@ -366,11 +379,21 @@ func TestMerge(t *testing.T) {
 		})
 	}
 
-	t.Run("an empty list keeps the base list", func(t *testing.T) {
-		got := Merge(ADRPreset(), Config{Edges: []EdgeSpec{}, Rules: []Rule{}})
+	t.Run("an explicit empty list clears the base list", func(t *testing.T) {
+		got := Merge(ADRPreset(), Config{Edges: []EdgeSpec{}, Rules: []Rule{}, DerivedEdges: []DerivedEdgeSpec{}})
 
-		if len(got.Edges) != 2 || len(got.Rules) != 2 {
-			t.Fatalf("edges = %+v, rules = %+v, want the preset lists", got.Edges, got.Rules)
+		if len(got.Edges) != 0 || len(got.Rules) != 0 || len(got.DerivedEdges) != 0 {
+			t.Fatalf("edges = %+v, rules = %+v, derived_edges = %+v, want them cleared",
+				got.Edges, got.Rules, got.DerivedEdges)
+		}
+	})
+
+	t.Run("a list the override never mentions keeps the base list", func(t *testing.T) {
+		got := Merge(ADRPreset(), Config{IDWidth: 6})
+
+		if len(got.Edges) != 2 || len(got.Rules) != 2 || len(got.DerivedEdges) != 1 {
+			t.Fatalf("edges = %+v, rules = %+v, derived_edges = %+v, want the preset lists",
+				got.Edges, got.Rules, got.DerivedEdges)
 		}
 	})
 
