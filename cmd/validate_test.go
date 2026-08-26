@@ -463,6 +463,22 @@ func TestValidateReferenceLayerIsOptIn(t *testing.T) {
 	})
 }
 
+func TestValidateReportsARepeatedDanglingReferenceOnce(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"docdag.yaml": "references:\n  dangling: error\n",
+		"docs/adr/0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n" +
+			"# A decision\n\nSee [[0099]] and [[0099]] again.\n",
+	})
+	t.Chdir(dir)
+
+	got := run(t, "validate")
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0001-a-decision.md:9: ERROR dangling_reference 0001:",
+	})
+}
+
 func TestValidateRejectsAStatusThatOnlyOpensWithAVocabularyWord(t *testing.T) {
 	dir := writeDocs(t, map[string]string{
 		"0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted by the architecture board\ndate: 2025-01-01\n---\n\n# A decision\n",
