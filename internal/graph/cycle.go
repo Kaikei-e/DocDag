@@ -88,6 +88,53 @@ func FindCycles(adj map[model.ID][]model.ID) [][]model.ID {
 	return cycles
 }
 
+// uncoveredCycle returns a closed path in adj that no single label covers, or
+// nil when every simple cycle in it carries one label throughout. Only simple
+// cycles count: a closed walk joining two single-label cycles shares no label
+// either, and reporting it would name a cycle the corpus does not have.
+func uncoveredCycle(adj map[model.ID][]model.ID, labels map[edgeKey]uint, all uint) []model.ID {
+	for _, start := range sortedIDs(adj) {
+		if cycle := uncoveredFrom(adj, labels, all, start); cycle != nil {
+			return cycle
+		}
+	}
+	return nil
+}
+
+// uncoveredFrom walks the simple paths that leave start and return to it,
+// tracking the labels still covering the whole path. Members below start are
+// skipped: their own pass already covers every cycle they open.
+func uncoveredFrom(adj map[model.ID][]model.ID, labels map[edgeKey]uint, all uint, start model.ID) []model.ID {
+	stack := []visitFrame{{id: start}}
+	masks := []uint{all}
+	onPath := map[model.ID]bool{start: true}
+	for len(stack) > 0 {
+		frame := &stack[len(stack)-1]
+		neighbors := adj[frame.id]
+		if frame.next >= len(neighbors) {
+			onPath[frame.id] = false
+			stack = stack[:len(stack)-1]
+			masks = masks[:len(masks)-1]
+			continue
+		}
+		next := neighbors[frame.next]
+		frame.next++
+		mask := masks[len(masks)-1] & labels[edgeKey{from: frame.id, to: next}]
+		switch {
+		case next == start:
+			if mask == 0 {
+				return closedPath(stack, start)
+			}
+		case next < start || onPath[next]:
+		default:
+			onPath[next] = true
+			stack = append(stack, visitFrame{id: next})
+			masks = append(masks, mask)
+		}
+	}
+	return nil
+}
+
 // cyclicComponents returns the strongly connected components that contain a
 // cycle, each sorted, ordered by their lowest member.
 func cyclicComponents(adj map[model.ID][]model.ID) [][]model.ID {
