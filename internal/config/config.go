@@ -131,13 +131,29 @@ func (a AttrCondition) Operands() int {
 	return set
 }
 
-// Condition is the fixed, tiny rule vocabulary. Every populated field is ANDed.
+// Condition is the fixed, tiny rule vocabulary. Every populated field is ANDed:
+// AnyOf holds if any member holds, and Not holds if its condition does not.
 type Condition struct {
 	Inbound     string                   `yaml:"inbound,omitempty"`
 	NotInbound  string                   `yaml:"not_inbound,omitempty"`
 	Outbound    string                   `yaml:"outbound,omitempty"`
 	NotOutbound string                   `yaml:"not_outbound,omitempty"`
 	Attr        map[string]AttrCondition `yaml:"attr,omitempty"`
+	AnyOf       []Condition              `yaml:"any_of,omitempty"`
+	Not         *Condition               `yaml:"not,omitempty"`
+}
+
+// Conditions returns this condition and every condition nested inside it, so
+// validation and location lookup never miss a clause the matcher evaluates.
+func (c Condition) Conditions() []Condition {
+	all := []Condition{c}
+	for _, alternative := range c.AnyOf {
+		all = append(all, alternative.Conditions()...)
+	}
+	if c.Not != nil {
+		all = append(all, c.Not.Conditions()...)
+	}
+	return all
 }
 
 // EdgeClause is one edge requirement of a condition: an edge type, the
@@ -359,16 +375,28 @@ func (c Config) validateRules() error {
 		if rule.Severity != model.SeverityError && rule.Severity != model.SeverityWarn {
 			return fmt.Errorf("rule %q: unknown severity %q: %w", rule.Name, rule.Severity, model.ErrInvalidConfig)
 		}
-		for _, clause := range rule.When.EdgeClauses() {
-			if _, ok := c.Edge(model.EdgeType(clause.Edge)); !ok {
-				return fmt.Errorf("rule %q: undeclared edge type %q, declare it under edges or replace rules: %w", rule.Name, clause.Edge, model.ErrInvalidConfig)
+		for _, cond := range rule.When.Conditions() {
+			if err := c.validateCondition(rule.Name, cond); err != nil {
+				return err
 			}
 		}
-		for _, key := range slices.Sorted(maps.Keys(rule.When.Attr)) {
-			if rule.When.Attr[key].Operands() != 1 {
-				return fmt.Errorf("rule %q: attribute %q needs exactly one of eq, not, contains, not_contains and subset_of: %w",
-					rule.Name, key, model.ErrInvalidConfig)
-			}
+	}
+	return nil
+}
+
+func (c Config) validateCondition(rule string, cond Condition) error {
+	if cond.AnyOf != nil && len(cond.AnyOf) == 0 {
+		return fmt.Errorf("rule %q: any_of without alternatives: %w", rule, model.ErrInvalidConfig)
+	}
+	for _, clause := range cond.EdgeClauses() {
+		if _, ok := c.Edge(model.EdgeType(clause.Edge)); !ok {
+			return fmt.Errorf("rule %q: undeclared edge type %q, declare it under edges or replace rules: %w", rule, clause.Edge, model.ErrInvalidConfig)
+		}
+	}
+	for _, key := range slices.Sorted(maps.Keys(cond.Attr)) {
+		if cond.Attr[key].Operands() != 1 {
+			return fmt.Errorf("rule %q: attribute %q needs exactly one of eq, not, contains, not_contains and subset_of: %w",
+				rule, key, model.ErrInvalidConfig)
 		}
 	}
 	return nil
