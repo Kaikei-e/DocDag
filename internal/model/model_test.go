@@ -1,7 +1,9 @@
 package model
 
 import (
+	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -183,5 +185,96 @@ func TestIDAndEdgeTypeString(t *testing.T) {
 	}
 	if got := EdgeType("supersedes").String(); got != "supersedes" {
 		t.Errorf("EdgeType.String = %q, want supersedes", got)
+	}
+}
+
+func TestNodeLocation(t *testing.T) {
+	n := &Node{
+		ID:       "0001",
+		Path:     "docs/adr/0001-a.md",
+		Line:     1,
+		KeyLines: map[string]int{"title": 2, "status": 3, "supersedes": 4},
+	}
+	tests := []struct {
+		name string
+		keys []string
+		want Location
+	}{
+		{
+			name: "no candidate key falls back to the opening delimiter",
+			want: Location{Path: "docs/adr/0001-a.md", Line: 1},
+		},
+		{
+			name: "a present key wins",
+			keys: []string{"status"},
+			want: Location{Path: "docs/adr/0001-a.md", Line: 3},
+		},
+		{
+			name: "the first present candidate wins",
+			keys: []string{"amends", "supersedes", "status"},
+			want: Location{Path: "docs/adr/0001-a.md", Line: 4},
+		},
+		{
+			name: "no candidate is present at all",
+			keys: []string{"amends"},
+			want: Location{Path: "docs/adr/0001-a.md", Line: 1},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := n.Location(tt.keys...); got != tt.want {
+				t.Fatalf("Location(%v) = %+v, want %+v", tt.keys, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNodeLocationWithoutPositions(t *testing.T) {
+	n := &Node{ID: "0001", Path: "0001.md"}
+
+	if got := n.Location("status"); got != (Location{Path: "0001.md"}) {
+		t.Fatalf("Location = %+v, want only the path", got)
+	}
+}
+
+func TestFindingJSONShape(t *testing.T) {
+	f := Finding{
+		Severity: SeverityError,
+		Rule:     RuleStatusDrift,
+		ID:       "0001",
+		Detail:   "drifted",
+		Location: Location{Path: "0001.md", Line: 3},
+		Related:  []Location{{Path: "0002.md", Line: 4}},
+	}
+
+	payload, err := json.Marshal(f)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, want := range []string{
+		`"severity":"error"`,
+		`"rule":"status_drift"`,
+		`"id":"0001"`,
+		`"detail":"drifted"`,
+		`"location":{"path":"0001.md","line":3}`,
+		`"related":[{"path":"0002.md","line":4}]`,
+	} {
+		if !strings.Contains(string(payload), want) {
+			t.Errorf("finding JSON = %s, want it to contain %s", payload, want)
+		}
+	}
+	if strings.Contains(string(payload), `"fix"`) {
+		t.Errorf("finding JSON = %s, want an empty fix omitted", payload)
+	}
+
+	bare, err := json.Marshal(Finding{Location: Location{Path: "0001.md"}})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(bare), `"line"`) || strings.Contains(string(bare), `"column"`) {
+		t.Errorf("finding JSON = %s, want an unknown line and column omitted", bare)
+	}
+	if strings.Contains(string(bare), `"related"`) {
+		t.Errorf("finding JSON = %s, want an empty related list omitted", bare)
 	}
 }

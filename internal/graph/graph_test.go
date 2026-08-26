@@ -541,3 +541,43 @@ func testTypedFixture() *model.Graph {
 		},
 	)
 }
+
+func TestBuildNodesCarryFrontmatterPositions(t *testing.T) {
+	docs := []*parse.Document{testDoc("0001", map[string]any{"status": "accepted", "title": "First"}, "")}
+
+	g, err := Build(docs, config.ADRPreset())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	n, ok := g.Node("0001")
+	if !ok {
+		t.Fatal("node 0001 is missing")
+	}
+	if n.Line != docs[0].FrontmatterLine {
+		t.Errorf("line = %d, want %d", n.Line, docs[0].FrontmatterLine)
+	}
+	for key, want := range docs[0].KeyLines {
+		if got := n.KeyLines[key]; got != want {
+			t.Errorf("keyLines[%s] = %d, want %d", key, got, want)
+		}
+	}
+}
+
+func TestBuildLocatesAnUnresolvableReference(t *testing.T) {
+	docs := []*parse.Document{
+		testDoc("0002", map[string]any{
+			"status":     "accepted",
+			"supersedes": []any{"a-reference-without-digits"},
+		}, ""),
+	}
+
+	g, err := Build(docs, config.ADRPreset())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	f := testAssertSingleFinding(t, g.Findings, model.RuleDanglingRef, model.SeverityError, "0002")
+	want := model.Location{Path: "0002.md", Line: docs[0].KeyLines["supersedes"]}
+	if f.Location != want {
+		t.Errorf("location = %+v, want %+v", f.Location, want)
+	}
+}
