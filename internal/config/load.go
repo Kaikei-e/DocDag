@@ -135,6 +135,7 @@ func Merge(base, override Config) Config {
 	if len(override.Rules) > 0 {
 		merged.Rules = slices.Clone(override.Rules)
 	}
+	merged.References = mergeReferences(base.References, override.References)
 	if merged.StatusField != base.StatusField {
 		if len(override.Rules) == 0 {
 			merged.Rules = retargetRules(base.Rules, base.StatusField, merged.StatusField)
@@ -142,6 +143,20 @@ func Merge(base, override Config) Config {
 		if len(override.DerivedEdges) == 0 {
 			merged.DerivedEdges = retargetDerivedEdges(base.DerivedEdges, base.StatusField, merged.StatusField)
 		}
+	}
+	return merged
+}
+
+func mergeReferences(base, override ReferencesSpec) ReferencesSpec {
+	merged := base
+	if override.Dangling != "" {
+		merged.Dangling = override.Dangling
+	}
+	if override.Pattern != "" {
+		merged.Pattern = override.Pattern
+	}
+	if len(override.Scan) > 0 {
+		merged.Scan = slices.Clone(override.Scan)
 	}
 	return merged
 }

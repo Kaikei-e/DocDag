@@ -63,6 +63,7 @@ const (
 	RuleStatusDrift            = "status_drift"
 	RuleSupersededOrphan       = "superseded_orphan"
 	RuleInvalidRef             = "invalid_ref"
+	RuleDanglingReference      = "dangling_reference"
 )
 
 // Node is one managed document. Line and KeyLines are the frontmatter

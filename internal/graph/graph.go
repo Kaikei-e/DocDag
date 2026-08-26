@@ -4,6 +4,7 @@ package graph
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -68,9 +69,10 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 	}
 	g.Edges = sortedEdges(origins)
 
+	severity, validated := cfg.ReferenceSeverity()
 	refs := make(map[edgeKey]bool)
 	for _, doc := range docs {
-		for _, link := range parse.Links(doc.Body) {
+		for _, link := range referenceLinks(doc, cfg) {
 			ref, ok := referenceTarget(cfg, link)
 			if !ok {
 				continue
@@ -80,6 +82,9 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 				continue
 			}
 			if _, known := g.Nodes[target]; !known {
+				if validated {
+					findings = append(findings, danglingReference(doc, link, ref, severity))
+				}
 				continue
 			}
 			refs[edgeKey{from: doc.ID, to: target}] = true
@@ -149,6 +154,61 @@ func invalidRef(doc *parse.Document, key string, t model.EdgeType, ref string) m
 		Detail:   fmt.Sprintf("%s reference %q is not an identifier", t, ref),
 		Location: model.Locate(doc.Path, doc.FrontmatterLine, doc.KeyLines, key),
 	}
+}
+
+func danglingReference(doc *parse.Document, link parse.Link, ref string, severity model.Severity) model.Finding {
+	return model.Finding{
+		Severity: severity,
+		Rule:     model.RuleDanglingReference,
+		ID:       doc.ID,
+		Detail:   fmt.Sprintf("%s reference %q does not name a document", link.Kind, ref),
+		Location: model.Location{Path: doc.Path, Line: link.Line},
+	}
+}
+
+// referenceLinks returns every link of a document that feeds the reference
+// layer, each carrying the file line it was written on.
+func referenceLinks(doc *parse.Document, cfg config.Config) []parse.Link {
+	var links []parse.Link
+	if cfg.Scans(config.ScanBody) {
+		for _, link := range parse.Links(doc.Body) {
+			link.Line += doc.BodyLine - 1
+			links = append(links, link)
+		}
+	}
+	if !cfg.Scans(config.ScanFrontmatter) {
+		return links
+	}
+	for _, key := range slices.Sorted(maps.Keys(doc.Frontmatter)) {
+		for _, value := range scalarValues(doc.Frontmatter[key]) {
+			for _, link := range parse.Links(value) {
+				if link.Kind != parse.LinkWiki {
+					continue
+				}
+				link.Line = doc.KeyLines[key]
+				links = append(links, link)
+			}
+		}
+	}
+	return links
+}
+
+// scalarValues renders the strings a frontmatter value holds: the value itself,
+// or every string item of a list.
+func scalarValues(value any) []string {
+	switch v := value.(type) {
+	case string:
+		return []string{v}
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // referenceTarget reports the raw reference a body link names, and whether the
