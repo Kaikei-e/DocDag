@@ -309,6 +309,73 @@ func TestValidateOrdersFindingsBySeverityThenLocation(t *testing.T) {
 	}
 }
 
+// testMixedCorpus holds one problem per document plus one document with none,
+// so a filtered report can be told from an unfiltered one.
+func testMixedCorpus(t *testing.T) string {
+	t.Helper()
+	return writeDocs(t, map[string]string{
+		"0001-alpha.md": "---\ntitle: Alpha\nstatus: superseded\ndate: 2025-01-01\n---\n\n# Alpha\n",
+		"0002-beta.md":  "---\ntitle: Beta\nstatus: accepted\nsupersedes:\n  - 0009\ndate: 2025-01-02\n---\n\n# Beta\n",
+		"0003-gamma.md": "---\ntitle: Gamma\nstatus: accepted\ndate: 2025-01-03\n---\n\n# Gamma\n",
+		"0004-delta.md": "---\ntitle: Delta\nstatus: accepted\nsupersedes:\n  - 0003\ndate: 2025-01-04\n---\n\n# Delta\n",
+		"0007-zeta.md":  "---\ntitle: Zeta\nstatus: accepted\ndate: 2025-01-07\n---\n\n# Zeta\n",
+	})
+}
+
+func TestValidateTouchingReportsOnlyTheFindingsAboutThePath(t *testing.T) {
+	dir := testMixedCorpus(t)
+
+	got := run(t, "validate", "--touching", filepath.Join(dir, "0002-beta.md"), "--dir", dir)
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0002-beta.md:4: ERROR dangling_ref 0002:"})
+	if !strings.Contains(got.stderr, "(2 findings hidden)") {
+		t.Errorf("stderr = %q, want the hidden findings counted", got.stderr)
+	}
+}
+
+func TestValidateTouchingKeepsTheNeighboursOfTheChangedDocument(t *testing.T) {
+	dir := testMixedCorpus(t)
+
+	got := run(t, "validate", "--touching", filepath.Join(dir, "0004-delta.md"), "--dir", dir)
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0003-gamma.md:3: ERROR status_drift 0003:"})
+}
+
+func TestValidateTouchingExitsOnTheWholeCorpus(t *testing.T) {
+	dir := testMixedCorpus(t)
+
+	got := run(t, "validate", "--touching", filepath.Join(dir, "0007-zeta.md"), "--dir", dir)
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+	if !strings.Contains(got.stderr, "(3 findings hidden)") {
+		t.Errorf("stderr = %q, want every finding counted as hidden", got.stderr)
+	}
+}
+
+func TestValidateTouchingTakesADirectoryAndSeveralPaths(t *testing.T) {
+	dir := testMixedCorpus(t)
+
+	whole := run(t, "validate", "--touching", dir, "--dir", dir)
+	assertExit(t, whole, 1)
+	if whole.stderr != "" {
+		t.Errorf("stderr = %q, want nothing hidden when the whole directory is named", whole.stderr)
+	}
+
+	two := run(t, "validate",
+		"--touching", filepath.Join(dir, "0001-alpha.md"),
+		"--touching", filepath.Join(dir, "0002-beta.md"),
+		"--dir", dir)
+
+	assertExit(t, two, 1)
+	assertPrefixes(t, "findings", findingLines(two.stdout), []string{
+		"0002-beta.md:4: ERROR dangling_ref 0002:",
+		"0001-alpha.md:3: WARN superseded_orphan 0001:",
+	})
+}
+
 func TestValidateUnknownStatus(t *testing.T) {
 	dir := writeDocs(t, map[string]string{
 		"0001-known-status.md":   "---\ntitle: Known status\nstatus: accepted\ndate: 2025-01-01\n---\n\n# Known status\n",
