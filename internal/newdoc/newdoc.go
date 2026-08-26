@@ -231,34 +231,35 @@ func blockLineEnding(opening, block []byte) []byte {
 	return []byte("\n")
 }
 
-// rewrite is a status rewrite that has been computed but not yet written.
-type rewrite struct {
-	path    string
-	content []byte
-	mode    fs.FileMode
+// Rewrite is a status change that has been computed but not yet written.
+type Rewrite struct {
+	Path    string
+	Status  string
+	Content []byte
+	Mode    fs.FileMode
 }
 
 // planRewrite reads a document and computes its rewritten form without
 // touching the file.
-func planRewrite(path, field, status string) (rewrite, error) {
+func planRewrite(path, field, status string) (Rewrite, error) {
 	info, err := os.Stat(path)
 	if err != nil {
-		return rewrite{}, fmt.Errorf("stat %s: %w", path, err)
+		return Rewrite{}, fmt.Errorf("stat %s: %w", path, err)
 	}
 	src, err := os.ReadFile(path)
 	if err != nil {
-		return rewrite{}, fmt.Errorf("read %s: %w", path, err)
+		return Rewrite{}, fmt.Errorf("read %s: %w", path, err)
 	}
 	content, err := RewriteStatus(src, field, status)
 	if err != nil {
-		return rewrite{}, fmt.Errorf("rewrite %s: %w", path, err)
+		return Rewrite{}, fmt.Errorf("rewrite %s: %w", path, err)
 	}
-	return rewrite{path: path, content: content, mode: info.Mode().Perm()}, nil
+	return Rewrite{Path: path, Status: status, Content: content, Mode: info.Mode().Perm()}, nil
 }
 
-func (r rewrite) apply() error {
-	if err := os.WriteFile(r.path, r.content, r.mode); err != nil {
-		return fmt.Errorf("write %s: %w", r.path, err)
+func (r Rewrite) apply() error {
+	if err := os.WriteFile(r.Path, r.Content, r.Mode); err != nil {
+		return fmt.Errorf("write %s: %w", r.Path, err)
 	}
 	return nil
 }
@@ -272,27 +273,37 @@ func RewriteStatusFile(path, field, status string) error {
 	return planned.apply()
 }
 
-// Create writes the new document and rewrites the status of every document it
-// supersedes. It returns the path of the created file.
-func Create(g *model.Graph, cfg config.Config, req Request) (string, error) {
+// Plan is the document Create would write and the status rewrites it would
+// apply, all computed without touching the disk.
+type Plan struct {
+	ID       model.ID
+	Path     string
+	Content  []byte
+	Rewrites []Rewrite
+}
+
+// NewPlan computes what creating the requested document takes. Every rewrite
+// is computed before anything is written: creating the new document and then
+// failing half way through the old ones would leave a corpus nobody asked for.
+func NewPlan(g *model.Graph, cfg config.Config, req Request) (Plan, error) {
 	superseded, err := documents(g, cfg, req.Supersedes)
 	if err != nil {
-		return "", err
+		return Plan{}, err
 	}
 	if _, err := documents(g, cfg, req.DependsOn); err != nil {
-		return "", err
+		return Plan{}, err
 	}
 	id, err := NextID(g, cfg)
 	if err != nil {
-		return "", err
+		return Plan{}, err
 	}
 	edges, err := EdgeBlock(cfg, req)
 	if err != nil {
-		return "", err
+		return Plan{}, err
 	}
 	tmpl, err := LoadTemplate(cfg)
 	if err != nil {
-		return "", err
+		return Plan{}, err
 	}
 	date := req.Date
 	if date.IsZero() {
@@ -306,31 +317,47 @@ func Create(g *model.Graph, cfg config.Config, req Request) (string, error) {
 		EdgeBlock: edges,
 	})
 	if err != nil {
-		return "", err
+		return Plan{}, err
 	}
 
-	// Every rewrite is computed before anything is written: creating the new
-	// document and then failing half way through the old ones would leave a
-	// corpus nobody asked for.
-	rewrites := make([]rewrite, 0, len(superseded))
+	plan := Plan{
+		ID:       id,
+		Path:     filepath.Join(cfg.Dir, Filename(cfg, id, req.Title)),
+		Content:  doc,
+		Rewrites: make([]Rewrite, 0, len(superseded)),
+	}
 	for _, n := range superseded {
 		planned, err := planRewrite(documentPath(cfg, n), cfg.StatusField, config.StatusSuperseded)
 		if err != nil {
-			return "", err
+			return Plan{}, err
 		}
-		rewrites = append(rewrites, planned)
+		plan.Rewrites = append(plan.Rewrites, planned)
 	}
+	return plan, nil
+}
 
-	path := filepath.Join(cfg.Dir, Filename(cfg, id, req.Title))
-	if err := writeNew(path, doc); err != nil {
+// Apply writes the planned document and then the planned rewrites, returning
+// the path of the created file.
+func (p Plan) Apply() (string, error) {
+	if err := writeNew(p.Path, p.Content); err != nil {
 		return "", err
 	}
-	for _, planned := range rewrites {
+	for _, planned := range p.Rewrites {
 		if err := planned.apply(); err != nil {
 			return "", err
 		}
 	}
-	return path, nil
+	return p.Path, nil
+}
+
+// Create writes the new document and rewrites the status of every document it
+// supersedes. It returns the path of the created file.
+func Create(g *model.Graph, cfg config.Config, req Request) (string, error) {
+	plan, err := NewPlan(g, cfg, req)
+	if err != nil {
+		return "", err
+	}
+	return plan.Apply()
 }
 
 // writeNew refuses to touch an existing document: creating a decision must

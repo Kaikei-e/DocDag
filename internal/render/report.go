@@ -238,6 +238,48 @@ func CreatedPath(w io.Writer, path string, asJSON bool) error {
 	return nil
 }
 
+// PlanSchemaVersion is the version of the JSON plan `docdag new --dry-run`
+// writes.
+const PlanSchemaVersion = 1
+
+// Plan is what `docdag new` would write, reported instead of written.
+type Plan struct {
+	SchemaVersion int           `json:"schema_version"`
+	ID            model.ID      `json:"id"`
+	Path          string        `json:"path"`
+	Rewrites      []PlanRewrite `json:"rewrites"`
+}
+
+// PlanRewrite is one status change a plan applies to a superseded document.
+type PlanRewrite struct {
+	Path   string `json:"path"`
+	Status string `json:"status"`
+}
+
+// CreationPlan writes a plan as a line per action, or as the JSON object a
+// machine reads it from.
+func CreationPlan(w io.Writer, plan Plan, field string, asJSON bool) error {
+	plan.SchemaVersion = PlanSchemaVersion
+	if plan.Rewrites == nil {
+		plan.Rewrites = []PlanRewrite{}
+	}
+	if asJSON {
+		if err := writeJSON(w, plan); err != nil {
+			return fmt.Errorf("write plan: %w", err)
+		}
+		return nil
+	}
+	out := &errWriter{w: w}
+	out.printf("create %s %s\n", plan.ID, plan.Path)
+	for _, r := range plan.Rewrites {
+		out.printf("rewrite %s %s: %s\n", r.Path, field, r.Status)
+	}
+	if out.err != nil {
+		return fmt.Errorf("write plan: %w", out.err)
+	}
+	return nil
+}
+
 // QueryText writes one query result per line, marking reference-layer hits.
 func QueryText(w io.Writer, results []graph.QueryResult) error {
 	out := &errWriter{w: w}
