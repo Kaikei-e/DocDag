@@ -377,6 +377,24 @@ func TestValidateUnionAcyclicity(t *testing.T) {
 	})
 }
 
+func TestValidateUnionCycleBesideASingleTypeCycle(t *testing.T) {
+	dir := fixture(t, "union-cycle-shadowed")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0001-rate-limit-in-the-gateway.md:4: ERROR cycle 0001:",
+		"0001-rate-limit-in-the-gateway.md:4: ERROR cycle 0001:",
+	})
+	detail := strings.Join(findingLines(got.stdout), "\n")
+	for _, want := range []string{"supersedes cycle: 0001 -> 0002 -> 0001", "cycle over supersedes, depends-on: 0001 -> 0002 -> 0003 -> 0001"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("findings %q do not carry %q", detail, want)
+		}
+	}
+}
+
 func TestValidateEdgeCardinality(t *testing.T) {
 	dir := fixture(t, "cardinality")
 
