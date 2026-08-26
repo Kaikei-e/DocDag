@@ -20,9 +20,12 @@ const LabelLimit = 40
 
 const labelEllipsis = "..."
 
-// Options control graph rendering.
+// Options control graph rendering. An empty Edges list keeps every typed edge;
+// Connected keeps only the documents a rendered typed edge touches.
 type Options struct {
 	IncludeRefs bool
+	Connected   bool
+	Edges       []model.EdgeType
 	LabelLimit  int
 }
 
@@ -72,15 +75,16 @@ func Label(n *model.Node, limit int) string {
 
 // Mermaid renders the typed graph as a `graph LR` diagram.
 func Mermaid(w io.Writer, g *model.Graph, opts Options) error {
+	v := newView(g, opts)
 	out := &errWriter{w: w}
 	out.printf("graph LR\n")
-	for _, n := range sortedNodes(g) {
+	for _, n := range v.nodes {
 		out.printf("  %s[\"%s\"]\n", n.ID, Label(n, opts.LabelLimit))
 	}
-	for _, e := range typedEdges(g) {
+	for _, e := range v.typed {
 		out.printf("  %s -->|%s| %s\n", e.From, e.Type, e.To)
 	}
-	for _, e := range referenceEdges(g, opts) {
+	for _, e := range v.refs {
 		out.printf("  %s -.-> %s\n", e.From, e.To)
 	}
 	if out.err != nil {
@@ -91,16 +95,17 @@ func Mermaid(w io.Writer, g *model.Graph, opts Options) error {
 
 // DOT renders the typed graph as a Graphviz digraph.
 func DOT(w io.Writer, g *model.Graph, opts Options) error {
+	v := newView(g, opts)
 	out := &errWriter{w: w}
 	out.printf("digraph docdag {\n")
 	out.printf("  rankdir=LR;\n")
-	for _, n := range sortedNodes(g) {
+	for _, n := range v.nodes {
 		out.printf("  \"%s\" [label=\"%s\"];\n", n.ID, Label(n, opts.LabelLimit))
 	}
-	for _, e := range typedEdges(g) {
+	for _, e := range v.typed {
 		out.printf("  \"%s\" -> \"%s\" [label=\"%s\"];\n", e.From, e.To, e.Type)
 	}
-	for _, e := range referenceEdges(g, opts) {
+	for _, e := range v.refs {
 		out.printf("  \"%s\" -> \"%s\" [style=dotted];\n", e.From, e.To)
 	}
 	out.printf("}\n")
@@ -112,18 +117,18 @@ func DOT(w io.Writer, g *model.Graph, opts Options) error {
 
 // NodeLinkJSON renders the typed graph as node-link JSON.
 func NodeLinkJSON(w io.Writer, g *model.Graph, opts Options) error {
-	nodes := sortedNodes(g)
+	v := newView(g, opts)
 	doc := NodeLink{
-		Nodes: make([]NodeLinkNode, 0, len(nodes)),
+		Nodes: make([]NodeLinkNode, 0, len(v.nodes)),
 		Links: []NodeLinkEdge{},
 	}
-	for _, n := range nodes {
+	for _, n := range v.nodes {
 		doc.Nodes = append(doc.Nodes, NodeLinkNode{ID: n.ID, Title: n.Title, Status: n.Status, Path: n.Path})
 	}
-	for _, e := range typedEdges(g) {
+	for _, e := range v.typed {
 		doc.Links = append(doc.Links, NodeLinkEdge{Source: e.From, Target: e.To, Type: e.Type, Origin: e.Origin})
 	}
-	for _, e := range referenceEdges(g, opts) {
+	for _, e := range v.refs {
 		doc.Links = append(doc.Links, NodeLinkEdge{Source: e.From, Target: e.To, Type: e.Type, Origin: e.Origin})
 	}
 	if err := writeJSON(w, doc); err != nil {
@@ -157,36 +162,53 @@ func writeJSON(w io.Writer, v any) error {
 	return nil
 }
 
-func sortedNodes(g *model.Graph) []*model.Node {
-	out := make([]*model.Node, 0, len(g.Nodes))
-	for _, id := range slices.Sorted(maps.Keys(g.Nodes)) {
-		out = append(out, g.Nodes[id])
-	}
-	return out
+// view is what one rendering shows: the nodes and edges left after edge-type
+// and connectivity filtering, in the order they are written.
+type view struct {
+	nodes []*model.Node
+	typed []model.Edge
+	refs  []model.Edge
 }
 
-func typedEdges(g *model.Graph) []model.Edge {
-	out := connectedEdges(g, g.Edges)
-	slices.SortFunc(out, func(a, b model.Edge) int {
+func newView(g *model.Graph, opts Options) view {
+	v := view{typed: ofTypes(drawableEdges(g, g.Edges), opts.Edges)}
+	slices.SortFunc(v.typed, func(a, b model.Edge) int {
 		return cmp.Or(cmp.Compare(a.From, b.From), cmp.Compare(a.Type, b.Type), cmp.Compare(a.To, b.To))
 	})
-	return out
-}
 
-func referenceEdges(g *model.Graph, opts Options) []model.Edge {
-	if !opts.IncludeRefs {
-		return nil
+	shown := make(map[model.ID]bool, len(g.Nodes))
+	if opts.Connected {
+		for _, e := range v.typed {
+			shown[e.From], shown[e.To] = true, true
+		}
+	} else {
+		for id := range g.Nodes {
+			shown[id] = true
+		}
 	}
-	out := connectedEdges(g, g.RefEdges)
-	slices.SortFunc(out, func(a, b model.Edge) int {
+	for _, id := range slices.Sorted(maps.Keys(g.Nodes)) {
+		if shown[id] {
+			v.nodes = append(v.nodes, g.Nodes[id])
+		}
+	}
+
+	if !opts.IncludeRefs {
+		return v
+	}
+	for _, e := range drawableEdges(g, g.RefEdges) {
+		if shown[e.From] && shown[e.To] {
+			v.refs = append(v.refs, e)
+		}
+	}
+	slices.SortFunc(v.refs, func(a, b model.Edge) int {
 		return cmp.Or(cmp.Compare(a.From, b.From), cmp.Compare(a.To, b.To))
 	})
-	return out
+	return v
 }
 
-// connectedEdges drops edges whose endpoints are not rendered nodes: a diagram
-// must not invent documents the corpus does not hold.
-func connectedEdges(g *model.Graph, edges []model.Edge) []model.Edge {
+// drawableEdges drops edges whose endpoints are not documents the corpus
+// holds: a diagram must not invent documents.
+func drawableEdges(g *model.Graph, edges []model.Edge) []model.Edge {
 	out := make([]model.Edge, 0, len(edges))
 	for _, e := range edges {
 		if _, ok := g.Nodes[e.From]; !ok {
@@ -196,6 +218,20 @@ func connectedEdges(g *model.Graph, edges []model.Edge) []model.Edge {
 			continue
 		}
 		out = append(out, e)
+	}
+	return out
+}
+
+// ofTypes keeps the edges of the requested types; an empty request keeps all.
+func ofTypes(edges []model.Edge, types []model.EdgeType) []model.Edge {
+	if len(types) == 0 {
+		return edges
+	}
+	out := make([]model.Edge, 0, len(edges))
+	for _, e := range edges {
+		if slices.Contains(types, e.Type) {
+			out = append(out, e)
+		}
 	}
 	return out
 }
