@@ -96,8 +96,7 @@ func codeSpans(body string) []bool {
 }
 
 // openingFence returns the fence marker a line opens, or the empty string. Up
-// to three leading spaces still open a block; a fourth makes it indented code,
-// which carries no links worth extracting either way.
+// to three leading spaces still open a block.
 func openingFence(line string) string {
 	trimmed := strings.TrimLeft(line, " ")
 	if len(line)-len(trimmed) > 3 {
