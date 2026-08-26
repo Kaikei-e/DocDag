@@ -56,6 +56,7 @@ const (
 	testStatusLine      = 3
 	testSupersedesLine  = 4
 	testDependsOnLine   = 5
+	testBodyLine        = 8
 )
 
 func testNodeLocation(id string, line int) model.Location {
@@ -96,6 +97,7 @@ func testDoc(id string, frontmatter map[string]any, body string) *parse.Document
 		HasFrontmatter:  true,
 		MatchesPattern:  true,
 		FrontmatterLine: testFrontmatterLine,
+		BodyLine:        testBodyLine,
 		KeyLines:        make(map[string]int, len(frontmatter)),
 	}
 	for i, key := range slices.Sorted(maps.Keys(frontmatter)) {

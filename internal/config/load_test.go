@@ -271,6 +271,18 @@ func TestMerge(t *testing.T) {
 		}
 	})
 
+	t.Run("a reference block replaces the base field by field", func(t *testing.T) {
+		base := ADRPreset()
+		base.References = ReferencesSpec{Dangling: ReferencesOff, Pattern: `^(\d+)$`}
+
+		got := Merge(base, Config{References: ReferencesSpec{Dangling: "error", Scan: []string{ScanFrontmatter}}})
+
+		want := ReferencesSpec{Dangling: "error", Pattern: `^(\d+)$`, Scan: []string{ScanFrontmatter}}
+		if !reflect.DeepEqual(got.References, want) {
+			t.Fatalf("references = %+v, want %+v", got.References, want)
+		}
+	})
+
 	t.Run("a set width wins over the preset", func(t *testing.T) {
 		if got := Merge(ADRPreset(), Config{IDWidth: 6}); got.IDWidth != 6 {
 			t.Fatalf("id_width = %d, want 6", got.IDWidth)
