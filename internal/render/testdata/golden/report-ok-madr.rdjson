@@ -1,0 +1,24 @@
+{
+  "source": {
+    "name": "docdag",
+    "url": "https://github.com/Kaikei-e/DocDag"
+  },
+  "severity": "WARNING",
+  "diagnostics": [
+    {
+      "message": "unstructured_supersedes 0002: supersedes edge 0003 -> 0002 comes from a field value; declare it in frontmatter",
+      "location": {
+        "path": "../../testdata/fixtures/ok-madr/0002-store-thumbnails-on-the-local-disk.md",
+        "range": {
+          "start": {
+            "line": 3
+          }
+        }
+      },
+      "severity": "WARNING",
+      "code": {
+        "value": "unstructured_supersedes"
+      }
+    }
+  ]
+}

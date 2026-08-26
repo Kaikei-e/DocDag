@@ -14,7 +14,7 @@ func newResolveCmd() *cobra.Command {
 		Short: "Print the documents that currently supersede a reference",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			format, err := outputFormat(cmd)
+			format, err := outputFormat(cmd, formatText, formatJSON)
 			if err != nil {
 				return err
 			}
@@ -34,9 +34,10 @@ func newResolveCmd() *cobra.Command {
 				return domainErr("%v", err)
 			}
 			out := cmd.OutOrStdout()
-			if format == formatJSON {
+			switch format {
+			case formatJSON:
 				err = render.IDsJSON(out, ids)
-			} else {
+			default:
 				err = render.IDsText(out, ids)
 			}
 			if err != nil {

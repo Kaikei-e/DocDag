@@ -29,7 +29,7 @@ func newNewCmd() *cobra.Command {
 }
 
 func runNew(cmd *cobra.Command, args []string) error {
-	format, err := outputFormat(cmd)
+	format, err := outputFormat(cmd, formatText, formatJSON)
 	if err != nil {
 		return err
 	}

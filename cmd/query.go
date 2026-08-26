@@ -31,7 +31,7 @@ func newQueryCmd() *cobra.Command {
 }
 
 func runQuery(cmd *cobra.Command, args []string) error {
-	format, err := outputFormat(cmd)
+	format, err := outputFormat(cmd, formatText, formatJSON)
 	if err != nil {
 		return err
 	}
@@ -83,9 +83,10 @@ func runQuery(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		ids := graph.BindingSet(g, cfg)
-		if format == formatJSON {
+		switch format {
+		case formatJSON:
 			err = render.IDsJSON(out, ids)
-		} else {
+		default:
 			err = render.IDsText(out, ids)
 		}
 		if err != nil {
@@ -112,9 +113,10 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return domainErr("query %s: %v", id, err)
 	}
-	if format == formatJSON {
+	switch format {
+	case formatJSON:
 		err = render.QueryJSON(out, results)
-	} else {
+	default:
 		err = render.QueryText(out, results)
 	}
 	if err != nil {

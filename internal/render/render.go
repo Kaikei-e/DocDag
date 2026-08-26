@@ -148,6 +148,9 @@ func (e *errWriter) printf(format string, a ...any) {
 func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
+	// Nothing here is embedded in HTML, and an escaped edge arrow makes a
+	// finding unreadable to the person tailing the report.
+	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
 		return fmt.Errorf("encode json: %w", err)
 	}
