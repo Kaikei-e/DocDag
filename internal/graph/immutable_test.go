@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -321,6 +322,39 @@ func TestCheckImmutable(t *testing.T) {
 		}
 
 		got := testCheckImmutable(t, dir, repo)
+		want := "docs/adr/0001-serve-images-from-the-application.md"
+		if len(got) != 1 || got[0].Location.Path != want {
+			t.Fatalf("findings = %+v, want the path %q", got, want)
+		}
+	})
+
+	// git reports the repository root with symlinks resolved, so a caller
+	// standing in a linked directory (macOS puts every temp dir behind one)
+	// must still be answered relative to where they stand.
+	t.Run("a root reached through a symlink is still answered relatively", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("symlinks need a privilege on Windows")
+		}
+		if _, err := exec.LookPath("git"); err != nil {
+			t.Skip("git is not on PATH")
+		}
+		real := t.TempDir()
+		link := filepath.Join(t.TempDir(), "link")
+		if err := os.Symlink(real, link); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+		testGit(t, link, "init", "--quiet")
+		testWriteFiles(t, link, corpus)
+		testCommit(t, link, "the first revision")
+		repo, err := vcs.Open(filepath.Join(link, "docs", "adr"))
+		if err != nil {
+			t.Fatalf("open: %v", err)
+		}
+		if err := os.Remove(filepath.Join(link, "docs", "adr", "0001-serve-images-from-the-application.md")); err != nil {
+			t.Fatalf("remove: %v", err)
+		}
+
+		got := testCheckImmutable(t, link, repo)
 		want := "docs/adr/0001-serve-images-from-the-application.md"
 		if len(got) != 1 || got[0].Location.Path != want {
 			t.Fatalf("findings = %+v, want the path %q", got, want)
