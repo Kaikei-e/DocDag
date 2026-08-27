@@ -23,7 +23,8 @@ whole directory: one command replaces a fan-out of file reads.
   `depends-on:`) or derived from a field value (`status: superseded by 0003`).
   Only typed edges carry invariants.
 - **reference layer** — plain body links (`[[0042]]`, `[0042](0042-x.md)`).
-  Never validated, never a constraint. Surfaced with `--include-refs`.
+  Never a constraint, and unvalidated unless `docdag.yaml` sets
+  `references.dangling`. Surfaced with `--include-refs`.
 - **finding** — one validation result, located at `<path>:<line>`, sometimes
   carrying a one-line `fix:` suggestion.
 

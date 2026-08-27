@@ -14,9 +14,10 @@ DocDag keeps two layers apart:
 - **Constraint layer** — typed edges declared in frontmatter (`supersedes:`, `depends-on:`) plus
   edges derived from configured field patterns. Only these carry invariants: acyclicity and rules.
 - **Reference layer** — untyped links found in bodies: `[[wikilink]]`, `[[wikilink|alias]]` and
-  relative Markdown links to other managed documents. A link joins the layer only when its whole
-  target is identifier-shaped, or, for a Markdown link, names a managed file; a link inside a fenced
-  code block or an inline code span is an example and is skipped. Surfaced by `--include-refs` and
+  relative Markdown links to other managed documents, plus the wikilinks in frontmatter values when
+  `references.scan` asks for them. A link joins the layer only when its whole target is
+  identifier-shaped, or, for a Markdown link, names a managed file; a link inside a fenced code
+  block or an inline code span is an example and is skipped. Surfaced by `--include-refs` and
   `stats`; never part of a constraint, and unvalidated unless `references.dangling` asks for it.
 
 A document's identity is its digit run, so `339`, `ADR-339`, `000339` and `0339-use-postgres.md` all
@@ -46,7 +47,11 @@ go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.2.0
 ```
 
 This installs `docdag` into `$(go env GOPATH)/bin`. Prebuilt binaries for tagged versions, and the
-`checksums.txt` that covers them, are attached to the repository's Releases page.
+`checksums.txt` that covers them, are attached to the repository's Releases page. `docdag --version`
+reports the tag the binary was built from, and `dev` for one built from a checkout.
+
+[CHANGELOG.md](CHANGELOG.md) records what each release changed, including the output formats v0.2.0
+broke and how to migrate off them.
 
 ## Quickstart
 
@@ -76,7 +81,8 @@ and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 to 6 digits; `--dir
 The corpus above ships in this repository as `testdata/fixtures/ok-madr`, next to one corpus per
 failure mode. From a checkout, `docdag validate --dir testdata/fixtures/status-drift` prints
 `testdata/fixtures/status-drift/0001-serve-images-from-the-application-server.md:3: ERROR
-status_drift 0001: has inbound supersedes but status is not superseded` and exits 1.
+status_drift 0001: has inbound supersedes but status is not superseded`, an indented `fix:` naming
+the file to edit, and exits 1.
 
 Every finding names a file and, wherever a frontmatter key carries the fault, the line of that key:
 
@@ -84,11 +90,12 @@ Every finding names a file and, wherever a frontmatter key carries the fault, th
 <path>:<line>: <SEVERITY> <rule> <id>: <detail>
 ```
 
-`:<line>` is dropped when the position is unknown. Findings sort by severity, path, line, rule and
-identifier, so a report reads in file order and diffs cleanly. Besides the configured rules,
-`validate` reports `cardinality`, `cycle`, `dangling_ref`, `dangling_reference`, `derived_conflict`,
-`empty_edge`, `id_collision`, `immutable_violation`, `invalid_frontmatter`, `invalid_ref`,
-`inverse_mismatch`, `missing_frontmatter`, `unknown_status` and `unstructured_supersedes`.
+`:<line>` is dropped when the position is unknown. Findings sort by severity, path, line, rule,
+identifier and detail, so a report reads in file order and diffs cleanly. Besides the configured
+rules, `validate` reports `cardinality`, `cycle`, `dangling_ref`, `dangling_reference`,
+`derived_conflict`, `empty_edge`, `id_collision`, `immutable_violation`, `invalid_frontmatter`,
+`invalid_ref`, `inverse_mismatch`, `missing_frontmatter`, `unknown_status` and
+`unstructured_supersedes`.
 
 ## Commands
 
@@ -98,10 +105,10 @@ replaces the format flag with its own `mermaid|dot|json`.
 
 | Command | What it prints | Notable failures |
 | --- | --- | --- |
-| `docdag validate [--touching <path>]... [--immutable-since <rev>] [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` | exit 1 if any finding is an error, exit 3 if `--immutable-since` is given outside a git repository or without `git` |
+| `docdag validate [--touching <path>]... [--immutable-since <rev>] [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` when nothing errored | exit 1 if any finding is an error, exit 3 if `--immutable-since` is given outside a git repository or without `git` |
 | `docdag resolve <ref> [--fields <list>]` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it | exit 1 on an unknown reference or a supersedes cycle |
 | `docdag query <ref> [--ancestors\|--descendants] [--edge <type>] [--include-refs] [--fields <list>]` | the reachable set over typed edges, descendants by default; reference-layer hits are suffixed ` (reference)` | exit 1 unknown reference, exit 2 unknown edge type or conflicting flags |
-| `docdag query --binding [--fields <list>]` | every binding document | exit 2 if combined with a walk flag |
+| `docdag query --binding [--fields <list>]` | every binding document | exit 2 if combined with `--ancestors`, `--descendants`, `--edge` or `--include-refs` |
 | `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all]` | the document, what it resolves to and its neighbourhood, each quoting one section | exit 1 unknown reference, exit 2 unknown edge type |
 | `docdag export [--format mermaid\|dot\|json] [--include-refs] [--connected] [--edge <type>]... [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 2 on an unknown edge type, exit 3 if the output file cannot be written |
 | `docdag stats` | document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree | — |
@@ -231,7 +238,7 @@ acyclic_union: true            # also report a cycle that only the union of the 
 references:                    # reference-layer validation; without it the layer is unvalidated
   dangling: error              # off (default) | warn | error
   pattern: '^(?i)(?:adr-?)?(\d{3,6})$'   # the default: what an identifier-shaped target looks like
-  scan: [body, frontmatter]    # default [body]; frontmatter scans string scalars and list items
+  scan: [body, frontmatter]    # default [body]; frontmatter reads wikilinks in scalars and lists
 
 structural:                    # raise a built-in check; lowering one is a configuration error
   missing_frontmatter: error
