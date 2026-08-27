@@ -204,10 +204,19 @@ func immutableViolation(id model.ID, path string, line int, detail string) model
 // reportedPath names a repository-relative path the way a caller standing in
 // root would type it.
 func reportedPath(root, repoRoot, path string) string {
-	abs := filepath.Join(repoRoot, filepath.FromSlash(path))
-	rel, err := filepath.Rel(root, abs)
+	// git resolves symlinks and short names in the root it reports; the
+	// caller's directory must be resolved the same way before they compare.
+	abs := filepath.Join(resolved(repoRoot), filepath.FromSlash(path))
+	rel, err := filepath.Rel(resolved(root), abs)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return filepath.ToSlash(abs)
 	}
 	return filepath.ToSlash(rel)
+}
+
+func resolved(dir string) string {
+	if r, err := filepath.EvalSymlinks(dir); err == nil {
+		return r
+	}
+	return dir
 }
