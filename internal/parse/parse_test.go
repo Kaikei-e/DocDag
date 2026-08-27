@@ -937,7 +937,9 @@ func TestFileOffsetsThePositionADecodeFailureEmbeds(t *testing.T) {
 }
 
 func TestLocalize(t *testing.T) {
-	base := filepath.Join(string(filepath.Separator), "repo", "root")
+	// A rooted path with no volume is not absolute on Windows; borrow the temp dir's.
+	root := filepath.VolumeName(os.TempDir()) + string(filepath.Separator)
+	base := filepath.Join(root, "repo", "root")
 	tests := []struct {
 		name string
 		path string
@@ -950,8 +952,8 @@ func TestLocalize(t *testing.T) {
 		},
 		{
 			name: "a document outside the base keeps its absolute path",
-			path: filepath.Join(string(filepath.Separator), "elsewhere", "0001-a.md"),
-			want: filepath.ToSlash(filepath.Join(string(filepath.Separator), "elsewhere", "0001-a.md")),
+			path: filepath.Join(root, "elsewhere", "0001-a.md"),
+			want: filepath.ToSlash(filepath.Join(root, "elsewhere", "0001-a.md")),
 		},
 		{
 			name: "an already relative path only loses its separators",
