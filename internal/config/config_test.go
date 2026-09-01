@@ -622,6 +622,48 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "a field with a closed vocabulary a document has to state",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"modality": {OneOf: []string{"MUST", "MAY"}, Required: true}}
+			},
+		},
+		{
+			name:    "a vocabulary holding an empty value",
+			mutate:  func(c *Config) { c.Fields = map[string]FieldSpec{"modality": {OneOf: []string{"MUST", ""}}} },
+			wantErr: true,
+		},
+		{
+			name: "a vocabulary naming one value twice",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"modality": {OneOf: []string{"MUST", "MAY", "MUST"}}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a required field the corpus is also retiring",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"owner": {Required: true, Deprecated: true}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a vocabulary for a field the corpus is retiring",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"owner": {OneOf: []string{"platform"}, Deprecated: true}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a kind's vocabulary is held to the same shape",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Kinds["clause"] = KindSpec{Dir: "spec/clauses", Fields: map[string]FieldSpec{
+					"modality": {OneOf: []string{"MUST", "MUST"}},
+				}}
+			},
+			wantErr: true,
+		},
+		{
 			name: "a deprecation escalated to an error",
 			mutate: func(c *Config) {
 				c.Structural = map[string]model.Severity{model.RuleDeprecatedField: model.SeverityError}
@@ -1111,7 +1153,7 @@ func TestValidateProjections(t *testing.T) {
 		},
 		{
 			name:    "a binding naming no declared projection",
-			mutate:  func(c *Config) { c.Binding = "in_force" },
+			mutate:  func(c *Config) { c.Binding = "effective" },
 			wantErr: true,
 		},
 		{

@@ -53,7 +53,7 @@ const KindTemplate = `---
 {{ .IdentityBlock }}kind: {{ .Kind }}
 title: {{ .Title }}
 {{ .StatusBlock }}date: {{ .Date }}
-{{ .EdgeBlock }}---
+{{ .FieldBlock }}{{ .EdgeBlock }}---
 
 # {{ .Title }}
 `
@@ -89,6 +89,7 @@ type TemplateData struct {
 	Date          string
 	IdentityBlock string
 	StatusBlock   string
+	FieldBlock    string
 	EdgeBlock     string
 }
 
@@ -222,6 +223,32 @@ func statusBlock(cfg config.Config, kind, status string) string {
 		return ""
 	}
 	return fmt.Sprintf("%s: %s\n", cfg.EffectiveStatus(), status)
+}
+
+// FieldBlock renders a commented stub for every field the kind declares that a
+// document has to answer for: one it must write, or one whose value comes from
+// a closed vocabulary. The stub names the vocabulary, so an author writing the
+// key by hand does not have to go and read the configuration for the words.
+//
+// Like an edge stub it is a comment rather than a key: a required key present
+// and holding a placeholder would be an unknown_field_value, which is a worse
+// first validation than the missing_field the author is about to answer. A
+// field the corpus is retiring gets no stub — nothing new should write it.
+func FieldBlock(cfg config.Config, kind string) string {
+	var b strings.Builder
+	fields := cfg.FieldSpecs(kind)
+	for _, name := range slices.Sorted(maps.Keys(fields)) {
+		spec := fields[name]
+		if spec.Deprecated || (!spec.Required && len(spec.OneOf) == 0) {
+			continue
+		}
+		placeholder := "<value>"
+		if len(spec.OneOf) > 0 {
+			placeholder = "<" + strings.Join(spec.OneOf, "|") + ">"
+		}
+		fmt.Fprintf(&b, "# %s: %s\n", name, placeholder)
+	}
+	return b.String()
 }
 
 // openingStatus is the status a new document is created with: the first word
@@ -539,6 +566,7 @@ func NewPlan(g *model.Graph, cfg config.Config, req Request) (Plan, error) {
 		Date:          date.Format(DateLayout),
 		IdentityBlock: identityBlock(cfg, req.Kind, id),
 		StatusBlock:   statusBlock(cfg, req.Kind, status),
+		FieldBlock:    FieldBlock(cfg, req.Kind),
 		EdgeBlock:     edges,
 	})
 	if err != nil {

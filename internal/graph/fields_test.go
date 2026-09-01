@@ -220,3 +220,119 @@ func TestSuggestMigratesARetiredField(t *testing.T) {
 		}
 	})
 }
+
+// The vocabulary the value tests are written against: a field a document has to
+// write, from a closed set of two.
+var testModalitySpec = config.FieldSpec{OneOf: []string{"MUST", "SHOULD"}, Required: true}
+
+// testFieldValueGraph builds a one-document corpus writing the frontmatter
+// handed in, under a configuration that declares the vocabulary. The document
+// goes through the parser's own key-line bookkeeping, so a location assertion
+// is about the line a reader would open.
+func testFieldValueGraph(frontmatter map[string]any) (*model.Graph, config.Config) {
+	cfg := config.ADRPreset()
+	cfg.Fields = map[string]config.FieldSpec{"modality": testModalitySpec}
+	return Build([]*parse.Document{testDoc("0001", frontmatter, "")}, cfg), cfg
+}
+
+func TestCheckFieldValues(t *testing.T) {
+	t.Run("a value outside the vocabulary is reported on the key's line", func(t *testing.T) {
+		g, cfg := testFieldValueGraph(map[string]any{
+			"title": "Store events in an append-only table", "status": config.StatusAccepted, "modality": "SHALL",
+		})
+
+		got := CheckFieldValues(g, cfg)
+
+		f := testAssertSingleFinding(t, got, model.RuleUnknownFieldValue, model.SeverityError, "0001")
+		if want := `modality "SHALL" is outside the vocabulary MUST, SHOULD`; f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		// testDoc numbers the keys in sorted order from the delimiter, so
+		// modality is the first of modality, status and title.
+		if f.Location != (model.Location{Path: "0001.md", Line: testFrontmatterLine + 1}) {
+			t.Errorf("location = %+v, want the modality key's line", f.Location)
+		}
+	})
+
+	t.Run("a value inside it reports nothing", func(t *testing.T) {
+		g, cfg := testFieldValueGraph(map[string]any{"status": config.StatusAccepted, "modality": "MUST"})
+
+		if got := CheckFieldValues(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("the comparison is exact: a closed vocabulary is not prose", func(t *testing.T) {
+		g, cfg := testFieldValueGraph(map[string]any{"status": config.StatusAccepted, "modality": "must"})
+
+		testAssertSingleFinding(t, CheckFieldValues(g, cfg), model.RuleUnknownFieldValue, model.SeverityError, "0001")
+	})
+
+	t.Run("a required key nobody wrote is a finding of its own", func(t *testing.T) {
+		g, cfg := testFieldValueGraph(map[string]any{
+			"title": "Store events in an append-only table", "status": config.StatusAccepted,
+		})
+
+		got := CheckFieldValues(g, cfg)
+
+		f := testAssertSingleFinding(t, got, model.RuleMissingField, model.SeverityError, "0001")
+		if want := `frontmatter key "modality" is required, one of: MUST, SHOULD`; f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		// There is no line of its own to point at, so the finding lands on the
+		// status: the reader is being sent to a document, not to a mistake.
+		if f.Location != (model.Location{Path: "0001.md", Line: testFrontmatterLine + 1}) {
+			t.Errorf("location = %+v, want the status key's line", f.Location)
+		}
+	})
+
+	t.Run("a required key holding a list is a key holding no value", func(t *testing.T) {
+		g, cfg := testFieldValueGraph(map[string]any{
+			"status": config.StatusAccepted, "modality": []any{"MUST", "SHOULD"},
+		})
+
+		testAssertSingleFinding(t, CheckFieldValues(g, cfg), model.RuleMissingField, model.SeverityError, "0001")
+	})
+
+	t.Run("a field the configuration only declares constrains nothing", func(t *testing.T) {
+		cfg := config.ADRPreset()
+		cfg.Fields = map[string]config.FieldSpec{"owner": {}}
+		g := Build([]*parse.Document{
+			testDoc("0001", map[string]any{"status": config.StatusAccepted, "owner": "platform"}, ""),
+		}, cfg)
+
+		if got := CheckFieldValues(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none: a declaration without a vocabulary is a known key and nothing more", got)
+		}
+	})
+
+	t.Run("a kind's declaration describes its own documents alone", func(t *testing.T) {
+		// The vocabulary is the clause kind's, so the conformance test beside
+		// it is not missing anything, closed or open.
+		cfg := testKindsConfig()
+		cfg.Kinds["clause"] = config.KindSpec{
+			Dir: "spec/clauses", ID: `^UZ-[A-Z]-\d{3}$`, Closed: true,
+			Fields: map[string]config.FieldSpec{"modality": testModalitySpec},
+		}
+		g := Build([]*parse.Document{
+			testKindDoc("clause", "UZ-V-001", map[string]any{"status": config.StatusAccepted}),
+			testKindDoc("conform", "conform/uz-v-001", map[string]any{"enforces": []any{"UZ-V-001"}}),
+		}, cfg)
+
+		got := CheckFieldValues(g, cfg)
+
+		testAssertSingleFinding(t, got, model.RuleMissingField, model.SeverityError, "UZ-V-001")
+	})
+
+	t.Run("validate reports both, and structural cannot lower them", func(t *testing.T) {
+		g, cfg := testFieldValueGraph(map[string]any{"status": config.StatusAccepted})
+
+		if !slices.Contains(testRuleNames(Validate(g, cfg, time.Time{})), model.RuleMissingField) {
+			t.Fatalf("rules = %v, want the missing field among them", testRuleNames(Validate(g, cfg, time.Time{})))
+		}
+		cfg.Structural = map[string]model.Severity{model.RuleUnknownFieldValue: model.SeverityWarn}
+		if err := cfg.Validate(); err == nil {
+			t.Error("Validate accepted a lowered unknown_field_value, want a configuration error")
+		}
+	})
+}

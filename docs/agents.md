@@ -32,16 +32,43 @@ with it, so `Decision` finds MADR's `Decision Outcome` in preference to its `Dec
 2000; entries the budget cannot afford degrade to their one-line form rather than being cut
 mid-sentence, and the report ends with a line counting them. `--format md` answers with a Markdown
 document, `--format json` with `schema_version`, `preset_version` where the configuration names one,
-`ref`, `resolves_to`, `ancestors`, `descendants` and `budget`.
+`ref`, `resolves_to`, `related`, `ancestors`, `descendants`, `suppressed` and `budget`.
+
+Where the configuration declares the normative vocabulary — the `spec` preset does — a `related`
+group comes before the walks, naming why each document is in it rather than which direction reached
+it: the subject a clause is `about`, the clause it `excepts` or is `excepted by`, the requirement its
+option leans on under `interop`, and the other binding clauses about the same subject. It is
+reported whether or not those documents bind, because a subject is a definition and an exception is
+worth reading exactly where it does not bind on its own. A conflict an exception answers is one line
+under `suppressed`:
+
+```console
+$ docdag context UZ-V-006
+ref
+  UZ-V-006  A grader may reason before it scores  [accepted]  spec/clauses/UZ-V-006.md
+
+related
+  topic/inferential-grader  Grading by inference  []  spec/topics/inferential-grader.md  (about)
+  UZ-V-008  A grader should not reason about the answer it grades  [accepted]  spec/clauses/UZ-V-008.md  (excepts)
+  UZ-V-001  Every claim carries evidence  [accepted]  spec/clauses/UZ-V-001.md  (interop)
+
+suppressed
+  suppressed by excepts UZ-V-006 -> UZ-V-008 (scope: only where the run also records a calibration measure)
+```
 
 ## Columns
 
 `resolve` and `query` take `--fields id,title,status,path` and print those columns, tab
 separated, in the order asked for; the default is `id` alone, so a pipeline reading identifiers is
-unaffected. A projection the configuration declares is a column too, printed as `true` or `false` —
-see [configuration.md](configuration.md). Under `--format json` these commands answer with an array of objects carrying every
-field, plus `"reference": true` on a reference-layer hit — where v0.1 answered with an array of
-identifiers.
+unaffected. A projection the configuration declares is a column too, printed as `true` or `false`,
+and so is a key it declares under `fields:`, printed as the document writes it and as `-` where the
+document writes nothing — see [configuration.md](configuration.md). Under `--format json` these
+commands answer with an array of objects carrying every field, plus `"reference": true` on a
+reference-layer hit — where v0.1 answered with an array of identifiers.
+
+`query --binding` has a default column set of its own: the identifier, and the `modality` beside it
+where the configuration declares one, because a set that spans the modalities cannot be read without
+it. Naming `--fields` replaces that default like any other.
 
 ```console
 $ docdag query --binding --fields id,title,status

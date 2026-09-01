@@ -8,6 +8,7 @@ import (
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/internal/parse"
 )
 
 func TestComputeStats(t *testing.T) {
@@ -232,6 +233,59 @@ func TestComputeFieldUsage(t *testing.T) {
 			if u.LastChange != "" {
 				t.Fatalf("%s last change = %q, want none where git answered nothing", u.Field, u.LastChange)
 			}
+		}
+	})
+}
+
+// TestComputeStatsOverAStandard covers what a corpus of clauses adds to the
+// degree report: how the subjects are cut, at what strengths the standard
+// speaks, and how many conflicts it is carrying an exception for.
+func TestComputeStatsOverAStandard(t *testing.T) {
+	cfg := config.SpecPreset()
+	g := Build([]*parse.Document{
+		testTopicDoc(testTopic),
+		testTopicDoc(testOtherTopic),
+		testClause("UZ-V-001", config.ModalityMAY, []string{testTopic}, map[string]any{
+			config.EdgeExcepts.String(): []any{
+				map[string]any{"ref": "UZ-V-002", config.AttrScope: "only where the run is calibrated"},
+			},
+		}),
+		testClause("UZ-V-002", config.ModalitySHOULDNOT, []string{testTopic}, nil),
+		testClause("UZ-V-003", config.ModalitySHOULD, []string{testOtherTopic}, nil),
+	}, cfg)
+
+	stats := ComputeStats(g, cfg)
+
+	t.Run("the subjects rank by the clauses hanging off them", func(t *testing.T) {
+		want := []TopicCount{{Topic: testTopic, Clauses: 2}, {Topic: testOtherTopic, Clauses: 1}}
+		if !slices.Equal(stats.Topics, want) {
+			t.Errorf("topics = %+v, want %+v", stats.Topics, want)
+		}
+	})
+
+	t.Run("every declared modality is a row, at zero where nobody states it", func(t *testing.T) {
+		want := []ModalityCount{
+			{Modality: config.ModalityMUST, Count: 0},
+			{Modality: config.ModalityMUSTNOT, Count: 0},
+			{Modality: config.ModalitySHOULD, Count: 1},
+			{Modality: config.ModalitySHOULDNOT, Count: 1},
+			{Modality: config.ModalityMAY, Count: 1},
+		}
+		if !slices.Equal(stats.Modalities, want) {
+			t.Errorf("modalities = %+v, want %+v", stats.Modalities, want)
+		}
+	})
+
+	t.Run("the conflicts an exception answers are counted", func(t *testing.T) {
+		if stats.SuppressedConflicts != 1 {
+			t.Errorf("suppressed conflicts = %d, want the one the excepts edge answers", stats.SuppressedConflicts)
+		}
+	})
+
+	t.Run("a corpus without the vocabulary reports none of it", func(t *testing.T) {
+		adr := ComputeStats(testStatsFixture(), config.ADRPreset())
+		if len(adr.Topics) != 0 || len(adr.Modalities) != 0 || adr.SuppressedConflicts != 0 {
+			t.Errorf("stats = %+v, want no subject or modality rows: the adr preset declares neither", adr)
 		}
 	})
 }

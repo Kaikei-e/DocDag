@@ -51,7 +51,8 @@ CLI）で、Alt と PlectoProxy に適用する。標準の条項を DocDag で�
 - R5 **辺は機械が生成する側に置く。** 適合テストが `enforces: [UZ-V-001]` を宣言し、計測は CLI が生成する
   文書として vault に置く。条項側に `enforced-by` / `measured-by` を手書きしない。
 - R6 **MUST の効力は機械検査の存在で決まる。** `level: MUST` は人の主張で、`enforces` の入辺が無ければ
-  効力は SHOULD 相当に落ちる（effective level）。
+  効力は SHOULD 相当に落ちる（effective level）。（0003 により `level` は `modality` に改称。
+  `MUST_NOT` も同じく enforces 入辺を要し、無ければ SHOULD_NOT 相当に落ちる。）
 - R7 **preset 改訂の安全性を機械判定できる。** 新旧設定で `validate` を走らせ findings を比較する。
 
 ### 制約
@@ -120,20 +121,23 @@ edges:
 ### D3. `projections:` — 固定語彙による導出属性、`binding` の preset 化
 
 ```yaml
+# （0003 により改訂）`level` は `modality` に、`effective_must` は MUST と MUST_NOT の
+# any_of に、`binding:` は MAY を含む `effective` になった。実装は configuration.md を参照。
 projections:
   - name: enforced
     when: {inbound: enforces}
   - name: effective_must
-    when:
-      attr: {level: {eq: MUST}, status: {eq: accepted}}
-      inbound: enforces
-      not_inbound: supersedes
+    any_of:
+      - when: {attr: {modality: {eq: MUST},     status: {eq: accepted}}, inbound: enforces, not_inbound: supersedes}
+      - when: {attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}, inbound: enforces, not_inbound: supersedes}
   - name: effective_should
     any_of:
-      - when: {attr: {level: {eq: SHOULD}, status: {eq: accepted}}, not_inbound: supersedes}
-      - when: {attr: {level: {eq: MUST},   status: {eq: accepted}}, not_inbound: enforces, not_inbound: supersedes}
+      - when: {attr: {modality: {eq: SHOULD},     status: {eq: accepted}}, not_inbound: supersedes}
+      - when: {attr: {modality: {eq: SHOULD_NOT}, status: {eq: accepted}}, not_inbound: supersedes}
+      - when: {attr: {modality: {eq: MUST},       status: {eq: accepted}}, not_inbound: enforces, not: {inbound: supersedes}}
+      - when: {attr: {modality: {eq: MUST_NOT},   status: {eq: accepted}}, not_inbound: enforces, not: {inbound: supersedes}}
 
-binding: effective_must   # query --binding が返す集合。省略時は preset 既定
+binding: effective        # query --binding が返す集合。省略時は preset 既定
 ```
 
 - `projections[].when` は `rules[].when` と同じ `Condition` を使う。導出結果は真偽値の仮想属性で、
@@ -189,7 +193,7 @@ fields:
 ```yaml
 preset: spec
 preset_version: 1
-kinds: { clause: {...}, conform: {...}, deviation: {...}, measure: {...}, premise: {...}, principle: {...}, pm: {...} }
+kinds: { clause: {...}, conform: {...}, deviation: {...}, measure: {...}, premise: {...}, principle: {...}, pm: {...}, topic: {...} }   # topic は 0003 の追加
 edges:
   - {name: supersedes,     key: supersedes,     from: [clause, premise], to: [clause, premise], acyclic: true, direction: forward, attrs: {reason: {required: true, one_of: [recurrence, premise-collapse, conflict, vocabulary]}}}
   - {name: enforces,       key: enforces,       from: [conform],   to: [clause]}
@@ -198,12 +202,17 @@ edges:
   - {name: rationale,      key: rationale,      from: [clause],    to: [principle]}
   - {name: counterexample, key: counterexample, from: [clause, principle], to: [pm]}
   - {name: measures,       key: measures,       from: [measure],   to: [clause], attrs: {agreement: {required: true, type: number}, model: {required: true, type: string}}}
+  # 以下 3 辺と clause の `fields: {modality: {one_of: [...], required: true}}` は 0003 の追加
+  - {name: about,          key: about,          from: [clause],    to: [topic],  min_outbound: 1}
+  - {name: excepts,        key: excepts,        from: [clause],    to: [clause], acyclic: true, direction: forward, attrs: {scope: {required: true, type: string}}}
+  - {name: interop,        key: interop,        from: [clause],    to: [clause]}
 projections:
   - {name: enforced,       when: {inbound: enforces}}
-  - {name: effective_must, when: {attr: {level: {eq: MUST}, status: {eq: accepted}}, inbound: enforces, not_inbound: supersedes}}
-binding: effective_must
+  # （0003 により改訂）MUST_NOT は MUST と同じく enforces 入辺を要し、binding は MAY を含む effective
+  - {name: effective_must, any_of: [{when: {attr: {modality: {eq: MUST}, status: {eq: accepted}}, inbound: enforces, not_inbound: supersedes}}, ...]}
+binding: effective
 rules:
-  - {name: orphan_must,      severity: error, when: {attr: {level: {eq: MUST}, status: {eq: accepted}}, not_inbound: enforces},                 message: "is MUST and accepted but nothing enforces it"}
+  - {name: orphan_must,      severity: error, when: {any_of: [{attr: {modality: {eq: MUST}, status: {eq: accepted}}}, {attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}}], not_inbound: enforces}, message: "is MUST or MUST_NOT and accepted but nothing enforces it"}
   - {name: orphan_test,      severity: error, when: {attr: {kind: {eq: conform}}, not_outbound: enforces},                                    message: "enforces no clause"}
   - {name: stale_premise,    severity: error, when: {attr: {status: {eq: accepted}}, via: {edge: premise, attr: {status: {eq: retired}}}},   message: "is accepted but a premise is retired"}
   - {name: deviation_pressure, severity: warn, when: {attr: {status: {eq: accepted}}, inbound: {edge: deviates-from, min: 5}},               message: "has 5+ deviations; reconsider the clause"}
@@ -363,6 +372,13 @@ rules:
 後続 ADR が本 ADR に求める修正（採択時に反映する）：
 
 - 0003: `level` を `modality`（MUST / MUST_NOT / SHOULD / SHOULD_NOT / MAY）に改め、`kinds[].fields[]` に
-  `one_of` / `required` を追加する。`effective_*` 射影は `modality` を読む。
+  `one_of` / `required` を追加する。`effective_*` 射影は `modality` を読む。**反映済み**（本文の該当
+  ブロックに「0003 により改訂」と注記）。`MUST_NOT` は `effective_must` の any_of に畳み、`binding:` は
+  `effective_must` から `effective`（= effective_must ∨ effective_should ∨ 明示された MAY）に改めた。
+  0003 R2 が「MAY が `--binding` に含まれる」ことを、D3 が「両方 binding のときに衝突を検出する」ことを
+  要求しており、`binding: effective_must` のままでは弱い衝突が原理的に検出できないためである。
+  射影名を `in_force` にしなかったのは、0005 D2 が `in_force` を `period:` から engine が計算する
+  属性として定義しており、射影は同名の属性を評価時に隠すためである（0005 は `in_force: {eq: "true"}`
+  を `effective` の各 alternative に足す形で乗る）。
 - 0005: `deviates-from` の辺属性 `expires` を deviation ノードのフィールドに移し、`premise` の
   `status: retired` を `period: {until: retired_on}` に置き換える。`stale_premise` は `in_force` を読む。

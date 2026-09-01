@@ -446,6 +446,15 @@ func unshaped(cfg config.Config, refs []string) []string {
 
 // CheckCardinality reports documents whose edge degree leaves the bounds the
 // configuration puts on an edge type.
+//
+// A bound speaks about the documents that may hold that degree, so where an
+// edge names its endpoint kinds the bound is read over those kinds alone: the
+// outbound bounds over `from:`, the inbound ones over `to:`. That is what makes
+// `min_outbound: 1` on an edge from one kind sayable at all — a lower bound is
+// the one bound a document with no such key can violate, so without the scoping
+// it would report every document of every other kind, the edge's own targets
+// included. A document of another kind that does hold such an edge is an
+// edge_kind_mismatch, which says the actual mistake.
 func CheckCardinality(g *model.Graph, cfg config.Config) []model.Finding {
 	findings := []model.Finding{}
 	for _, spec := range cfg.Edges {
@@ -460,6 +469,12 @@ func CheckCardinality(g *model.Graph, cfg config.Config) []model.Finding {
 	}
 	SortFindings(findings)
 	return findings
+}
+
+// boundedKind reports whether an edge's bounds are read at a document at all:
+// a kind the edge admits at that end, or any kind where the edge names none.
+func boundedKind(kinds []string, n *model.Node) bool {
+	return len(kinds) == 0 || slices.Contains(kinds, n.Kind)
 }
 
 // degrees counts the edges of one type at each known document. An edge with an
@@ -477,14 +492,16 @@ func degrees(g *model.Graph, t model.EdgeType) (inbound, outbound map[model.ID]i
 
 func cardinality(g *model.Graph, cfg config.Config, spec config.EdgeSpec, id model.ID, inbound, outbound int) []model.Finding {
 	t := model.EdgeType(spec.Name)
+	n := g.Nodes[id]
+	source, target := boundedKind(spec.From, n), boundedKind(spec.To, n)
 	var details []string
-	if spec.MaxInbound > 0 && inbound > spec.MaxInbound {
+	if target && spec.MaxInbound > 0 && inbound > spec.MaxInbound {
 		details = append(details, fmt.Sprintf("%d inbound %s edges exceed max_inbound %d", inbound, t, spec.MaxInbound))
 	}
-	if spec.MaxOutbound > 0 && outbound > spec.MaxOutbound {
+	if source && spec.MaxOutbound > 0 && outbound > spec.MaxOutbound {
 		details = append(details, fmt.Sprintf("%d outbound %s edges exceed max_outbound %d", outbound, t, spec.MaxOutbound))
 	}
-	if outbound < spec.MinOutbound {
+	if source && outbound < spec.MinOutbound {
 		details = append(details, fmt.Sprintf("%d outbound %s edges fall short of min_outbound %d", outbound, t, spec.MinOutbound))
 	}
 	findings := make([]model.Finding, 0, len(details))
@@ -652,7 +669,10 @@ func Check(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
 	findings = append(findings, CheckPathConstraints(g, cfg)...)
 	findings = append(findings, CheckStatusVocabulary(g, cfg)...)
 	findings = append(findings, CheckDerived(g, cfg)...)
+	findings = append(findings, CheckFieldValues(g, cfg)...)
 	findings = append(findings, CheckDeprecatedFields(g, cfg, asOf)...)
+	findings = append(findings, CheckModalityConflicts(g, cfg)...)
+	findings = append(findings, CheckExceptsStrict(g, cfg)...)
 	SortFindings(findings)
 	return findings
 }
@@ -932,10 +952,15 @@ func SortFindings(findings []model.Finding) {
 	})
 }
 
-// Summarize counts documents, typed edges and findings for the summary line.
+// Summarize counts documents, typed edges and findings for the summary line. A
+// suppressed finding is not counted: the corpus has already answered it, and
+// the summary is what the exit code is read from.
 func Summarize(g *model.Graph, findings []model.Finding) model.Summary {
 	summary := model.Summary{Documents: len(g.Nodes), Edges: len(g.Edges)}
 	for _, f := range findings {
+		if f.Suppressed {
+			continue
+		}
 		switch f.Severity {
 		case model.SeverityError:
 			summary.Errors++

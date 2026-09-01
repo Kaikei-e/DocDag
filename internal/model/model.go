@@ -76,14 +76,20 @@ const (
 	RuleUnknownField           = "unknown_field"
 	RuleEdgeKindMismatch       = "edge_kind_mismatch"
 	RuleDeprecatedField        = "deprecated_field"
+	RuleUnknownFieldValue      = "unknown_field_value"
+	RuleMissingField           = "missing_field"
 	RuleStaleTarget            = "stale_target"
 	RulePathMismatch           = "path_mismatch"
+	RuleModalityConflict       = "modality_conflict"
+	RuleExceptsStrict          = "excepts_strict"
 	RuleImmutableViolation     = "immutable_violation"
 	RuleOrphanMust             = "orphan_must"
 	RuleOrphanTest             = "orphan_test"
 	RuleStalePremise           = "stale_premise"
 	RuleDeviationPressure      = "deviation_pressure"
 	RuleNoCounterexample       = "no_counterexample"
+	RuleMayWithoutInterop      = "may_without_interop"
+	RuleInteropNotMust         = "interop_not_must"
 )
 
 // Node is one managed document. Line and KeyLines are the frontmatter
@@ -206,14 +212,22 @@ type Location struct {
 
 // Finding is one validation result. Location is where the reader should look;
 // Related names the other files the finding involves.
+//
+// Suppressed marks a finding the corpus has already answered — today only a
+// modality_conflict a recorded exception defeats. It is reported rather than
+// dropped at the source, so `validate --show-suppressed` can show what the
+// exception is holding down, and its Detail says which edge does the holding.
+// A suppressed finding is out of the summary counts and therefore out of the
+// exit code: it is a record of a decision, not an open failure.
 type Finding struct {
-	Severity Severity   `json:"severity"`
-	Rule     string     `json:"rule"`
-	ID       ID         `json:"id"`
-	Detail   string     `json:"detail"`
-	Location Location   `json:"location"`
-	Related  []Location `json:"related,omitempty"`
-	Fix      string     `json:"fix,omitempty"`
+	Severity   Severity   `json:"severity"`
+	Rule       string     `json:"rule"`
+	ID         ID         `json:"id"`
+	Detail     string     `json:"detail"`
+	Location   Location   `json:"location"`
+	Related    []Location `json:"related,omitempty"`
+	Fix        string     `json:"fix,omitempty"`
+	Suppressed bool       `json:"suppressed,omitempty"`
 }
 
 // Summary is the aggregate reported alongside validation findings.

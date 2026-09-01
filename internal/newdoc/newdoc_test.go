@@ -564,7 +564,10 @@ func TestEdgeBlockForAKind(t *testing.T) {
 			"#   - {ref: <clause|premise>, reason: <recurrence|premise-collapse|conflict|vocabulary>}\n" +
 			"# premise:\n#   - <premise>\n" +
 			"# rationale:\n#   - <principle>\n" +
-			"# counterexample:\n#   - <pm>\n"
+			"# counterexample:\n#   - <pm>\n" +
+			"# about:\n#   - <topic>\n" +
+			"# excepts:\n#   - {ref: <clause>, scope: <string>}\n" +
+			"# interop:\n#   - <clause>\n"
 		if got != want {
 			t.Errorf("EdgeBlock =\n%s\nwant:\n%s", got, want)
 		}
@@ -625,11 +628,18 @@ func TestNewPlanForAKind(t *testing.T) {
 			"title: Runs are recorded with their seed\n" +
 			"status: proposed\n" +
 			"date: 2026-09-01\n" +
+			// The vocabulary a clause has to state comes first, as a stub for
+			// the same reason the edges are stubs: a placeholder written as a
+			// value would be a finding of its own.
+			"# modality: <MUST|MUST_NOT|SHOULD|SHOULD_NOT|MAY>\n" +
 			"# supersedes:\n" +
 			"#   - {ref: <clause|premise>, reason: <recurrence|premise-collapse|conflict|vocabulary>}\n" +
 			"# premise:\n#   - <premise>\n" +
 			"# rationale:\n#   - <principle>\n" +
 			"# counterexample:\n#   - <pm>\n" +
+			"# about:\n#   - <topic>\n" +
+			"# excepts:\n#   - {ref: <clause>, scope: <string>}\n" +
+			"# interop:\n#   - <clause>\n" +
 			"---\n\n# Runs are recorded with their seed\n"
 		if string(plan.Content) != want {
 			t.Errorf("content =\n%s\nwant:\n%s", plan.Content, want)

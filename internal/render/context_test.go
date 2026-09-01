@@ -75,3 +75,57 @@ func TestContextRenderersPropagateWriterErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestContextRendersTheNormativeNeighbourhood(t *testing.T) {
+	b := testBrief()
+	b.Related = []brief.Entry{
+		{ID: "topic/thumbnails", Title: "Where thumbnails live", Path: "spec/topics/thumbnails.md", Relation: brief.RelationAbout},
+		{ID: "0004", Title: "Thumbnails may be cached in memory", Status: "accepted", Path: "spec/clauses/0004.md", Relation: brief.RelationExcepts},
+	}
+	b.Suppressed = []string{"suppressed by excepts 0004 -> 0002 (scope: only under memory pressure)"}
+
+	t.Run("text names the relation on the line and the suppression under its own heading", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := ContextText(&buf, b); err != nil {
+			t.Fatalf("ContextText: %v", err)
+		}
+
+		got := buf.String()
+		for _, want := range []string{
+			"related\n  topic/thumbnails  Where thumbnails live  []  spec/topics/thumbnails.md  (about)\n",
+			"  0004  Thumbnails may be cached in memory  [accepted]  spec/clauses/0004.md  (excepts)\n",
+			"suppressed\n  suppressed by excepts 0004 -> 0002 (scope: only under memory pressure)\n",
+		} {
+			if !strings.Contains(got, want) {
+				t.Errorf("context = %q, want it to contain %q", got, want)
+			}
+		}
+	})
+
+	t.Run("markdown carries the same two", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := ContextMarkdown(&buf, b); err != nil {
+			t.Fatalf("ContextMarkdown: %v", err)
+		}
+
+		got := buf.String()
+		for _, want := range []string{"## Related", "- relation: about", "## Suppressed", "- suppressed by excepts 0004 -> 0002"} {
+			if !strings.Contains(got, want) {
+				t.Errorf("context = %q, want it to contain %q", got, want)
+			}
+		}
+	})
+
+	t.Run("a brief without them renders neither heading", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := ContextText(&buf, testBrief()); err != nil {
+			t.Fatalf("ContextText: %v", err)
+		}
+
+		for _, unwanted := range []string{"related", "suppressed"} {
+			if strings.Contains(buf.String(), unwanted) {
+				t.Errorf("context = %q, want no %q group", buf.String(), unwanted)
+			}
+		}
+	})
+}

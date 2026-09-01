@@ -87,7 +87,12 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		if err := requireSupersedes(cfg); err != nil {
 			return err
 		}
-		records := withProjections(g, cfg, render.Records(g, graph.BindingSet(g, cfg)), fields)
+		// The binding set has a default column set of its own, which a caller
+		// naming columns replaces like any other default.
+		if !flags.Changed(flagFields) {
+			fields = bindingColumns(cfg)
+		}
+		records := withColumns(g, cfg, render.Records(g, graph.BindingSet(g, cfg)), fields)
 		if format == formatJSON {
 			err = render.RecordsJSON(out, records)
 		} else {
@@ -117,7 +122,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return domainErr("query %s: %v", id, err)
 	}
-	records := withProjections(g, cfg, render.QueryRecords(g, results), fields)
+	records := withColumns(g, cfg, render.QueryRecords(g, results), fields)
 	if format == formatJSON {
 		err = render.RecordsJSON(out, records)
 	} else {

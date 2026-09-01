@@ -372,13 +372,41 @@ func TestQueryAndResolveReadOneGraphOverEveryKind(t *testing.T) {
 func TestQueryTheBindingSetOfTheSpecPreset(t *testing.T) {
 	config := specVaultConfig(t)
 
-	t.Run("binding is what the preset's effective_must projection holds for", func(t *testing.T) {
+	t.Run("binding is every clause in force, at the strength it is in force at", func(t *testing.T) {
 		got := run(t, "query", "--binding", "--config", config)
 
-		// UZ-V-002 is an accepted MUST too, but nothing enforces it, so its
-		// force is a claim rather than a property and it does not bind.
+		// The modality is a column rather than a thing to read the identifiers
+		// for: a permission and a prohibition are both in force, and the set is
+		// unreadable without it. UZ-V-005 is missing because it is superseded,
+		// and nothing else is: a MUST nothing enforces is still in force, at
+		// the strength of a SHOULD.
 		assertExit(t, got, 0)
-		assertLines(t, "binding", lines(got.stdout), []string{"UZ-V-001"})
+		assertLines(t, "binding", lines(got.stdout), []string{
+			"UZ-V-001\tMUST",
+			"UZ-V-002\tMUST",
+			"UZ-V-003\tSHOULD",
+			"UZ-V-004\tSHOULD",
+			"UZ-V-006\tMAY",
+			"UZ-V-008\tSHOULD_NOT",
+			"UZ-V-009\tMUST",
+			"UZ-V-010\tMUST_NOT",
+		})
+	})
+
+	t.Run("named columns replace the default set", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--fields", "id,effective_must", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "binding", lines(got.stdout), []string{
+			"UZ-V-001\ttrue",
+			"UZ-V-002\tfalse",
+			"UZ-V-003\tfalse",
+			"UZ-V-004\tfalse",
+			"UZ-V-006\tfalse",
+			"UZ-V-008\tfalse",
+			"UZ-V-009\ttrue",
+			"UZ-V-010\ttrue",
+		})
 	})
 
 	t.Run("the projections read as columns", func(t *testing.T) {
@@ -386,8 +414,34 @@ func TestQueryTheBindingSetOfTheSpecPreset(t *testing.T) {
 
 		assertExit(t, got, 0)
 		assertLines(t, "fields", lines(got.stdout), []string{
+			"UZ-V-006\tfalse\tfalse",
 			"conform/uz-v-001\tfalse\tfalse",
 			"interp/UZ-V-001@2026-08-01\tfalse\tfalse",
 		})
 	})
+
+	t.Run("a declared field reads as a column, and a document without it says so", func(t *testing.T) {
+		got := run(t, "query", "UZ-V-001", "--ancestors", "--fields", "id,modality", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "fields", lines(got.stdout), []string{
+			"UZ-V-006\tMAY",
+			"conform/uz-v-001\t-",
+			"interp/UZ-V-001@2026-08-01\t-",
+		})
+	})
+}
+
+// TestQueryTheBindingSetOfTheADRPreset pins the other half of the default
+// column set: a corpus that declares no modality is listed exactly as it was
+// before there was one to declare.
+func TestQueryTheBindingSetOfTheADRPreset(t *testing.T) {
+	got := run(t, "query", "--binding", "--dir", fixture(t, "ok-madr"))
+
+	assertExit(t, got, 0)
+	for _, line := range lines(got.stdout) {
+		if strings.Contains(line, "\t") {
+			t.Errorf("binding line = %q, want the identifier alone", line)
+		}
+	}
 }

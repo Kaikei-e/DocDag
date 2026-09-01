@@ -114,16 +114,42 @@ type KindSpec struct {
 	Fields map[string]FieldSpec `yaml:"fields,omitempty"`
 }
 
-// FieldSpec declares one frontmatter field's lifecycle: whether the
+// FieldSpec declares one frontmatter field: the vocabulary its value comes
+// from and whether a document has to write it, plus its lifecycle — whether the
 // configuration has retired the key, the preset revision that retired it, the
-// key its value moves to, and the day it stops being tolerated. The vocabulary
-// a declared field's *value* comes from — a closed set, a requirement — is a
-// later ADR's addition to this type; nothing here reads a value yet.
+// key its value moves to, and the day it stops being tolerated.
+//
+// The two halves are alternatives rather than a set: one_of and required
+// describe a field the corpus keeps, deprecated and its three companions a
+// field the corpus is retiring, and a field cannot be both.
 type FieldSpec struct {
-	Deprecated bool   `yaml:"deprecated,omitempty"`
-	Since      int    `yaml:"since,omitempty"`
-	MigrateTo  string `yaml:"migrate_to,omitempty"`
-	Sunset     string `yaml:"sunset,omitempty"`
+	// OneOf is the closed vocabulary the value comes from, empty meaning the
+	// field takes any value. Required makes writing the key part of being a
+	// document of the kind that declares it.
+	OneOf      []string `yaml:"one_of,omitempty"`
+	Required   bool     `yaml:"required,omitempty"`
+	Deprecated bool     `yaml:"deprecated,omitempty"`
+	Since      int      `yaml:"since,omitempty"`
+	MigrateTo  string   `yaml:"migrate_to,omitempty"`
+	Sunset     string   `yaml:"sunset,omitempty"`
+}
+
+// Accepts reports whether a value satisfies the field's vocabulary. A field
+// that declares none accepts anything. The comparison is exact and
+// case-sensitive, for the reason an edge attribute's is: a declared vocabulary
+// is a closed machine vocabulary that a preset revision renames wholesale,
+// where a status is prose a person writes by hand.
+func (f FieldSpec) Accepts(value string) bool {
+	return len(f.OneOf) == 0 || slices.Contains(f.OneOf, value)
+}
+
+// Wants describes the vocabulary a field takes, as the phrase a finding about a
+// value ends with, and is empty where the field declares none.
+func (f FieldSpec) Wants() string {
+	if len(f.OneOf) == 0 {
+		return ""
+	}
+	return strings.Join(f.OneOf, ", ")
 }
 
 // SunsetDate reports the day a deprecated field stops being tolerated, and
@@ -554,6 +580,15 @@ type Rule struct {
 	Message  string         `yaml:"message"`
 }
 
+// A projection reads as a boolean attribute: the string "true" where it holds
+// and "false" where it does not, so a projection that reads another writes
+// attr: {enforced: {eq: "true"}}. The values live here rather than beside the
+// evaluator because a configuration is written against them.
+const (
+	ProjectionTrue  = "true"
+	ProjectionFalse = "false"
+)
+
 // ProjectionSpec declares one derived boolean attribute. A projection holds
 // where its when block holds, or where any of its alternatives does; exactly
 // one of the two is written. The result is readable as an attribute named after
@@ -704,6 +739,14 @@ var structuralSeverities = map[string]model.Severity{
 	model.RuleKindMismatch:           model.SeverityError,
 	model.RuleUnknownField:           model.SeverityError,
 	model.RuleEdgeKindMismatch:       model.SeverityError,
+	// The three a fields: declaration turns on. A corpus that declares no
+	// vocabulary and requires no key never sees them.
+	model.RuleUnknownFieldValue: model.SeverityError,
+	model.RuleMissingField:      model.SeverityError,
+	// Both read the modality vocabulary and the edges that carry exceptions, so
+	// they answer only for a configuration that declares them.
+	model.RuleModalityConflict: model.SeverityError,
+	model.RuleExceptsStrict:    model.SeverityError,
 	// Both fire only where a configuration declares what they read — a target
 	// condition, a path constraint — so a corpus that declares neither never
 	// sees them, and one that does asked for the invariant to hold.
@@ -1231,6 +1274,9 @@ func validateFieldSpecs(where string, fields map[string]FieldSpec, owners map[st
 		if _, ok := spec.SunsetDate(); spec.Sunset != "" && !ok {
 			return fmt.Errorf("%s: sunset %q is not a date as YYYY-MM-DD: %w", subject, spec.Sunset, model.ErrInvalidConfig)
 		}
+		if err := validateFieldVocabulary(subject, spec); err != nil {
+			return err
+		}
 		if spec.Deprecated {
 			continue
 		}
@@ -1249,6 +1295,38 @@ func validateFieldSpecs(where string, fields map[string]FieldSpec, owners map[st
 				return fmt.Errorf("%s: %s describes nothing without deprecated: true: %w",
 					subject, written.key, model.ErrInvalidConfig)
 			}
+		}
+	}
+	return nil
+}
+
+// validateFieldVocabulary holds the value half of a field declaration to what
+// the checks can answer: a vocabulary of distinct, non-empty words, and neither
+// half written about a field the corpus is retiring. A required field that is
+// also deprecated would say a document must write a key it is reported for
+// writing, and a vocabulary for a key on its way out constrains a value nobody
+// should be writing at all.
+func validateFieldVocabulary(subject string, spec FieldSpec) error {
+	seen := make(map[string]bool, len(spec.OneOf))
+	for _, value := range spec.OneOf {
+		switch {
+		case value == "":
+			return fmt.Errorf("%s: one_of holds an empty value: %w", subject, model.ErrInvalidConfig)
+		case seen[value]:
+			return fmt.Errorf("%s: one_of names %q twice: %w", subject, value, model.ErrInvalidConfig)
+		}
+		seen[value] = true
+	}
+	if !spec.Deprecated {
+		return nil
+	}
+	for _, written := range []struct {
+		key     string
+		written bool
+	}{{"one_of", len(spec.OneOf) > 0}, {"required", spec.Required}} {
+		if written.written {
+			return fmt.Errorf("%s: %s describes a field the corpus keeps, not one deprecated: true retires: %w",
+				subject, written.key, model.ErrInvalidConfig)
 		}
 	}
 	return nil

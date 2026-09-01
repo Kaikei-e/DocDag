@@ -313,6 +313,15 @@ func StatsText(w io.Writer, s graph.Statistics) error {
 	for _, r := range s.TopReferenced {
 		fmt.Fprintf(tw, "references to %s\t%d\n", r.ID, r.Count)
 	}
+	for _, m := range s.Modalities {
+		fmt.Fprintf(tw, "modality %s\t%d\n", m.Modality, m.Count)
+	}
+	for _, t := range s.Topics {
+		fmt.Fprintf(tw, "clauses about %s\t%d\n", t.Topic, t.Clauses)
+	}
+	if len(s.Topics) > 0 {
+		fmt.Fprintf(tw, "suppressed conflicts\t%d\n", s.SuppressedConflicts)
+	}
 	if err := tw.Flush(); err != nil {
 		return fmt.Errorf("write statistics: %w", err)
 	}

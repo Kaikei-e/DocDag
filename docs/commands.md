@@ -18,13 +18,13 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 
 | Command | What it prints | Notable failures |
 | --- | --- | --- |
-| `docdag validate [--touching <path>]... [--immutable-since <rev>] [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` when nothing errored | exit 1 if any finding is an error, exit 3 if `--immutable-since` is given outside a git repository or without `git` |
+| `docdag validate [--touching <path>]... [--show-suppressed] [--immutable-since <rev>] [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` when nothing errored | exit 1 if any finding is an error, exit 3 if `--immutable-since` is given outside a git repository or without `git` |
 | `docdag resolve <ref> [--fields <list>]` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it | exit 1 on an unknown reference or a supersedes cycle |
 | `docdag query <ref> [--ancestors\|--descendants] [--edge <type>] [--include-refs] [--fields <list>]` | the reachable set over typed edges, descendants by default; reference-layer hits are suffixed ` (reference)` | exit 1 unknown reference, exit 2 unknown edge type or conflicting flags |
-| `docdag query --binding [--fields <list>]` | every binding document | exit 2 if combined with `--ancestors`, `--descendants`, `--edge` or `--include-refs` |
+| `docdag query --binding [--fields <list>]` | every binding document, with its `modality` beside it where the configuration declares one | exit 2 if combined with `--ancestors`, `--descendants`, `--edge` or `--include-refs` |
 | `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all]` | the document, what it resolves to and its neighbourhood, each quoting one section | exit 1 unknown reference, exit 2 unknown edge type |
 | `docdag export [--format mermaid\|dot\|json] [--include-refs] [--connected] [--edge <type>]... [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 2 on an unknown edge type, exit 3 if the output file cannot be written |
-| `docdag stats [--fields]` | document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree; with `--fields`, the frontmatter fields instead | exit 3 without `--fields` if the configuration declares no `supersedes` edge |
+| `docdag stats [--fields]` | document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree, and — where the configuration declares them — the modality distribution, the clauses per topic and the suppressed-conflict count; with `--fields`, the frontmatter fields instead | exit 3 without `--fields` if the configuration declares no `supersedes` edge |
 | `docdag new <title> [--kind <name>] [--id <ref>] [--supersedes <ref>]... [--depends-on <ref>]... [--dry-run]` | the path of the created document, or the plan under `--dry-run` | exit 1 on an unknown reference, a claimed identifier or a `--kind` the corpus cannot answer, exit 3 on a write error |
 
 `docdag context` and `--fields` are covered in [agents.md](agents.md), along with
@@ -37,6 +37,24 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 `--connected --edge supersedes` draws the supersession chains alone.
 
 ## stats
+
+Where the configuration declares the normative vocabulary — the `spec` preset does — the degree
+report gains three blocks: one row per declared `modality` with the documents stating it, one row
+per subject with the clauses hanging off it (busiest first, ties alphabetically), and the number of
+conflicts a recorded exception answers:
+
+```
+modality MUST                           4
+modality MUST_NOT                       1
+clauses about topic/evidence            2
+suppressed conflicts                    1
+```
+
+Every declared modality is a row, at zero where nobody states it: a standard with no `MUST_NOT` is a
+fact about the standard, where a missing row reads as a corpus that was not asked. So is a subject
+nobody speaks to. They are what topic granularity is watched with — a subject carrying dozens of
+clauses says too little to compare them under — and they are absent entirely from a corpus that
+declares neither, so `--format json` for an `adr` corpus is what it was.
 
 `docdag stats --fields` answers about frontmatter rather than degrees: one row per field, with the
 documents that write it, the day one of those documents last changed, and whether `fields:` retired
@@ -97,6 +115,7 @@ kind: clause
 title: Runs are recorded with their seed
 status: proposed
 date: 2026-09-01
+# modality: <MUST|MUST_NOT|SHOULD|SHOULD_NOT|MAY>
 # supersedes:
 #   - {ref: <clause|premise>, reason: <recurrence|premise-collapse|conflict|vocabulary>}
 # premise:
@@ -105,15 +124,28 @@ date: 2026-09-01
 #   - <principle>
 # counterexample:
 #   - <pm>
+# about:
+#   - <topic>
+# excepts:
+#   - {ref: <clause>, scope: <string>}
+# interop:
+#   - <clause>
 ---
 ```
 
-The edges the kind may declare — the ones whose `from:` names it, and the ones constrained to no
-kind at all — follow as commented stubs naming what each reaches and the attributes it requires. A
-stub is a comment rather than an empty key because a key present and naming nothing is the
-`empty_edge` finding: the point is to show what the configuration offers, not to hand back a
-document whose first validation fails. A kind that answers to no status vocabulary gets no `status:`
-key rather than an invented value.
+A field the kind requires, or whose value comes from a closed `one_of`, is offered first as a
+commented stub naming the vocabulary. The edges the kind may declare — the ones whose `from:` names
+it, and the ones constrained to no kind at all — follow as stubs naming what each reaches and the
+attributes it requires. A stub is a comment rather than a key because a key present and naming
+nothing is the `empty_edge` finding, and a placeholder written as a value would be an
+`unknown_field_value`: the point is to show what the configuration offers, not to hand back a
+document whose first validation is a mistake nobody made. A kind that answers to no status
+vocabulary gets no `status:` key rather than an invented value.
+
+What a created document is still missing is what only its author knows: under the `spec` preset a
+new clause has to state its `modality:` and name the subject it is `about:`, so its first `validate`
+reports a `missing_field` and a `cardinality` against the two stubs above and nothing else — every
+other document in the corpus reads exactly as it did.
 
 `--id` is **required** for a kind that declares an `id:` pattern: a pattern is a spelling, not a
 sequence, so there is no next identifier to take, and one the pattern rejects is an error. A kind
@@ -130,6 +162,26 @@ created document instead.
 
 `0` success (warnings allowed), `1` domain failure, `2` usage error, `3` I/O or config error —
 including "no documents directory found", so a repository without one needs `--dir`.
+
+## validate --show-suppressed
+
+A finding the corpus has already answered is **suppressed**: computed, then left out of the report,
+out of the summary counts and therefore out of the exit code. Today there is one — a weak
+`modality_conflict` between two clauses with an `excepts` edge recorded between them; see
+[checks.md](checks.md#modality_conflict--error-structural).
+
+`--show-suppressed` reports them anyway, each naming the exception that answers it on the same line:
+
+```console
+$ docdag validate --show-suppressed --config testdata/fixtures/spec-vault/docdag.yaml
+…/UZ-V-006.md:4: ERROR modality_conflict UZ-V-006: is MAY and UZ-V-008 is SHOULD_NOT about topic/inferential-grader, suppressed by excepts UZ-V-006 -> UZ-V-008 (scope: only where the run also records a calibration measure)
+```
+
+Under `--format json` such a finding carries `"suppressed": true`, and appears only with the flag —
+the default report is exactly what it is without one. The summary is the same either way, so asking
+to see the suppressed findings cannot fail a build, and neither can recording an exception hide a
+failure: the counts never included it. `docdag context <ref>` shows the same one-line reading for
+the clauses it is about, whatever the flag says.
 
 ## validate output
 

@@ -239,7 +239,7 @@ func TestSpecPreset(t *testing.T) {
 		}
 	})
 
-	t.Run("seven kinds, each with a directory and an identifier pattern", func(t *testing.T) {
+	t.Run("eight kinds, each with a directory and an identifier pattern", func(t *testing.T) {
 		want := map[string]string{
 			KindClause:    IDClause,
 			KindConform:   IDConform,
@@ -248,9 +248,10 @@ func TestSpecPreset(t *testing.T) {
 			KindPremise:   IDPremise,
 			KindPrinciple: IDPrinciple,
 			KindPM:        IDPM,
+			KindTopic:     IDTopic,
 		}
 		if got := cfg.KindNames(); len(got) != len(want) {
-			t.Fatalf("kinds = %v, want the seven of the standard", got)
+			t.Fatalf("kinds = %v, want the eight of the standard", got)
 		}
 		for name, pattern := range want {
 			spec, declared := cfg.Kind(name)
@@ -274,7 +275,7 @@ func TestSpecPreset(t *testing.T) {
 		if len(cfg.StatusValues) != 0 {
 			t.Errorf("status_values = %v, want none at the top level", cfg.StatusValues)
 		}
-		for _, name := range []string{KindConform, KindMeasure} {
+		for _, name := range []string{KindConform, KindMeasure, KindTopic} {
 			if got := cfg.KindStatusValues(name); len(got) != 0 {
 				t.Errorf("kind %q status_values = %v, want none", name, got)
 			}
@@ -298,8 +299,9 @@ func TestSpecPreset(t *testing.T) {
 			t.Error("the clause kind is open, want it closed")
 		}
 		want := []string{
-			KeyID, KeyKind, KeyTitle, KeyDate, cfg.EffectiveStatus(), FieldLevel,
+			KeyID, KeyKind, KeyTitle, KeyDate, cfg.EffectiveStatus(), FieldModality,
 			EdgeSupersedes.String(), EdgePremise.String(), EdgeRationale.String(), EdgeCounterexample.String(),
+			EdgeAbout.String(), EdgeExcepts.String(), EdgeInterop.String(),
 		}
 		for _, key := range want {
 			if !slices.Contains(known, key) {
@@ -314,7 +316,7 @@ func TestSpecPreset(t *testing.T) {
 		}
 	})
 
-	t.Run("seven edges, each declared on the side that generates it", func(t *testing.T) {
+	t.Run("ten edges, each declared on the side that generates it", func(t *testing.T) {
 		want := []struct {
 			edge     model.EdgeType
 			from, to []string
@@ -327,6 +329,9 @@ func TestSpecPreset(t *testing.T) {
 			{EdgeRationale, []string{KindClause}, []string{KindPrinciple}, nil},
 			{EdgeCounterexample, []string{KindClause, KindPrinciple}, []string{KindPM}, nil},
 			{EdgeMeasures, []string{KindMeasure}, []string{KindClause}, []string{AttrAgreement, AttrModel}},
+			{EdgeAbout, []string{KindClause}, []string{KindTopic}, nil},
+			{EdgeExcepts, []string{KindClause}, []string{KindClause}, []string{AttrScope}},
+			{EdgeInterop, []string{KindClause}, []string{KindClause}, nil},
 		}
 		if len(cfg.Edges) != len(want) {
 			t.Fatalf("edges = %+v, want %d", cfg.Edges, len(want))
@@ -357,36 +362,102 @@ func TestSpecPreset(t *testing.T) {
 
 	t.Run("force is a projection, and binding is what it names", func(t *testing.T) {
 		if !slices.Equal(cfg.ProjectionNames(), []string{
-			ProjectionEnforced, ProjectionEffectiveMust, ProjectionEffectiveShould,
+			ProjectionEnforced, ProjectionEffectiveMust, ProjectionEffectiveShould, ProjectionEffective,
 		}) {
-			t.Fatalf("projections = %v, want the three of the preset", cfg.ProjectionNames())
+			t.Fatalf("projections = %v, want the four of the preset", cfg.ProjectionNames())
 		}
-		if cfg.Binding != ProjectionEffectiveMust {
-			t.Errorf("binding = %q, want %q", cfg.Binding, ProjectionEffectiveMust)
+		if cfg.Binding != ProjectionEffective {
+			t.Errorf("binding = %q, want %q", cfg.Binding, ProjectionEffective)
 		}
+		// A MUST_NOT is a strict rule too, so effective_must is the two of them
+		// and each alternative wants the test that gives it its force.
 		must, _ := cfg.Projection(ProjectionEffectiveMust)
-		if got := testDeref(t, "effective_must level", must.When.Attr[FieldLevel].Eq); got != LevelMUST {
-			t.Errorf("effective_must level = %q, want %q", got, LevelMUST)
+		if len(must.AnyOf) != 2 {
+			t.Fatalf("effective_must any_of = %+v, want the two strict modalities", must.AnyOf)
 		}
-		if must.When.Inbound.Edge != EdgeEnforces.String() {
-			t.Errorf("effective_must inbound = %q, want %q: a MUST nothing enforces does not bind",
-				must.When.Inbound.Edge, EdgeEnforces)
+		for i, want := range []string{ModalityMUST, ModalityMUSTNOT} {
+			alt := must.AnyOf[i].When
+			if got := testDeref(t, "effective_must modality", alt.Attr[FieldModality].Eq); got != want {
+				t.Errorf("effective_must alternative %d modality = %q, want %q", i, got, want)
+			}
+			if alt.Inbound.Edge != EdgeEnforces.String() {
+				t.Errorf("effective_must alternative %d inbound = %q, want %q: a strict clause nothing enforces does not carry strict force",
+					i, alt.Inbound.Edge, EdgeEnforces)
+			}
 		}
 		should, _ := cfg.Projection(ProjectionEffectiveShould)
-		if len(should.AnyOf) != 2 {
-			t.Fatalf("effective_should any_of = %+v, want the two alternatives", should.AnyOf)
+		if len(should.AnyOf) != 4 {
+			t.Fatalf("effective_should any_of = %+v, want the four alternatives", should.AnyOf)
 		}
-		// The second alternative needs two absences and a condition holds one
-		// not_inbound, so the other is written as the not: {inbound: …} that
-		// vocabulary word is sugar for.
-		unenforced := should.AnyOf[1].When
-		if unenforced.NotInbound != EdgeEnforces.String() || unenforced.Not == nil ||
-			unenforced.Not.Inbound.Edge != EdgeSupersedes.String() {
-			t.Errorf("effective_should second alternative = %+v, want an unenforced, unsuperseded MUST", unenforced)
+		// The unenforced-strict alternatives need two absences and a condition
+		// holds one not_inbound, so the other is written as the
+		// not: {inbound: …} that vocabulary word is sugar for.
+		for i, want := range []string{ModalityMUST, ModalityMUSTNOT} {
+			unenforced := should.AnyOf[2+i].When
+			if got := testDeref(t, "effective_should modality", unenforced.Attr[FieldModality].Eq); got != want {
+				t.Errorf("effective_should alternative %d modality = %q, want %q", 2+i, got, want)
+			}
+			if unenforced.NotInbound != EdgeEnforces.String() || unenforced.Not == nil ||
+				unenforced.Not.Inbound.Edge != EdgeSupersedes.String() {
+				t.Errorf("effective_should alternative %d = %+v, want an unenforced, unsuperseded strict clause", 2+i, unenforced)
+			}
+		}
+		// effective reads the other two rather than repeating them, and adds
+		// the explicit permission, which nothing enforces and nothing needs to.
+		force, _ := cfg.Projection(ProjectionEffective)
+		if len(force.AnyOf) != 3 {
+			t.Fatalf("effective any_of = %+v, want the three alternatives", force.AnyOf)
+		}
+		if got := testDeref(t, "effective may", force.AnyOf[2].When.Attr[FieldModality].Eq); got != ModalityMAY {
+			t.Errorf("effective third alternative = %q, want %q: a MAY is effective as the permission it states", got, ModalityMAY)
+		}
+		if !slices.Contains(force.AttrKeys(), ProjectionEffectiveMust) {
+			t.Errorf("effective reads %v, want %q among them", force.AttrKeys(), ProjectionEffectiveMust)
 		}
 	})
 
-	t.Run("five rules over the whole standard", func(t *testing.T) {
+	t.Run("the clause modality is a closed vocabulary a clause has to state", func(t *testing.T) {
+		spec, declared := cfg.Field(KindClause, FieldModality)
+		switch {
+		case !declared:
+			t.Fatalf("kind %q declares no %q field", KindClause, FieldModality)
+		case !spec.Required:
+			t.Errorf("%s is optional, want it required: a clause without one states no strength", FieldModality)
+		case !slices.Equal(spec.OneOf, Modalities):
+			t.Errorf("%s one_of = %v, want %v", FieldModality, spec.OneOf, Modalities)
+		}
+		for _, value := range Modalities {
+			if !spec.Accepts(value) {
+				t.Errorf("%s rejects %q, want the whole vocabulary", FieldModality, value)
+			}
+		}
+		if spec.Accepts("SHALL") {
+			t.Errorf("%s accepts SHALL, want the five of BCP 14 alone", FieldModality)
+		}
+	})
+
+	t.Run("a clause states its subject, and the subject is a document", func(t *testing.T) {
+		about, declared := cfg.Edge(EdgeAbout)
+		switch {
+		case !declared:
+			t.Fatalf("no %s edge, want one so two clauses can be known to speak about one thing", EdgeAbout)
+		case about.MinOutbound != 1:
+			t.Errorf("%s min_outbound = %d, want 1: a clause with no subject is invisible to the conflict check",
+				EdgeAbout, about.MinOutbound)
+		}
+		excepts, declared := cfg.Edge(EdgeExcepts)
+		switch {
+		case !declared:
+			t.Fatalf("no %s edge, want one so an exception can be recorded", EdgeExcepts)
+		case !excepts.Acyclic:
+			t.Errorf("%s is cyclic, want it acyclic: two clauses excepting each other defeat nothing", EdgeExcepts)
+		}
+		if scope, ok := excepts.Attr(AttrScope); !ok || !scope.Required {
+			t.Errorf("%s scope = %+v, want it required: an exception without one says nothing", EdgeExcepts, scope)
+		}
+	})
+
+	t.Run("seven rules over the whole standard", func(t *testing.T) {
 		want := []struct {
 			name     string
 			severity model.Severity
@@ -396,6 +467,8 @@ func TestSpecPreset(t *testing.T) {
 			{model.RuleStalePremise, model.SeverityError},
 			{model.RuleDeviationPressure, model.SeverityWarn},
 			{model.RuleNoCounterexample, model.SeverityWarn},
+			{model.RuleMayWithoutInterop, model.SeverityWarn},
+			{model.RuleInteropNotMust, model.SeverityError},
 		}
 		if len(cfg.Rules) != len(want) {
 			t.Fatalf("rules = %+v, want %d", cfg.Rules, len(want))
@@ -421,6 +494,15 @@ func TestSpecPreset(t *testing.T) {
 		if pressure.When.Inbound.Min == nil || *pressure.When.Inbound.Min != 5 {
 			t.Errorf("deviation_pressure inbound = %+v, want a threshold of five", pressure.When.Inbound)
 		}
+		// A via clause holds where some neighbour matches, so "some interop
+		// target is not a MUST" is the whole of the rule.
+		interop := cfg.Rules[6]
+		if interop.When.Via == nil || interop.When.Via.Edge != EdgeInterop.String() {
+			t.Fatalf("interop_not_must via = %+v, want a hop across %s", interop.When.Via, EdgeInterop)
+		}
+		if got := testDeref(t, "interop_not_must modality", interop.When.Via.Attr[FieldModality].Not); got != ModalityMUST {
+			t.Errorf("interop_not_must modality = %q, want not %q", got, ModalityMUST)
+		}
 	})
 
 	t.Run("each call returns an independent value", func(t *testing.T) {
@@ -430,7 +512,7 @@ func TestSpecPreset(t *testing.T) {
 		delete(first.Kinds, KindClause)
 
 		second := SpecPreset()
-		if second.Binding != ProjectionEffectiveMust || len(second.Kinds) != 7 {
+		if second.Binding != ProjectionEffective || len(second.Kinds) != 8 {
 			t.Fatalf("preset = %+v, want an untouched copy", second)
 		}
 		if attr, _ := second.Edges[0].Attr(AttrReason); !attr.Required {
@@ -439,10 +521,10 @@ func TestSpecPreset(t *testing.T) {
 	})
 }
 
-// specPresetYAML is the `spec` preset as docs/configuration.md prints it. The
-// documentation is a copy of a Go value, so it is pinned here rather than
-// trusted: a preset the file describes differently is a preset nobody can
-// adopt by reading about it.
+// specPresetYAML is the `spec` preset as docs/configuration.md prints it, block
+// for block. The documentation is a copy of a Go value, so it is pinned here
+// rather than trusted: a preset the file describes differently is a preset
+// nobody can adopt by reading about it.
 const specPresetYAML = `preset: spec
 preset_version: 1
 status_field: status
@@ -454,7 +536,9 @@ kinds:
     status_values: [proposed, trial, accepted, superseded, withdrawn]
     closed: true
     fields:
-      level: {}                 # MUST | SHOULD | MAY, the strength the clause claims
+      modality:                 # the strength the clause claims, and it has to claim one
+        one_of: [MUST, MUST_NOT, SHOULD, SHOULD_NOT, MAY]
+        required: true
   conform:
     dir: spec/conform
     id: '^conform/[a-z0-9-]+$'
@@ -480,6 +564,9 @@ kinds:
     dir: spec/pm
     id: '^pm-\d{4}$'
     status_values: [draft, published]
+  topic:
+    dir: spec/topics
+    id: '^topic/[a-z0-9/-]+$'
 
 edges:
   - name: supersedes
@@ -530,34 +617,74 @@ edges:
       agreement: {required: true, type: number}
       model: {required: true, type: string}
     target: {leaf_of: supersedes}
+  - name: about
+    key: about
+    direction: forward
+    from: [clause]
+    to: [topic]
+    min_outbound: 1                   # a clause with no subject is invisible to modality_conflict
+  - name: excepts
+    key: excepts
+    acyclic: true
+    direction: forward
+    from: [clause]
+    to: [clause]
+    attrs:
+      scope: {required: true, type: string}
+  - name: interop
+    key: interop
+    direction: forward
+    from: [clause]
+    to: [clause]
 
 projections:
   - name: enforced
     when: {inbound: enforces}
   - name: effective_must
-    when:
-      attr: {level: {eq: MUST}, status: {eq: accepted}}
-      inbound: enforces
-      not_inbound: supersedes
+    any_of:
+      - when:
+          attr: {modality: {eq: MUST}, status: {eq: accepted}}
+          inbound: enforces
+          not_inbound: supersedes
+      - when:
+          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}
+          inbound: enforces
+          not_inbound: supersedes
   - name: effective_should
     any_of:
       - when:
-          attr: {level: {eq: SHOULD}, status: {eq: accepted}}
+          attr: {modality: {eq: SHOULD}, status: {eq: accepted}}
           not_inbound: supersedes
       - when:
-          attr: {level: {eq: MUST}, status: {eq: accepted}}
+          attr: {modality: {eq: SHOULD_NOT}, status: {eq: accepted}}
+          not_inbound: supersedes
+      - when:
+          attr: {modality: {eq: MUST}, status: {eq: accepted}}
           not_inbound: enforces
           not: {inbound: supersedes}      # a condition holds one not_inbound; this is the other
+      - when:
+          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}
+          not_inbound: enforces
+          not: {inbound: supersedes}
+  - name: effective                     # in_force is reserved: ADR-0005 computes it from period:
+    any_of:
+      - when: {attr: {effective_must: {eq: "true"}}}
+      - when: {attr: {effective_should: {eq: "true"}}}
+      - when:
+          attr: {modality: {eq: MAY}, status: {eq: accepted}}
+          not_inbound: supersedes         # a permission is effective as the permission it states
 
-binding: effective_must
+binding: effective
 
 rules:
   - name: orphan_must
     severity: error
     when:
-      attr: {level: {eq: MUST}, status: {eq: accepted}}
+      any_of:
+        - attr: {modality: {eq: MUST}, status: {eq: accepted}}
+        - attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}
       not_inbound: enforces
-    message: "is MUST and accepted but nothing enforces it"
+    message: "is MUST or MUST_NOT and accepted but nothing enforces it"
   - name: orphan_test
     severity: error
     when:
@@ -582,6 +709,18 @@ rules:
       attr: {kind: {eq: clause}, status: {eq: accepted}}
       not_outbound: counterexample
     message: "is accepted without a counterexample"
+  - name: may_without_interop
+    severity: warn
+    when:
+      attr: {modality: {eq: MAY}, status: {eq: accepted}}
+      not_outbound: interop
+    message: "is MAY but names no MUST clause that guarantees interoperation without it"
+  - name: interop_not_must
+    severity: error
+    when:
+      outbound: interop
+      via: {edge: interop, attr: {modality: {not: MUST}}}
+    message: "interop must point at a MUST clause"
 `
 
 func TestSpecPresetMatchesTheDocumentedYAML(t *testing.T) {

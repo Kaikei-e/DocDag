@@ -83,16 +83,40 @@ func ComputeFieldUsage(g *model.Graph, cfg config.Config, changed map[string]str
 	return usage
 }
 
+// TopicCount is how many clauses speak to one subject. It is what a corpus
+// watches its topic granularity with: a subject a paragraph defines carries a
+// handful of clauses, and one carrying dozens is a subject that says too little
+// to compare clauses under.
+type TopicCount struct {
+	Topic   model.ID `json:"topic"`
+	Clauses int      `json:"clauses"`
+}
+
+// ModalityCount is how many documents state one modality. Every declared value
+// is a row, at zero where nobody states it: a standard with no MUST_NOT is a
+// fact about the standard, and a missing row would read as a corpus that has
+// not been asked.
+type ModalityCount struct {
+	Modality string `json:"modality"`
+	Count    int    `json:"count"`
+}
+
 // Statistics is the degree-based corpus summary. Every field is computable in
 // O(V+E); nothing here needs a full path enumeration.
+//
+// The last three answer only for a corpus that declares the modality vocabulary
+// and the subject edge, and are left out of the report entirely otherwise.
 type Statistics struct {
-	Documents     int              `json:"documents"`
-	Edges         []EdgeCount      `json:"edges"`
-	Binding       int              `json:"binding"`
-	ChainDepth    []DepthCount     `json:"chain_depth"`
-	Orphans       int              `json:"orphans"`
-	OrphanRate    float64          `json:"orphan_rate"`
-	TopReferenced []ReferenceCount `json:"top_referenced"`
+	Documents           int              `json:"documents"`
+	Edges               []EdgeCount      `json:"edges"`
+	Binding             int              `json:"binding"`
+	ChainDepth          []DepthCount     `json:"chain_depth"`
+	Orphans             int              `json:"orphans"`
+	OrphanRate          float64          `json:"orphan_rate"`
+	TopReferenced       []ReferenceCount `json:"top_referenced"`
+	Topics              []TopicCount     `json:"topics,omitempty"`
+	Modalities          []ModalityCount  `json:"modalities,omitempty"`
+	SuppressedConflicts int              `json:"suppressed_conflicts,omitempty"`
 }
 
 // TopReferencedLimit caps the reference-layer in-degree ranking.
@@ -101,11 +125,14 @@ const TopReferencedLimit = 10
 // ComputeStats summarises the graph.
 func ComputeStats(g *model.Graph, cfg config.Config) Statistics {
 	stats := Statistics{
-		Documents:     len(g.Nodes),
-		Edges:         edgeCounts(g, cfg),
-		Binding:       len(BindingSet(g, cfg)),
-		ChainDepth:    chainDepths(g),
-		TopReferenced: topReferenced(g),
+		Documents:           len(g.Nodes),
+		Edges:               edgeCounts(g, cfg),
+		Binding:             len(BindingSet(g, cfg)),
+		ChainDepth:          chainDepths(g),
+		TopReferenced:       topReferenced(g),
+		Topics:              topicCounts(g, cfg),
+		Modalities:          modalityCounts(g, cfg),
+		SuppressedConflicts: suppressedConflicts(g, cfg),
 	}
 
 	connected := make(map[model.ID]bool, len(g.Nodes))
@@ -122,6 +149,100 @@ func ComputeStats(g *model.Graph, cfg config.Config) Statistics {
 		stats.OrphanRate = float64(stats.Orphans) / float64(len(g.Nodes))
 	}
 	return stats
+}
+
+// topicCounts ranks the subjects by how many clauses speak to them, the busiest
+// first and ties alphabetically, so the report opens on the subject whose
+// granularity is most likely wrong. A declared subject nobody speaks to is a
+// row at zero: it is either a subject the standard has not reached yet or one
+// it has left behind, and both are worth seeing.
+func topicCounts(g *model.Graph, cfg config.Config) []TopicCount {
+	counts := map[model.ID]int{}
+	spec, declared := cfg.Edge(config.EdgeAbout)
+	if !declared {
+		return []TopicCount{}
+	}
+	for _, id := range g.NodeIDs() {
+		if slices.Contains(spec.To, g.Nodes[id].Kind) {
+			counts[id] = 0
+		}
+	}
+	for _, e := range g.EdgesOfType(model.EdgeType(spec.Name)) {
+		if _, known := g.Node(e.To); !known {
+			continue
+		}
+		counts[e.To]++
+	}
+	ranked := make([]TopicCount, 0, len(counts))
+	for _, id := range slices.Sorted(maps.Keys(counts)) {
+		ranked = append(ranked, TopicCount{Topic: id, Clauses: counts[id]})
+	}
+	slices.SortStableFunc(ranked, func(a, b TopicCount) int { return b.Clauses - a.Clauses })
+	return ranked
+}
+
+// modalityCounts is the distribution of the declared modality vocabulary over
+// the documents that state one, in the order the vocabulary declares them. A
+// value outside the vocabulary is counted after them, alphabetically: it is an
+// unknown_field_value, and leaving it out of the report would hide a document
+// the count is missing.
+func modalityCounts(g *model.Graph, cfg config.Config) []ModalityCount {
+	declared := modalityVocabulary(cfg)
+	if len(declared) == 0 {
+		return []ModalityCount{}
+	}
+	counts := make(map[string]int, len(declared))
+	for _, value := range declared {
+		counts[value] = 0
+	}
+	for _, id := range g.NodeIDs() {
+		if value, written := g.Nodes[id].Attr(config.FieldModality); written {
+			counts[value]++
+		}
+	}
+	distribution := make([]ModalityCount, 0, len(counts))
+	for _, value := range declared {
+		distribution = append(distribution, ModalityCount{Modality: value, Count: counts[value]})
+	}
+	for _, value := range slices.Sorted(maps.Keys(counts)) {
+		if !slices.Contains(declared, value) {
+			distribution = append(distribution, ModalityCount{Modality: value, Count: counts[value]})
+		}
+	}
+	return distribution
+}
+
+// modalityVocabulary returns the values a modality field declares, over every
+// kind that declares one, in declaration order. Two kinds declaring different
+// vocabularies is a corpus with two vocabularies, and the report is over the
+// union.
+func modalityVocabulary(cfg config.Config) []string {
+	values := []string{}
+	for _, kind := range append([]string{""}, cfg.KindNames()...) {
+		spec, declared := cfg.Field(kind, config.FieldModality)
+		if !declared {
+			continue
+		}
+		for _, value := range spec.OneOf {
+			if !slices.Contains(values, value) {
+				values = append(values, value)
+			}
+		}
+	}
+	return values
+}
+
+// suppressedConflicts counts the conflicts a recorded exception defeats. It is
+// the number a corpus watches: exceptions are decisions, and a standard growing
+// them faster than it grows clauses is one being written around.
+func suppressedConflicts(g *model.Graph, cfg config.Config) int {
+	count := 0
+	for _, c := range ModalityConflicts(g, cfg) {
+		if c.Suppressed {
+			count++
+		}
+	}
+	return count
 }
 
 func edgeCounts(g *model.Graph, cfg config.Config) []EdgeCount {

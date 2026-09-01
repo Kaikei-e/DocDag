@@ -86,7 +86,7 @@ edges:
     inverse: amended_by        # the target must list the source here; the key declares no edges
     max_inbound: 1             # 0, the default, is unbounded
     max_outbound: 0
-    min_outbound: 1
+    min_outbound: 1            # read over from: where the edge names kinds; see checks.md
 
 rules:
   - name: unexplained_retirement
@@ -407,12 +407,17 @@ headers — `validate --format json` and `context --format json` — so a reposi
 revision its documents were checked under. The `adr` preset is revision 1, and a corpus that
 overrides it says so by writing its own number.
 
-`fields:` declares the lifecycle of the frontmatter keys the documents write. A key nobody declares
-is not unknown, only undeclared, so a corpus pays for this only where it is migrating something:
+`fields:` declares the frontmatter keys the documents write: the vocabulary a key's value comes
+from, whether a document has to write it, and the lifecycle of a key being retired. A key nobody
+declares is not unknown, only undeclared, so a corpus pays for this only where it is saying
+something:
 
 ```yaml
 preset_version: 3
 fields:
+  modality:                    # a key the corpus keeps
+    one_of: [MUST, SHOULD]     # a value outside it is the unknown_field_value finding
+    required: true             # a document that writes none is the missing_field finding
   owner:                       # the key being retired
     deprecated: true           # writing it is the deprecated_field finding
     since: 2                   # the preset revision that retired it
@@ -421,11 +426,23 @@ fields:
   team: {}                     # declared, not retired: a known key and nothing more
 ```
 
-`deprecated: true` is what makes a declaration do anything. `since`, `migrate_to` and `sunset`
-describe a retirement, so writing one of them without `deprecated: true` is a configuration error
-(exit 3), as is a `sunset` that is not a `YYYY-MM-DD` day, a negative `since`, a nameless field, and
-a field named after an edge's `key:` or `inverse:` — that key's lifecycle belongs to the edge, and
-retiring it would say the relation is over without retiring the edge.
+The two halves are alternatives rather than a set: `one_of` and `required` describe a field the
+corpus keeps, `deprecated` and its three companions a field the corpus is retiring, and writing one
+of each about one key is a configuration error (exit 3) — a required key that is also deprecated
+would say a document must write what it is reported for writing.
+
+`one_of` is compared exactly, case included, for the reason an edge attribute's is: a declared
+vocabulary is a closed machine vocabulary a preset revision renames wholesale. An empty or repeated
+value in it is a configuration error. `required` reads a **scalar**: a key written as a list or a
+mapping holds no value under that key and is reported as missing. Both are read per **kind**, over
+the declarations a document of that kind sees, and both answer for open kinds as well as closed
+ones. See [checks.md](checks.md).
+
+`deprecated: true` is what makes the other half of a declaration do anything. `since`, `migrate_to`
+and `sunset` describe a retirement, so writing one of them without `deprecated: true` is a
+configuration error, as is a `sunset` that is not a `YYYY-MM-DD` day, a negative `since`, a nameless
+field, and a field named after an edge's `key:` or `inverse:` — that key's lifecycle belongs to the
+edge, and retiring it would say the relation is over without retiring the edge.
 
 A declared field is a **known** key, so a `closed: true` kind accepts it rather than reporting
 `unknown_field`: a migration in progress is not a mistake. Kinds may declare `fields:` of their own,
@@ -536,8 +553,8 @@ projections:
     when: { inbound: enforces }
   - name: effective_should
     any_of:                                      # holds when any alternative's when holds
-      - when: { attr: { level: { eq: SHOULD } } }
-      - when: { attr: { level: { eq: MUST } }, not_inbound: enforces }
+      - when: { attr: { modality: { eq: SHOULD } } }
+      - when: { attr: { modality: { eq: MUST } }, not_inbound: enforces }
 
 binding: accepted_unsuperseded
 ```
@@ -561,8 +578,9 @@ preset's `accepted_unsuperseded` projection writes down.
 
 `preset: spec` is the second built-in configuration: a normative standard as a graph of clauses, the
 conformance tests that enforce them, the deviations recorded against them and the measurements taken
-of them. It uses every key above — seven kinds, edges constrained by kind and carrying attributes,
-projections and a binding of its own — and a corpus adopts the whole of it with one line:
+of them, over the subjects they speak to. It uses every key above — eight kinds, edges constrained
+by kind and carrying attributes, a closed field vocabulary, projections and a binding of its own —
+and a corpus adopts the whole of it with one line:
 
 ```yaml
 preset: spec
@@ -582,7 +600,9 @@ kinds:
     status_values: [proposed, trial, accepted, superseded, withdrawn]
     closed: true
     fields:
-      level: {}                 # MUST | SHOULD | MAY, the strength the clause claims
+      modality:                 # the strength the clause claims, and it has to claim one
+        one_of: [MUST, MUST_NOT, SHOULD, SHOULD_NOT, MAY]
+        required: true
   conform:
     dir: spec/conform
     id: '^conform/[a-z0-9-]+$'
@@ -608,6 +628,9 @@ kinds:
     dir: spec/pm
     id: '^pm-\d{4}$'
     status_values: [draft, published]
+  topic:
+    dir: spec/topics
+    id: '^topic/[a-z0-9/-]+$'
 
 edges:
   - name: supersedes
@@ -658,34 +681,74 @@ edges:
       agreement: {required: true, type: number}
       model: {required: true, type: string}
     target: {leaf_of: supersedes}
+  - name: about
+    key: about
+    direction: forward
+    from: [clause]
+    to: [topic]
+    min_outbound: 1                   # a clause with no subject is invisible to modality_conflict
+  - name: excepts
+    key: excepts
+    acyclic: true
+    direction: forward
+    from: [clause]
+    to: [clause]
+    attrs:
+      scope: {required: true, type: string}
+  - name: interop
+    key: interop
+    direction: forward
+    from: [clause]
+    to: [clause]
 
 projections:
   - name: enforced
     when: {inbound: enforces}
   - name: effective_must
-    when:
-      attr: {level: {eq: MUST}, status: {eq: accepted}}
-      inbound: enforces
-      not_inbound: supersedes
+    any_of:
+      - when:
+          attr: {modality: {eq: MUST}, status: {eq: accepted}}
+          inbound: enforces
+          not_inbound: supersedes
+      - when:
+          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}
+          inbound: enforces
+          not_inbound: supersedes
   - name: effective_should
     any_of:
       - when:
-          attr: {level: {eq: SHOULD}, status: {eq: accepted}}
+          attr: {modality: {eq: SHOULD}, status: {eq: accepted}}
           not_inbound: supersedes
       - when:
-          attr: {level: {eq: MUST}, status: {eq: accepted}}
+          attr: {modality: {eq: SHOULD_NOT}, status: {eq: accepted}}
+          not_inbound: supersedes
+      - when:
+          attr: {modality: {eq: MUST}, status: {eq: accepted}}
           not_inbound: enforces
           not: {inbound: supersedes}      # a condition holds one not_inbound; this is the other
+      - when:
+          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}
+          not_inbound: enforces
+          not: {inbound: supersedes}
+  - name: effective                     # in_force is reserved: ADR-0005 computes it from period:
+    any_of:
+      - when: {attr: {effective_must: {eq: "true"}}}
+      - when: {attr: {effective_should: {eq: "true"}}}
+      - when:
+          attr: {modality: {eq: MAY}, status: {eq: accepted}}
+          not_inbound: supersedes         # a permission is effective as the permission it states
 
-binding: effective_must
+binding: effective
 
 rules:
   - name: orphan_must
     severity: error
     when:
-      attr: {level: {eq: MUST}, status: {eq: accepted}}
+      any_of:
+        - attr: {modality: {eq: MUST}, status: {eq: accepted}}
+        - attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}
       not_inbound: enforces
-    message: "is MUST and accepted but nothing enforces it"
+    message: "is MUST or MUST_NOT and accepted but nothing enforces it"
   - name: orphan_test
     severity: error
     when:
@@ -710,6 +773,18 @@ rules:
       attr: {kind: {eq: clause}, status: {eq: accepted}}
       not_outbound: counterexample
     message: "is accepted without a counterexample"
+  - name: may_without_interop
+    severity: warn
+    when:
+      attr: {modality: {eq: MAY}, status: {eq: accepted}}
+      not_outbound: interop
+    message: "is MAY but names no MUST clause that guarantees interoperation without it"
+  - name: interop_not_must
+    severity: error
+    when:
+      outbound: interop
+      via: {edge: interop, attr: {modality: {not: MUST}}}
+    message: "interop must point at a MUST clause"
 ```
 
 There is no top-level `status_values`, and each kind that answers to a vocabulary carries its own.
@@ -727,10 +802,27 @@ that does names its files after the identifier rather than from the template —
 ### The kinds
 
 **clause** — the normative statement itself, `UZ-V-001`, the one document a person writes by hand
-and the one every other kind points at. It claims a strength in `level:` (`MUST`, `SHOULD`, `MAY`),
-and it carries only the relations that are about its own content: `premise:`, `rationale:` and
-`counterexample:`. Its frontmatter is `closed: true`, so a key nobody declared is a finding rather
-than another tool's field; `level` is declared under the kind's `fields:`, which is what admits it.
+and the one every other kind points at. It states a strength in `modality:` — one of BCP 14's five
+keywords, `MUST`, `MUST_NOT`, `SHOULD`, `SHOULD_NOT` and `MAY` — and it carries only the relations
+that are about its own content: the subject it speaks to under `about:`, the clause it makes an
+exception of under `excepts:`, the requirement its option leans on under `interop:`, and
+`premise:`, `rationale:` and `counterexample:`. Its frontmatter is `closed: true`, so a key nobody
+declared is a finding rather than another tool's field; `modality` is declared under the kind's
+`fields:`, which is what admits it — with the vocabulary it comes from and `required: true`, because
+a clause that states no strength states nothing.
+
+The vocabulary is five values rather than a strength and a polarity because BCP 14 has no `MAY NOT`:
+a pair of fields would have an invalid combination to check for, where a closed set of five has
+nothing to get wrong. `MAY` is a node like any other — a permission the standard states out loud,
+which is what lets a later prohibition be seen to collide with it rather than silently overwrite it.
+
+**topic** — the subject a clause speaks to, `topic/seed-recording`, whose body is one paragraph
+defining it. A subject is a document rather than a string attribute so that a misspelling is a
+`dangling_ref` instead of a second subject nobody notices, and so `context` can show the reader what
+the subject is. Every clause names at least one (`min_outbound: 1` on `about`), because two clauses
+can only be seen to disagree where they are known to be about one thing. Cut them at the granularity
+a paragraph can define and two to five clauses hang off: too coarse is a false conflict, too fine is
+a missed one, and `docdag stats` reports the per-topic counts to watch it with.
 
 **conform** — a conformance test, `conform/uz-v-001`, written by whoever builds the harness. It
 declares `enforces:`, and that edge is what gives a `MUST` its force. The identifier carries a
@@ -778,10 +870,27 @@ a `closed: true` conform kind would accept it, even though the preset leaves the
 does not read the file it points at, and there is no `derived_edges` rule that lifts edges out of
 TOML or JSON: frontmatter stays the one place an edge is declared.
 
-**Force is derived, never written.** No document writes down whether it is binding or what its
-effective level is. `enforced`, `effective_must` and `effective_should` answer both from the graph,
-`query --binding` lists the clauses that actually bind, and a clause claiming `level: MUST` that no
-test enforces is an `orphan_must` error rather than a binding clause.
+**Force is derived, never written.** No document writes down whether it is binding or at what
+strength it is in force. `enforced`, `effective_must`, `effective_should` and `effective` answer both
+from the graph, and a clause claiming `modality: MUST` that no test enforces is an `orphan_must`
+error and carries the force of a `SHOULD` in the meantime — which is what `effective_should` says. A
+`MUST_NOT` is a strict rule in exactly the same way, so it needs the same test behind it and falls
+to a `SHOULD_NOT` without one; `effective_must` is the pair of them.
+
+`binding:` names `effective`, which is every accepted, unsuperseded clause at whatever strength the
+three projections leave it with, the explicit permission included. It is wider than
+`effective_must` on purpose: a permission and a prohibition can only be seen to conflict if both are
+in the set, so `query --binding` lists them all with a `modality` column saying which is which, and
+`modality_conflict` compares the ones that are actually in force. It is not called `in_force`: that
+name belongs to the period-derived attribute a later revision computes, and a projection shadows an
+attribute spelled the same way.
+
+**An exception is recorded, never inferred.** Where a permission and a prohibition are meant to
+stand side by side, the more specific clause declares `excepts:` on the general one with a `scope:`
+saying when it applies. DocDag never reads that prose — it records it, `context` shows it, and the
+conflict it answers stops being reported. What it will not do is let an exception be recorded
+against a `MUST` or a `MUST_NOT`: a strict rule's consequence follows without exception, and that is
+`excepts_strict`.
 
 ## filename and template
 

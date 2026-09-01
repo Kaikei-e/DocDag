@@ -576,6 +576,27 @@ func TestCheckCardinality(t *testing.T) {
 		}
 	})
 
+	t.Run("an edge that names its endpoint kinds is bounded over those kinds alone", func(t *testing.T) {
+		// A lower bound is the one bound a document with no such key can
+		// violate, so without the scoping min_outbound: 1 on an edge from one
+		// kind would report every document of every other kind — the edge's own
+		// targets included.
+		cfg := testKindsConfig()
+		cfg.Edges[1].MinOutbound = 1
+		g := Build([]*parse.Document{
+			testKindDoc("conform", "conform/uz-v-001", map[string]any{"enforces": []any{"UZ-V-001"}}),
+			testKindDoc("conform", "conform/uz-v-002", nil),
+			testKindDoc("clause", "UZ-V-001", nil),
+		}, cfg)
+
+		got := CheckCardinality(g, cfg)
+
+		f := testAssertSingleFinding(t, got, model.RuleCardinality, model.SeverityError, "conform/uz-v-002")
+		if !strings.Contains(f.Detail, "min_outbound") {
+			t.Errorf("detail = %q, want the bound named", f.Detail)
+		}
+	})
+
 	t.Run("findings are sorted", func(t *testing.T) {
 		cfg := bounded(func(s *config.EdgeSpec) { s.MinOutbound = 1 })
 		g := testGraph(

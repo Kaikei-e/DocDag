@@ -9,10 +9,11 @@ import (
 
 // A projection reads as a boolean attribute: the string "true" where it holds
 // and "false" where it does not, so attr: {enforced: {eq: "true"}} and
-// attr: {enforced: {not: "true"}} both say what they look like.
+// attr: {enforced: {not: "true"}} both say what they look like. The words
+// themselves are the configuration's, so they are named there.
 const (
-	ProjectionTrue  = "true"
-	ProjectionFalse = "false"
+	ProjectionTrue  = config.ProjectionTrue
+	ProjectionFalse = config.ProjectionFalse
 )
 
 // ProjectionValue renders one projection result the way an attribute clause,

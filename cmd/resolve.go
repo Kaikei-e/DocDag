@@ -38,7 +38,7 @@ func newResolveCmd() *cobra.Command {
 				return domainErr("%v", err)
 			}
 			out := cmd.OutOrStdout()
-			records := withProjections(g, cfg, render.Records(g, ids), fields)
+			records := withColumns(g, cfg, render.Records(g, ids), fields)
 			if format == formatJSON {
 				err = render.RecordsJSON(out, records)
 			} else {

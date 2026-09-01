@@ -17,6 +17,7 @@ import (
 const (
 	flagTouching       = "touching"
 	flagImmutableSince = "immutable-since"
+	flagShowSuppressed = "show-suppressed"
 )
 
 func newValidateCmd() *cobra.Command {
@@ -30,6 +31,10 @@ func newValidateCmd() *cobra.Command {
 				return err
 			}
 			touching, err := cmd.Flags().GetStringArray(flagTouching)
+			if err != nil {
+				return usageErr("%v", err)
+			}
+			showSuppressed, err := cmd.Flags().GetBool(flagShowSuppressed)
 			if err != nil {
 				return usageErr("%v", err)
 			}
@@ -51,7 +56,12 @@ func newValidateCmd() *cobra.Command {
 			findings = graph.Suggest(findings, g, cfg)
 			// The exit code answers for the corpus, never for the filter: a
 			// report narrowed to one file must not turn a failure into a pass.
+			// Summarize leaves out the suppressed findings whether or not they
+			// are being shown, so asking to see them cannot fail a build.
 			summary := graph.Summarize(g, findings)
+			if !showSuppressed {
+				findings = shown(findings)
+			}
 			reported := findings
 			if len(touching) > 0 {
 				reported = graph.Touching(findings, g, touching)
@@ -81,7 +91,23 @@ func newValidateCmd() *cobra.Command {
 	}
 	cmd.Flags().StringArray(flagTouching, nil, "report only the findings about these files or directories (repeatable)")
 	cmd.Flags().String(flagImmutableSince, "", "check that documents closed at <rev> only grew since")
+	cmd.Flags().Bool(flagShowSuppressed, false, "also report the findings a recorded exception suppresses")
 	return cmd
+}
+
+// shown drops the findings the corpus has already answered. They are computed
+// either way — the check has to pair the documents before it can know one is
+// suppressed — and left out of the report unless the reader asks, so the
+// exception is a decision recorded once rather than a line read every day.
+func shown(findings []model.Finding) []model.Finding {
+	out := make([]model.Finding, 0, len(findings))
+	for _, f := range findings {
+		if f.Suppressed {
+			continue
+		}
+		out = append(out, f)
+	}
+	return out
 }
 
 func plural(n int, noun string) string {

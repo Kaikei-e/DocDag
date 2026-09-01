@@ -13,8 +13,10 @@ import (
 const (
 	groupRef         = "ref"
 	groupResolvesTo  = "resolves to"
+	groupRelated     = "related"
 	groupAncestors   = "ancestors"
 	groupDescendants = "descendants"
+	groupSuppressed  = "suppressed"
 )
 
 // ContextText writes a brief as an indented outline: one line per document,
@@ -23,8 +25,10 @@ func ContextText(w io.Writer, b *brief.Brief) error {
 	out := &errWriter{w: w}
 	contextGroupText(out, groupRef, []brief.Entry{b.Ref})
 	contextGroupText(out, resolvesToHeading(b), b.ResolvesTo)
+	contextGroupText(out, groupRelated, b.Related)
 	contextGroupText(out, groupAncestors, b.Ancestors)
 	contextGroupText(out, groupDescendants, b.Descendants)
+	contextLinesText(out, groupSuppressed, b.Suppressed)
 	if b.Budget.Degraded > 0 {
 		out.printf("budget: %d tokens, %d used, %d entries without an excerpt\n",
 			b.Budget.Limit, b.Budget.Used, b.Budget.Degraded)
@@ -54,6 +58,20 @@ func contextGroupText(out *errWriter, heading string, entries []brief.Entry) {
 	out.printf("\n")
 }
 
+// contextLinesText writes a group that is prose rather than documents — the
+// suppressed conflicts are a reading, not a neighbour — in the indented shape
+// the document groups use, so the outline stays one shape.
+func contextLinesText(out *errWriter, heading string, lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	out.printf("%s\n", heading)
+	for _, line := range lines {
+		out.printf("  %s\n", line)
+	}
+	out.printf("\n")
+}
+
 func indent(text, prefix string) string {
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
@@ -76,8 +94,16 @@ func ContextMarkdown(w io.Writer, b *brief.Brief) error {
 	out := &errWriter{w: w}
 	contextEntryMarkdown(out, "#", b.Ref)
 	contextGroupMarkdown(out, "Resolves to", b.ResolvesTo)
+	contextGroupMarkdown(out, "Related", b.Related)
 	contextGroupMarkdown(out, "Ancestors", b.Ancestors)
 	contextGroupMarkdown(out, "Descendants", b.Descendants)
+	if len(b.Suppressed) > 0 {
+		out.printf("## Suppressed\n\n")
+		for _, line := range b.Suppressed {
+			out.printf("- %s\n", line)
+		}
+		out.printf("\n")
+	}
 	if b.Budget.Degraded > 0 {
 		out.printf("Budget: %d tokens, %d used, %d entries without an excerpt.\n",
 			b.Budget.Limit, b.Budget.Used, b.Budget.Degraded)
@@ -100,7 +126,11 @@ func contextGroupMarkdown(out *errWriter, heading string, entries []brief.Entry)
 
 func contextEntryMarkdown(out *errWriter, level string, e brief.Entry) {
 	out.printf("%s %s %s\n\n", level, e.ID, e.Title)
-	out.printf("- status: %s\n- path: %s\n\n", e.Status, e.Path)
+	out.printf("- status: %s\n- path: %s\n", e.Status, e.Path)
+	if e.Relation != "" {
+		out.printf("- relation: %s\n", e.Relation)
+	}
+	out.printf("\n")
 	if e.Excerpt != "" {
 		out.printf("%s\n\n", e.Excerpt)
 	}

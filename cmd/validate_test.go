@@ -1133,15 +1133,79 @@ func TestValidateACorpusUnderTheSpecPreset(t *testing.T) {
 	got := run(t, "validate", "--config", specVaultConfig(t))
 
 	assertExit(t, got, 1)
-	// Four of the five findings come from a preset rule — a standard hardening
-	// into dogma. The fifth is the one structural thing wrong with the corpus: a
-	// conformance test left pointing at the clause UZ-V-004 replaced.
+	// Four of the six findings come from a preset rule — a standard hardening
+	// into dogma. The other two are the structural things wrong with the
+	// corpus: a conformance test left pointing at the clause UZ-V-004 replaced,
+	// and a MUST standing against a MUST_NOT about one subject. The weak
+	// conflict between UZ-V-006 and UZ-V-008 is not among them: the vault
+	// records the exception, so the finding is suppressed.
 	assertLines(t, "findings", findingLines(got.stdout), []string{
-		"UZ-V-002.md:4: ERROR orphan_must UZ-V-002: is MUST and accepted but nothing enforces it",
+		"UZ-V-002.md:4: ERROR orphan_must UZ-V-002: is MUST or MUST_NOT and accepted but nothing enforces it",
 		"UZ-V-003.md:5: ERROR stale_premise UZ-V-003: is accepted but a premise is retired",
+		"UZ-V-009.md:4: ERROR modality_conflict UZ-V-009: is MUST and UZ-V-010 is MUST_NOT about topic/seed-recording",
 		"report-states-its-model.md:3: ERROR orphan_test conform/report-states-its-model: enforces no clause",
 		"uz-v-005.md:5: ERROR stale_target conform/uz-v-005: enforces targets UZ-V-005, which UZ-V-004 supersedes",
 		"UZ-V-004.md:3: WARN no_counterexample UZ-V-004: is accepted without a counterexample",
+	})
+}
+
+// TestValidateShowsWhatAnExceptionSuppresses drives the defeater end to end: a
+// weak conflict the corpus has answered is out of the report and out of the
+// summary, and the flag shows it with the edge that answers it.
+func TestValidateShowSuppressed(t *testing.T) {
+	config := specVaultConfig(t)
+	suppressed := "UZ-V-006.md:4: ERROR modality_conflict UZ-V-006: is MAY and UZ-V-008 is SHOULD_NOT about topic/inferential-grader, " +
+		"suppressed by excepts UZ-V-006 -> UZ-V-008 (scope: only where the run also records a calibration measure)"
+
+	t.Run("the text report carries the suppressed finding and its exception", func(t *testing.T) {
+		got := run(t, "validate", "--show-suppressed", "--config", config)
+
+		assertExit(t, got, 1)
+		if !slices.Contains(findingLines(got.stdout), suppressed) {
+			t.Errorf("findings = %q, want a line %q", findingLines(got.stdout), suppressed)
+		}
+		// A conflict already answered has nothing to type: the remedy would be
+		// the edge the reader is looking at on the line above.
+		for _, line := range lines(got.stdout) {
+			if strings.HasPrefix(strings.TrimSpace(line), "fix: declare excepts") {
+				t.Errorf("stdout = %q, want no fix on a suppressed conflict", got.stdout)
+			}
+		}
+	})
+
+	t.Run("the default report leaves it out", func(t *testing.T) {
+		got := run(t, "validate", "--config", config)
+
+		assertExit(t, got, 1)
+		if slices.Contains(findingLines(got.stdout), suppressed) {
+			t.Errorf("findings = %q, want the suppressed conflict left out", findingLines(got.stdout))
+		}
+	})
+
+	t.Run("the summary counts the same either way", func(t *testing.T) {
+		shown := decodeJSON[render.Report](t, run(t, "validate", "--show-suppressed", "--format", "json", "--config", config).stdout)
+		hidden := decodeJSON[render.Report](t, run(t, "validate", "--format", "json", "--config", config).stdout)
+
+		if shown.Summary != hidden.Summary {
+			t.Errorf("summary = %+v with --show-suppressed, %+v without: a suppressed finding is not an open failure",
+				shown.Summary, hidden.Summary)
+		}
+		if len(shown.Findings) != len(hidden.Findings)+1 {
+			t.Errorf("findings = %d with --show-suppressed, %d without, want exactly the one suppressed conflict between them",
+				len(shown.Findings), len(hidden.Findings))
+		}
+		for _, f := range hidden.Findings {
+			if f.Suppressed {
+				t.Errorf("default json carries a suppressed finding: %+v", f)
+			}
+		}
+		var carried bool
+		for _, f := range shown.Findings {
+			carried = carried || f.Suppressed
+		}
+		if !carried {
+			t.Error("json under --show-suppressed marks nothing suppressed, want the flag on the finding")
+		}
 	})
 }
 
@@ -1166,8 +1230,8 @@ func TestValidateReportsTheSpecPresetRevision(t *testing.T) {
 	if report.PresetVersion != config.SpecPresetVersion {
 		t.Errorf("preset_version = %d, want %d", report.PresetVersion, config.SpecPresetVersion)
 	}
-	if report.Summary.Documents != 14 {
-		t.Errorf("documents = %d, want the fourteen the seven kinds hold", report.Summary.Documents)
+	if report.Summary.Documents != 25 {
+		t.Errorf("documents = %d, want the twenty-five the eight kinds hold", report.Summary.Documents)
 	}
 }
 

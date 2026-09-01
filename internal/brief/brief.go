@@ -42,19 +42,27 @@ type Options struct {
 
 // Entry is one document in a brief. Excerpt is the first paragraph of the
 // requested section, empty when the document has no such section or when the
-// budget left no room for it.
+// budget left no room for it. Relation names why a document is in the brief and
+// is written only in the related group, where the walk that found it is not the
+// answer: a clause and its exception are one hop apart the same way a clause
+// and its subject are, and which of the two a reader is looking at matters.
 type Entry struct {
-	ID      model.ID `json:"id"`
-	Title   string   `json:"title"`
-	Status  string   `json:"status"`
-	Path    string   `json:"path"`
-	Excerpt string   `json:"excerpt,omitempty"`
+	ID       model.ID `json:"id"`
+	Title    string   `json:"title"`
+	Status   string   `json:"status"`
+	Path     string   `json:"path"`
+	Relation string   `json:"relation,omitempty"`
+	Excerpt  string   `json:"excerpt,omitempty"`
 }
 
 // Line is the one-line form of an entry: what a reader is left with when the
 // budget has no room for prose.
 func (e Entry) Line() string {
-	return fmt.Sprintf("%s  %s  [%s]  %s", e.ID, e.Title, e.Status, e.Path)
+	line := fmt.Sprintf("%s  %s  [%s]  %s", e.ID, e.Title, e.Status, e.Path)
+	if e.Relation != "" {
+		line += "  (" + e.Relation + ")"
+	}
+	return line
 }
 
 // Budget records what a brief was allowed to cost and what it did cost.
@@ -67,14 +75,21 @@ type Budget struct {
 // Brief is the assembled context of one document. PresetVersion is the revision
 // of the preset the corpus is written against, left out where the configuration
 // names none.
+// Related and Suppressed are the normative neighbourhood, and are left out
+// entirely for a configuration that declares none of what they read.
 type Brief struct {
 	SchemaVersion int     `json:"schema_version"`
 	PresetVersion int     `json:"preset_version,omitempty"`
 	Ref           Entry   `json:"ref"`
 	ResolvesTo    []Entry `json:"resolves_to"`
+	Related       []Entry `json:"related,omitempty"`
 	Ancestors     []Entry `json:"ancestors"`
 	Descendants   []Entry `json:"descendants"`
-	Budget        Budget  `json:"budget"`
+	// Suppressed is one line per conflict about this document that a recorded
+	// exception defeats — the reading that says why a permission and a
+	// prohibition are allowed to stand side by side.
+	Suppressed []string `json:"suppressed,omitempty"`
+	Budget     Budget   `json:"budget"`
 }
 
 // entries flattens a brief into the order it is read and the budget is spent in.
@@ -82,6 +97,9 @@ func (b *Brief) entries() []*Entry {
 	out := []*Entry{&b.Ref}
 	for i := range b.ResolvesTo {
 		out = append(out, &b.ResolvesTo[i])
+	}
+	for i := range b.Related {
+		out = append(out, &b.Related[i])
 	}
 	for i := range b.Ancestors {
 		out = append(out, &b.Ancestors[i])
@@ -126,6 +144,13 @@ func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief
 	if b.ResolvesTo, err = entries(g, opts, taken, binding, resolution(g, cfg, id), true); err != nil {
 		return nil, err
 	}
+	// The normative neighbourhood is claimed before the walks, so a document
+	// that stands in one of these relations is reported as that rather than as
+	// whichever direction happened to reach it first.
+	if b.Related, err = relatedEntries(g, cfg, opts, taken, binding, id); err != nil {
+		return nil, err
+	}
+	b.Suppressed = suppressed(g, cfg, id)
 	ancestors := within(g, graph.Reverse(g, opts.Types...), id, opts.Depth)
 	if b.Ancestors, err = entries(g, opts, taken, binding, ancestors, false); err != nil {
 		return nil, err

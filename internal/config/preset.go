@@ -99,6 +99,10 @@ func ADRPreset() Config {
 // system meets it, the deviation records a departure from it, the measure
 // records how a run scored it, and the premise, the principle and the
 // post-mortem are what a clause rests on, argues from and failed as.
+//
+// The subject a clause is about is a document of its own — the topic kind —
+// rather than a string attribute, so a misspelling is a dangling_ref instead of
+// a second subject nobody notices.
 const (
 	KindClause    = "clause"
 	KindConform   = "conform"
@@ -107,9 +111,10 @@ const (
 	KindPremise   = "premise"
 	KindPrinciple = "principle"
 	KindPM        = "pm"
+	KindTopic     = "topic"
 )
 
-// Identifier patterns of the spec preset's kinds. Four of them carry a slash,
+// Identifier patterns of the spec preset's kinds. Five of them carry a slash,
 // which no file name can hold, so documents of those kinds write the
 // identifier into their frontmatter; the other three are file-name shaped, and
 // a document of one of those is named after its identifier.
@@ -121,12 +126,18 @@ const (
 	IDPremise   = `^premise/[a-z0-9/-]+$`
 	IDPrinciple = `^principle/[a-z0-9/-]+$`
 	IDPM        = `^pm-\d{4}$`
+	IDTopic     = `^topic/[a-z0-9/-]+$`
 )
 
 // Edge types the spec preset adds to supersedes. The relation is declared on
 // the side that generates it: a conformance test declares what it enforces and
 // a measure declares what it measured, so a clause is not rewritten every time
 // a machine reads it.
+//
+// The last three are declared by the clause itself, because all three are about
+// what the clause says rather than about a machine having run: the subject it
+// speaks to, the clause it makes an exception of, and the requirement that
+// keeps its option from breaking interoperation.
 const (
 	EdgeEnforces       model.EdgeType = "enforces"
 	EdgeDeviatesFrom   model.EdgeType = "deviates-from"
@@ -134,6 +145,9 @@ const (
 	EdgeRationale      model.EdgeType = "rationale"
 	EdgeCounterexample model.EdgeType = "counterexample"
 	EdgeMeasures       model.EdgeType = "measures"
+	EdgeAbout          model.EdgeType = "about"
+	EdgeExcepts        model.EdgeType = "excepts"
+	EdgeInterop        model.EdgeType = "interop"
 )
 
 // Edge attributes of the spec preset.
@@ -142,6 +156,7 @@ const (
 	AttrExpires   = "expires"
 	AttrAgreement = "agreement"
 	AttrModel     = "model"
+	AttrScope     = "scope"
 )
 
 // SupersedesReasons is the closed vocabulary a supersedes entry states its
@@ -149,18 +164,45 @@ const (
 // another clause, or the standard renamed the words it was written in.
 var SupersedesReasons = []string{"recurrence", "premise-collapse", "conflict", "vocabulary"}
 
-// FieldLevel is the frontmatter key a clause states the strength of its
-// requirement under, and LevelMUST and LevelSHOULD are the two values the
-// preset's projections and rules read. ADR-0003 renames the key to modality
-// and widens the vocabulary to five values, so every mention of either — in
-// the kind's field declaration, in the projections and in the rules — goes
-// through these names: that revision is one edit here rather than a search
-// through the configuration.
+// FieldModality is the frontmatter key a clause states the strength of its
+// requirement under, and the five values are BCP 14's keywords. Every mention
+// of either — the kind's field declaration, the projections, the rules and the
+// conflict check — goes through these names, so a revision of the vocabulary is
+// one edit here rather than a search through the configuration.
+//
+// The vocabulary is five values rather than a strength and a polarity because
+// BCP 14 has no MAY NOT: a pair of fields would have an invalid combination to
+// check for, where a closed set of five has nothing to get wrong.
 const (
-	FieldLevel  = "level"
-	LevelMUST   = "MUST"
-	LevelSHOULD = "SHOULD"
+	FieldModality     = "modality"
+	ModalityMUST      = "MUST"
+	ModalityMUSTNOT   = "MUST_NOT"
+	ModalitySHOULD    = "SHOULD"
+	ModalitySHOULDNOT = "SHOULD_NOT"
+	ModalityMAY       = "MAY"
 )
+
+// Modalities is the closed vocabulary a clause states its modality from, in the
+// order BCP 14 defines the keywords: the two strict ones, the two defeasible
+// ones, and the explicit permission.
+var Modalities = []string{ModalityMUST, ModalityMUSTNOT, ModalitySHOULD, ModalitySHOULDNOT, ModalityMAY}
+
+// StrictModality reports whether a modality states a strict rule — one whose
+// consequence follows without exception. Defeasible deontic logic's strict
+// rules are the ones a defeater cannot overturn, which is why an excepts edge
+// may not point at one and why a conflict between two of them stands however it
+// is annotated.
+func StrictModality(value string) bool {
+	return value == ModalityMUST || value == ModalityMUSTNOT
+}
+
+// Prohibition reports whether a modality forbids rather than requires or
+// permits. Two clauses about one topic conflict exactly when one of them is a
+// prohibition and the other is not: that is the whole of ADR-0003's table, and
+// the check reads it from here rather than from a copy of the grid.
+func Prohibition(value string) bool {
+	return value == ModalityMUSTNOT || value == ModalitySHOULDNOT
+}
 
 // FieldTest is the key a conformance document names the executable test body
 // under. The body is a script rather than Markdown, so the document is a thin
@@ -180,36 +222,51 @@ const (
 )
 
 // Projections of the spec preset. A clause's force is derived rather than
-// written down: level: MUST is a claim, and it only binds where a conformance
-// test enforces it, which is what effective_must says and binding answers with.
+// written down: modality: MUST is a claim, and it only carries the force of one
+// where a conformance test enforces it, which is what effective_must says.
+//
+// effective is what binding names: a clause is effective at whatever strength
+// the three projections leave it with, and a MAY is effective as the explicit
+// permission it states. That is wider than effective_must, and deliberately so
+// — a permission and a prohibition can only be seen to conflict if both are in
+// the set, and ADR-0003 R2 puts MAY in `--binding` for exactly that reason.
+//
+// It is not called in_force: ADR-0005 reserves that name for an attribute the
+// engine computes from a kind's `period:` declaration, and a projection shadows
+// a frontmatter or engine attribute spelled the same way — so a projection of
+// that name would mask the very attribute this preset will need to read. When
+// that ADR lands, `in_force: {eq: "true"}` joins the alternatives below.
 const (
 	ProjectionEnforced        = "enforced"
 	ProjectionEffectiveMust   = "effective_must"
 	ProjectionEffectiveShould = "effective_should"
+	ProjectionEffective       = "effective"
 )
 
 // SpecPresetVersion is the revision the built-in spec configuration is at.
 const SpecPresetVersion = 1
 
-// SpecPreset returns the built-in normative-clause configuration: seven kinds
-// of document, the edges between them declared on the machine-generated side,
-// the projections that derive what is in force, and the five rules that report
-// a standard hardening into dogma.
+// SpecPreset returns the built-in normative-clause configuration: eight kinds
+// of document, the edges between them declared on the side that generates
+// them, the projections that derive what is in force and at what strength, and
+// the seven rules that report a standard hardening into dogma or drifting out
+// of interoperability.
 //
 // It declares no top-level status_values, and each kind that answers to a
 // vocabulary carries its own. That is deliberate: a kind inherits the
 // top-level vocabulary wherever it declares none, so a top-level one would
-// hand conform and measure documents — which a machine writes, and which say
-// nothing about their own standing — a vocabulary to fall outside of. With
+// hand conform, measure and topic documents — which a machine writes, or which
+// say nothing about their own standing — a vocabulary to fall outside of. With
 // none declared anywhere they reach, their status is unchecked, which is what
 // "this kind has no status" has to be written as.
 func SpecPreset() Config {
 	eq := func(v string) AttrCondition { return AttrCondition{Eq: &v} }
+	not := func(v string) AttrCondition { return AttrCondition{Not: &v} }
 	// The clause rules and projections all ask the same two questions, so the
 	// pair is written once.
-	stated := func(level string) map[string]AttrCondition {
+	stated := func(modality string) map[string]AttrCondition {
 		return map[string]AttrCondition{
-			FieldLevel:         eq(level),
+			FieldModality:      eq(modality),
 			DefaultStatusField: eq(StatusAccepted),
 		}
 	}
@@ -231,10 +288,13 @@ func SpecPreset() Config {
 				// A clause is the one document a person writes by hand and the
 				// one every other kind points at, so its frontmatter is a closed
 				// set: a key nobody declared is a mistake worth reporting rather
-				// than another tool's field. Its level is declared as a field so
-				// that closed set admits it.
+				// than another tool's field. Its modality is declared as a field
+				// so that closed set admits it, and declared with a vocabulary
+				// because a clause whose strength is a typo states nothing.
 				Closed: true,
-				Fields: map[string]FieldSpec{FieldLevel: {}},
+				Fields: map[string]FieldSpec{
+					FieldModality: {OneOf: slices.Clone(Modalities), Required: true},
+				},
 			},
 			KindConform: {
 				Dir: "spec/conform",
@@ -279,6 +339,13 @@ func SpecPreset() Config {
 				// decided, so it is never accepted and the rules that read
 				// accepted never reach one.
 				StatusValues: []string{StatusDraft, StatusPublished},
+			},
+			// A topic is a subject, not a decision: its body defines the subject
+			// in a paragraph, and it answers to no status vocabulary because
+			// there is nothing about a subject to decide.
+			KindTopic: {
+				Dir: "spec/topics",
+				ID:  IDTopic,
 			},
 		},
 		Edges: []EdgeSpec{
@@ -360,6 +427,41 @@ func SpecPreset() Config {
 				// agreement rate of a clause nobody is bound by.
 				Target: &TargetCondition{LeafOf: EdgeSupersedes.String()},
 			},
+			{
+				Name:      EdgeAbout.String(),
+				Key:       EdgeAbout.String(),
+				Direction: DirectionForward,
+				From:      []string{KindClause},
+				To:        []string{KindTopic},
+				// A clause states its subject, always: two clauses can only be
+				// seen to disagree where they are known to be about one thing,
+				// and a clause with no subject is invisible to that comparison.
+				MinOutbound: 1,
+			},
+			{
+				Name:      EdgeExcepts.String(),
+				Key:       EdgeExcepts.String(),
+				Acyclic:   true,
+				Direction: DirectionForward,
+				From:      []string{KindClause},
+				To:        []string{KindClause},
+				// The direction is the exception — the more specific clause —
+				// pointing at the general one it defeats. Acyclic because two
+				// clauses each excepting the other defeat nothing.
+				Attrs: map[string]EdgeAttrSpec{
+					// DocDag records the scope and never evaluates it: it is
+					// prose, and the people and agents reading `context` are
+					// what it is written for.
+					AttrScope: {Required: true, Type: AttrTypeString},
+				},
+			},
+			{
+				Name:      EdgeInterop.String(),
+				Key:       EdgeInterop.String(),
+				Direction: DirectionForward,
+				From:      []string{KindClause},
+				To:        []string{KindClause},
+			},
 		},
 		Projections: []ProjectionSpec{
 			{
@@ -367,43 +469,86 @@ func SpecPreset() Config {
 				When: Condition{Inbound: EdgeCondition{Edge: EdgeEnforces.String()}},
 			},
 			{
+				// A MUST_NOT is a strict rule exactly as a MUST is, so it needs
+				// the same conformance test behind it and falls the same way
+				// without one. The two are alternatives of one projection
+				// rather than two projections, because what reads this is
+				// "which clauses carry strict force", never "which are
+				// positive": the effective projection, the deviates-from
+				// target and the listing all want the pair.
 				Name: ProjectionEffectiveMust,
-				When: Condition{
-					Attr:       stated(LevelMUST),
-					Inbound:    EdgeCondition{Edge: EdgeEnforces.String()},
-					NotInbound: EdgeSupersedes.String(),
+				AnyOf: []ProjectionAlt{
+					{When: Condition{
+						Attr:       stated(ModalityMUST),
+						Inbound:    EdgeCondition{Edge: EdgeEnforces.String()},
+						NotInbound: EdgeSupersedes.String(),
+					}},
+					{When: Condition{
+						Attr:       stated(ModalityMUSTNOT),
+						Inbound:    EdgeCondition{Edge: EdgeEnforces.String()},
+						NotInbound: EdgeSupersedes.String(),
+					}},
 				},
 			},
 			{
 				Name: ProjectionEffectiveShould,
 				AnyOf: []ProjectionAlt{
 					{When: Condition{
-						Attr:       stated(LevelSHOULD),
+						Attr:       stated(ModalitySHOULD),
+						NotInbound: EdgeSupersedes.String(),
+					}},
+					{When: Condition{
+						Attr:       stated(ModalitySHOULDNOT),
 						NotInbound: EdgeSupersedes.String(),
 					}},
 					// A MUST nothing enforces carries the force of a SHOULD,
-					// which is the point of the projection. That alternative
-					// needs two absences and a condition holds one not_inbound,
-					// so the second is written as the not: {inbound: …} the
-					// vocabulary word is sugar for.
+					// which is the point of the projection, and an unenforced
+					// MUST_NOT falls to a SHOULD_NOT the same way. Each
+					// alternative needs two absences and a condition holds one
+					// not_inbound, so the second is written as the
+					// not: {inbound: …} the vocabulary word is sugar for.
 					{When: Condition{
-						Attr:       stated(LevelMUST),
+						Attr:       stated(ModalityMUST),
+						NotInbound: EdgeEnforces.String(),
+						Not:        &Condition{Inbound: EdgeCondition{Edge: EdgeSupersedes.String()}},
+					}},
+					{When: Condition{
+						Attr:       stated(ModalityMUSTNOT),
 						NotInbound: EdgeEnforces.String(),
 						Not:        &Condition{Inbound: EdgeCondition{Edge: EdgeSupersedes.String()}},
 					}},
 				},
 			},
+			{
+				// What binding names: a clause effective at whatever strength
+				// the projections above leave it with, plus the explicit
+				// permission, which nothing enforces and nothing needs to. It
+				// reads the other two as attributes rather than repeating
+				// them, so a revision of what force means is one edit.
+				Name: ProjectionEffective,
+				AnyOf: []ProjectionAlt{
+					{When: Condition{Attr: map[string]AttrCondition{ProjectionEffectiveMust: eq(ProjectionTrue)}}},
+					{When: Condition{Attr: map[string]AttrCondition{ProjectionEffectiveShould: eq(ProjectionTrue)}}},
+					{When: Condition{
+						Attr:       stated(ModalityMAY),
+						NotInbound: EdgeSupersedes.String(),
+					}},
+				},
+			},
 		},
-		Binding: ProjectionEffectiveMust,
+		Binding: ProjectionEffective,
 		Rules: []Rule{
 			{
 				Name:     model.RuleOrphanMust,
 				Severity: model.SeverityError,
 				When: Condition{
-					Attr:       stated(LevelMUST),
+					AnyOf: []Condition{
+						{Attr: stated(ModalityMUST)},
+						{Attr: stated(ModalityMUSTNOT)},
+					},
 					NotInbound: EdgeEnforces.String(),
 				},
-				Message: "is MUST and accepted but nothing enforces it",
+				Message: "is MUST or MUST_NOT and accepted but nothing enforces it",
 			},
 			{
 				Name:     model.RuleOrphanTest,
@@ -446,6 +591,37 @@ func SpecPreset() Config {
 					NotOutbound: EdgeCounterexample.String(),
 				},
 				Message: "is accepted without a counterexample",
+			},
+			{
+				// RFC 2119 §5: an implementation without the option must be
+				// prepared to interoperate with one that has it, and the other
+				// way round. That obligation is a MUST clause of its own, and
+				// the interop edge is where the MAY names it. A warning rather
+				// than an error, because interoperation is obvious for most
+				// options and §6 warns against making the keywords a ritual.
+				Name:     model.RuleMayWithoutInterop,
+				Severity: model.SeverityWarn,
+				When: Condition{
+					Attr:        stated(ModalityMAY),
+					NotOutbound: EdgeInterop.String(),
+				},
+				Message: "is MAY but names no MUST clause that guarantees interoperation without it",
+			},
+			{
+				// The obligation the option carries is a MUST or it is not an
+				// obligation. A via clause holds where some neighbour matches,
+				// so a via over "not MUST" holds exactly where some interop
+				// target is something else.
+				Name:     model.RuleInteropNotMust,
+				Severity: model.SeverityError,
+				When: Condition{
+					Outbound: EdgeCondition{Edge: EdgeInterop.String()},
+					Via: &ViaCondition{
+						Edge: EdgeInterop.String(),
+						Attr: map[string]AttrCondition{FieldModality: not(ModalityMUST)},
+					},
+				},
+				Message: "interop must point at a MUST clause",
 			},
 		},
 	}

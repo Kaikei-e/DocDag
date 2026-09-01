@@ -137,3 +137,23 @@ func TestWithProjectionsLeavesAListingThatAskedForNoneAlone(t *testing.T) {
 		t.Fatalf("projections = %v, want none", got[0].Projections)
 	}
 }
+
+func TestWithFieldsReadsTheDeclaredKeys(t *testing.T) {
+	g := &model.Graph{Nodes: map[model.ID]*model.Node{
+		"0001": {ID: "0001", Attrs: map[string]any{"modality": "MUST"}},
+		"0002": {ID: "0002", Attrs: map[string]any{"modality": []any{"MUST", "MAY"}}},
+	}}
+	records := WithFields([]Record{{ID: "0001"}, {ID: "0002"}, {ID: "0003"}}, []string{"modality"}, g)
+
+	var buf bytes.Buffer
+	if err := RecordsText(&buf, records, []string{FieldID, "modality"}); err != nil {
+		t.Fatalf("RecordsText: %v", err)
+	}
+
+	// A key written as a list has no scalar to show, and a document the corpus
+	// does not hold has nothing at all: both keep the row's shape.
+	want := "0001\tMUST\n0002\t-\n0003\t-\n"
+	if buf.String() != want {
+		t.Errorf("records = %q, want %q", buf.String(), want)
+	}
+}

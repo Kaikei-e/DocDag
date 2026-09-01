@@ -18,13 +18,14 @@ A finding reads:
 | **Rule** | the rule's own `severity:` | `rules:` defines them; the preset ships two, and a config that writes `rules:` replaces the list |
 | **Reference and history** | `references.dangling`, or fixed | `dangling_reference` is off by default; `immutable_violation` needs `--immutable-since` |
 
-`structural:` accepts exactly these twenty-two names: `cycle`, `dangling_ref`, `id_collision`,
+`structural:` accepts exactly these twenty-six names: `cycle`, `dangling_ref`, `id_collision`,
 `invalid_frontmatter`, `missing_frontmatter`, `unknown_status`, `derived_conflict`,
 `unstructured_supersedes`, `invalid_ref`, `empty_edge`, `inverse_mismatch`, `cardinality`,
 `edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`, `id_mismatch`, `kind_mismatch`,
-`unknown_field`, `edge_kind_mismatch`, `deprecated_field`, `stale_target`, `path_mismatch`. Naming
-anything else — `status_drift` and `superseded_orphan` included, since they are rules — is a
-configuration error and exits 3.
+`unknown_field`, `unknown_field_value`, `missing_field`, `edge_kind_mismatch`, `deprecated_field`,
+`stale_target`, `path_mismatch`, `modality_conflict`, `excepts_strict`. Naming anything else —
+`status_drift` and `superseded_orphan` included, since they are rules — is a configuration error and
+exits 3.
 
 ## Status is a projection
 
@@ -151,7 +152,12 @@ reference naming no document has no kind to be wrong about, and is a `dangling_r
 reference that names a document of the wrong kind still resolves, so this finding says what is
 actually wrong rather than reporting the reference as naming nothing. No fix suggestion.
 
-## Field lifecycle
+## Declared fields
+
+The three checks below are what a `fields:` declaration turns on: the value a document writes under
+a declared key, whether it writes the key at all, and whether the key is one the corpus is retiring.
+A key nobody declares is not unknown, only undeclared, so a corpus that declares nothing sees none
+of them.
 
 ### `deprecated_field` — warn, structural, error past its sunset
 
@@ -179,6 +185,36 @@ A kind that declares the key itself reads its own declaration, so a field the co
 retired for a kind that re-declares it. And a declared field — retired or not — is a *known* key, so
 a `closed: true` kind accepts it instead of reporting `unknown_field`: a migration in progress is
 not a mistake.
+
+### `unknown_field_value` — error, structural
+
+A document writes a declared field whose value is outside the `one_of` the configuration gives it:
+`modality "SHALL" is outside the vocabulary MUST, MUST_NOT, SHOULD, SHOULD_NOT, MAY`. One finding
+per key per document, on the line the key is written on, and the vocabulary is listed in the order
+the configuration declares it.
+
+The comparison is **exact**, case included, for the reason an edge attribute's `one_of` is: a
+declared vocabulary is a closed machine vocabulary a preset revision renames wholesale, where a
+`status` is prose a person writes by hand. A value that is not a scalar at all — a list, a mapping —
+is not a value under that key, and is reported as `missing_field` where the field is required. No
+fix suggestion: the detail already names the whole vocabulary.
+
+### `missing_field` — error, structural
+
+A document of a kind whose `fields:` declares `required: true` does not write that key:
+`frontmatter key "modality" is required, one of: MUST, MUST_NOT, SHOULD, SHOULD_NOT, MAY`. The
+vocabulary is named where the declaration has one. There is no line of its own to point at, so the
+finding lands on the status field and then on the frontmatter block itself: the reader is being sent
+to a document, not to a mistake in it. No fix suggestion.
+
+Both read the declarations a document of its own **kind** sees — the corpus's, with the kind's
+winning by name — and both answer for open kinds as well as closed ones: `closed: true` is about
+which keys may appear, and these two are about what the declared ones say. `docdag new --kind`
+offers a required or closed-vocabulary field as a commented stub naming the vocabulary, so the
+finding lands on a line the author is already looking at.
+
+`required` and `one_of` describe a field the corpus keeps, so writing either beside
+`deprecated: true` is a configuration error (exit 3), as is an empty or repeated `one_of` value.
 
 ## Edge attributes
 
@@ -245,6 +281,14 @@ violated bound:
 
 A bound of `0` is unbounded for the two maxima, and `min_outbound: 0` can never trip. No fix
 suggestion.
+
+Where an edge names its endpoint kinds, its bounds are read over those kinds alone: the outbound
+bounds over `from:`, the inbound ones over `to:`. That is what makes `min_outbound: 1` sayable — a
+lower bound is the one bound a document with **no such key at all** can violate, so without the
+scoping it would report every document of every other kind, the edge's own targets included. A
+document of another kind that does hold such an edge is an `edge_kind_mismatch`, which says the
+actual mistake. An edge that names no kinds, and every corpus without `kinds:`, is bounded over the
+whole corpus exactly as before.
 
 ### `inverse_mismatch` — error, structural
 
@@ -326,6 +370,73 @@ frontmatter's opening line.
 No fix suggestion. Two paths disagree and DocDag does not guess which of them is the wrong one —
 the same policy as `derived_conflict`.
 
+### `modality_conflict` — error, structural
+
+Two clauses that are both **binding**, both `about:` one topic, and whose modalities cannot both
+hold. ADR-0003's table, with the rows reading "A is", the columns "B is":
+
+| A \ B | MUST | MUST_NOT | SHOULD | SHOULD_NOT | MAY |
+| --- | --- | --- | --- | --- | --- |
+| **MUST** | — | **strong** | — | weak | — |
+| **MUST_NOT** | **strong** | — | weak | — | weak |
+| **SHOULD** | — | weak | — | weak | — |
+| **SHOULD_NOT** | weak | — | weak | — | weak |
+| **MAY** | — | weak | — | weak | — |
+
+Two modalities collide exactly when one of them forbids and the other does not; the collision is
+**strong** where both are strict rules, which is the `MUST` against the `MUST_NOT`. Every other cell
+is silence — two prohibitions do not disagree, and neither do a requirement and a permission.
+
+The finding is filed against the clause with the smaller identifier, on the line it states its
+modality, with the other clause and every shared topic under `related`:
+
+```
+UZ-V-009.md:4: ERROR modality_conflict UZ-V-009: is MUST and UZ-V-010 is MUST_NOT about topic/seed-recording
+  fix: revise one modality: a strict rule cannot be defeated
+```
+
+A pair sharing two topics disagrees once, over both: the topics are listed together rather than
+reported twice. Binding is whatever the configuration's `binding:` projection names, which under the
+`spec` preset is `effective` — every accepted, unsuperseded clause, at whatever strength it is in
+force at. A clause that does not bind states nothing to collide with, so a superseded or unaccepted
+clause is never half of a pair.
+
+**Suppression.** A **weak** conflict with an `excepts` edge between the two clauses, in either
+direction, is suppressed: it is left out of the report, left out of the summary counts and therefore
+out of the exit code, and shown by `validate --show-suppressed` with the edge that answers it named
+on the same line:
+
+```
+UZ-V-006.md:4: ERROR modality_conflict UZ-V-006: is MAY and UZ-V-008 is SHOULD_NOT about topic/inferential-grader, suppressed by excepts UZ-V-006 -> UZ-V-008 (scope: only where the run also records a calibration measure)
+```
+
+A suppressed finding carries no `fix:` — the remedy for an unanswered weak conflict is `declare
+excepts: <B> in <A> with scope:, or revise one modality`, and this one already has the edge that
+line asks for.
+
+The JSON report marks such a finding `"suppressed": true`, and carries it only under the flag — the
+default report is byte-identical to what it was without one. `context <ref>` shows the same line for
+the clauses it is about, whatever the flag says: the exception is the reading that makes a
+permission standing beside a prohibition make sense.
+
+A **strong** conflict is never suppressed, and its fix says so rather than offering the exception:
+in defeasible deontic logic a strict rule's consequence follows without exception, so no defeater
+can be recorded against it. DocDag does not guess which of the two clauses is the wrong one, exactly
+as `derived_conflict` does not.
+
+The check is a pair check per topic, quadratic in the clauses that share one. Topics are meant to be
+cut at the granularity a paragraph defines and two to five clauses hang off, so it is linear in
+practice; `stats` reports the per-topic counts to watch that with.
+
+### `excepts_strict` — error, structural
+
+An `excepts` edge points at a clause whose modality is `MUST` or `MUST_NOT`: `excepts targets
+UZ-V-002, which is MUST and cannot be defeated`. Filed against the document that declares the
+exception, on its `excepts:` line, with the target's modality line under `related`. A defeater does
+not draw a conclusion of its own — it stops a defeasible one from being drawn — and a strict rule
+has nothing for it to stop. No fix suggestion: either the target's modality is wrong or the
+exception is.
+
 ### `status_drift` — error, preset rule
 
 The document has an inbound `supersedes` edge and a status other than `superseded`: `has inbound
@@ -340,12 +451,14 @@ withdrawn`.
 
 ### The `spec` preset's rules
 
-`preset: spec` replaces the two rules above with five of its own, written in
+`preset: spec` replaces the two rules above with seven of its own, written in
 [configuration.md](configuration.md#the-spec-preset) and carrying no fix suggestion — each names a
 decision rather than an edit:
 
-- `orphan_must` — error. An accepted `level: MUST` clause that no conformance test enforces: `is
-  MUST and accepted but nothing enforces it`. Either write the test or drop the clause to `SHOULD`.
+- `orphan_must` — error. An accepted `modality: MUST` or `modality: MUST_NOT` clause that no
+  conformance test enforces: `is MUST or MUST_NOT and accepted but nothing enforces it`. Either
+  write the test or drop the clause to `SHOULD` or `SHOULD_NOT`, which is what an unenforced strict
+  clause carries the force of anyway.
 - `orphan_test` — error. A `conform` document that declares no `enforces:`: `enforces no clause`.
 - `stale_premise` — error. An accepted document one hop from a `retired` premise: `is accepted but a
   premise is retired`.
@@ -353,6 +466,12 @@ decision rather than an edit:
   deviations; reconsider the clause`.
 - `no_counterexample` — warn. An accepted clause with no `counterexample:`: `is accepted without a
   counterexample`.
+- `may_without_interop` — warn. An accepted `modality: MAY` clause with no `interop:`: `is MAY but
+  names no MUST clause that guarantees interoperation without it`. RFC 2119 §5 makes an option's
+  interoperability a MUST-level obligation; a warning rather than an error, because for most options
+  it is obvious and §6 warns against making the keywords a ritual.
+- `interop_not_must` — error. Some clause an `interop:` names is not a `MUST`: `interop must point
+  at a MUST clause`. The obligation the option leans on is a MUST or it is not an obligation.
 
 ## The reference layer
 
@@ -429,11 +548,17 @@ directory itself, so it is run by `--config` alone:
 $ docdag validate --config testdata/fixtures/kinds/docdag.yaml
 ```
 
-`spec-vault` is a small corpus under the `spec` preset — fourteen documents across the seven kinds,
-configured by `preset: spec` and nothing else. Four of its five findings come from a preset rule;
-the fifth is a conformance test still enforcing the clause its successor replaced, which is the
-`stale_target` the preset's `target:` conditions are there for:
+`spec-vault` is a small corpus under the `spec` preset — twenty-five documents across the eight
+kinds, configured by `preset: spec` and nothing else. Four of its six findings come from a preset
+rule; the other two are structural: a conformance test still enforcing the clause its successor
+replaced, which is the `stale_target` the preset's `target:` conditions are there for, and a `MUST`
+standing against a `MUST_NOT` about one subject, which is the strong `modality_conflict`:
 
 ```console
 $ docdag validate --config testdata/fixtures/spec-vault/docdag.yaml
 ```
+
+It carries one more conflict that is not in that report: `UZ-V-006` permits what `UZ-V-008` says not
+to do, and the vault records the exception, so the finding is suppressed. `--show-suppressed` is
+what reads it, and `docdag context UZ-V-006` is where the whole neighbourhood — the subject, the
+exception, the interoperation requirement — is written out.

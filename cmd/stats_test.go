@@ -273,3 +273,56 @@ func TestStatsWithoutFieldsIsUnchanged(t *testing.T) {
 		t.Errorf("stats = %q, want no field report without --fields", plain.stdout)
 	}
 }
+
+// TestStatsOverAStandard is the report a corpus of clauses watches its own
+// granularity with: how the subjects are cut, at what strengths it speaks, and
+// how many conflicts it is carrying an exception for.
+func TestStatsOverAStandard(t *testing.T) {
+	config := specVaultConfig(t)
+
+	t.Run("text carries the subjects, the modalities and the suppressed count", func(t *testing.T) {
+		got := run(t, "stats", "--config", config)
+
+		assertExit(t, got, 0)
+		for _, want := range []string{
+			"modality MUST_NOT", "modality MAY",
+			"clauses about topic/inferential-grader", "suppressed conflicts",
+		} {
+			if !strings.Contains(got.stdout, want) {
+				t.Errorf("stats = %q, want a %q row", got.stdout, want)
+			}
+		}
+	})
+
+	t.Run("json carries the same three", func(t *testing.T) {
+		got := run(t, "stats", "--format", "json", "--config", config)
+
+		assertExit(t, got, 0)
+		stats := decodeJSON[graph.Statistics](t, got.stdout)
+		if stats.SuppressedConflicts != 1 {
+			t.Errorf("suppressed_conflicts = %d, want the one the vault records an exception for", stats.SuppressedConflicts)
+		}
+		if len(stats.Modalities) != 5 {
+			t.Errorf("modalities = %+v, want a row per declared value", stats.Modalities)
+		}
+		// The busiest subject first: three carry two clauses each, and the
+		// vault's fifth topic carries one.
+		if len(stats.Topics) != 5 || stats.Topics[0].Clauses != 2 {
+			t.Errorf("topics = %+v, want the five subjects, busiest first", stats.Topics)
+		}
+		if stats.Binding != 8 {
+			t.Errorf("binding = %d, want every clause in force at any strength", stats.Binding)
+		}
+	})
+
+	t.Run("a corpus without the vocabulary reports none of it", func(t *testing.T) {
+		got := run(t, "stats", "--format", "json", "--dir", fixture(t, "ok-basic"))
+
+		assertExit(t, got, 0)
+		for _, unwanted := range []string{"topics", "modalities", "suppressed_conflicts"} {
+			if strings.Contains(got.stdout, unwanted) {
+				t.Errorf("stats = %q, want no %q: the adr preset declares no clauses", got.stdout, unwanted)
+			}
+		}
+	})
+}

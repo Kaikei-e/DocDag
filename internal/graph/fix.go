@@ -21,8 +21,16 @@ var quotedRef = regexp.MustCompile(`"([^"]*)"`)
 // Suggest fills in the Fix of every finding it recognizes. The checks say what
 // is wrong; this says what to type, as a pass over a finished report so a check
 // never has to carry a remedy.
+//
+// A finding that arrives carrying one keeps it: where the remedy names the
+// other document of a pair, only the check that paired them knows which, and
+// recovering that from a finished finding would mean reading identifiers back
+// out of prose.
 func Suggest(findings []model.Finding, g *model.Graph, cfg config.Config) []model.Finding {
 	for i := range findings {
+		if findings[i].Fix != "" {
+			continue
+		}
 		findings[i].Fix = suggestion(findings[i], g, cfg)
 	}
 	return findings

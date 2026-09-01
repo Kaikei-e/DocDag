@@ -513,7 +513,14 @@ func TestNewCreatesADocumentOfAKind(t *testing.T) {
 	}
 }
 
-func TestNewLeavesASpecCorpusExactlyAsItFoundIt(t *testing.T) {
+// TestNewLeavesTheRestOfASpecCorpusExactlyAsItFoundIt holds creation to what it
+// can promise once a kind declares what a document of it has to say: every
+// other document reads exactly as it did, and the new one carries the blanks
+// its own kind requires — the strength it claims and the subject it speaks to,
+// which are the two things only its author knows. Both are offered as stubs in
+// the created file, so the finding names a line the author is already looking
+// at rather than sending them to the configuration.
+func TestNewLeavesTheRestOfASpecCorpusExactlyAsItFoundIt(t *testing.T) {
 	vault := copyFixtureTree(t, "spec-vault")
 	cfg := filepath.Join(vault, "docdag.yaml")
 	before := run(t, "validate", "--config", cfg)
@@ -523,7 +530,28 @@ func TestNewLeavesASpecCorpusExactlyAsItFoundIt(t *testing.T) {
 
 	after := run(t, "validate", "--config", cfg)
 	assertExit(t, after, 1)
-	assertLines(t, "findings", findingLines(after.stdout), findingLines(before.stdout))
+	own, rest := []string{}, []string{}
+	for _, line := range findingLines(after.stdout) {
+		if strings.Contains(line, "UZ-V-007") {
+			own = append(own, line)
+			continue
+		}
+		rest = append(rest, line)
+	}
+	assertLines(t, "findings about the documents that were there", rest, findingLines(before.stdout))
+	assertLines(t, "findings about the created document", own, []string{
+		"UZ-V-007.md:5: ERROR cardinality UZ-V-007: 0 outbound about edges fall short of min_outbound 1",
+		`UZ-V-007.md:5: ERROR missing_field UZ-V-007: frontmatter key "modality" is required, one of: MUST, MUST_NOT, SHOULD, SHOULD_NOT, MAY`,
+	})
+	document, err := os.ReadFile(docPath(vault, "spec", "clauses", "UZ-V-007.md"))
+	if err != nil {
+		t.Fatalf("read created document: %v", err)
+	}
+	for _, stub := range []string{"# modality: <MUST|MUST_NOT|SHOULD|SHOULD_NOT|MAY>", "# about:"} {
+		if !strings.Contains(string(document), stub) {
+			t.Errorf("document offers no %q stub:\n%s", stub, document)
+		}
+	}
 }
 
 func TestNewCreatesAKindWithoutAStatusVocabulary(t *testing.T) {
