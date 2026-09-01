@@ -18,11 +18,12 @@ A finding reads:
 | **Rule** | the rule's own `severity:` | `rules:` defines them; the preset ships two, and a config that writes `rules:` replaces the list |
 | **Reference and history** | `references.dangling`, or fixed | `dangling_reference` is off by default; `immutable_violation` needs `--immutable-since` |
 
-`structural:` accepts exactly these twelve names: `cycle`, `dangling_ref`, `id_collision`,
+`structural:` accepts exactly these fifteen names: `cycle`, `dangling_ref`, `id_collision`,
 `invalid_frontmatter`, `missing_frontmatter`, `unknown_status`, `derived_conflict`,
-`unstructured_supersedes`, `invalid_ref`, `empty_edge`, `inverse_mismatch`, `cardinality`. Naming
-anything else — `status_drift` and `superseded_orphan` included, since they are rules — is a
-configuration error and exits 3.
+`unstructured_supersedes`, `invalid_ref`, `empty_edge`, `inverse_mismatch`, `cardinality`,
+`edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`. Naming anything else —
+`status_drift` and `superseded_orphan` included, since they are rules — is a configuration error and
+exits 3.
 
 ## Status is a projection
 
@@ -89,6 +90,48 @@ A typed edge, or an inverse-key entry, names an identifier the corpus does not h
 reference %q does not name a document`. This is the identifier-shaped case; a reference that is not
 identifier-shaped is `invalid_ref` instead. Fix: `did you mean 0002, 0003 or 0042?`, naming up to
 three nearest identifiers, and omitted when there is no plausible candidate.
+
+## Edge attributes
+
+An edge that declares `attrs:` reads `{ref: 0001, reason: conflict}` as well as a plain `0001`; see
+[configuration.md](configuration.md). The three checks below are about those attributes. Each is
+filed on the line the edge key is written on, and each runs whatever the reference beside it
+resolves to: an entry can name no document *and* leave out a required attribute, and both are worth
+saying. An edge that declares no attributes reads plain references alone, so a mapping under it is
+an entry that names no document, exactly as it was before attributes existed.
+
+### `edge_attr_unknown` — error, structural
+
+An entry carries a key the edge does not declare: `supersedes reference "0001" carries unknown
+attribute "note", declared: reason`. The declared names are listed in alphabetical order. `ref` is
+the reference itself rather than an attribute, and an edge that declares an attribute of that name
+is a configuration error. No fix suggestion.
+
+### `edge_attr_missing` — error, structural
+
+An entry does not carry an attribute the edge declares `required: true`: `supersedes reference
+"0001" is missing required attribute "reason"`. A plain reference carries no attributes at all, so
+on an edge with a required attribute it reports the same finding: a requirement a scalar entry could
+opt out of would not be one. No fix suggestion.
+
+### `edge_attr_invalid` — error, structural
+
+An attribute value is not one the declaration accepts. One finding per rejected value:
+
+```
+supersedes reference "0001" attribute "reason" is "rewrite", want one of: recurrence, premise-collapse, conflict, vocabulary
+measures reference "0001" attribute "agreement" is "high", want a number
+measures reference "0001" attribute "expires" is "soon", want a date as YYYY-MM-DD
+measures reference "0001" attribute "model" is "[haiku sonnet]", want a string
+```
+
+`one_of` compares exactly, case included, because an edge attribute is a closed vocabulary a preset
+revision renames wholesale rather than prose a person writes by hand — this is where it parts
+company with `status_values`. A `number` is anything that parses as one, `0.90` included, which is
+recorded as `0.9`; a `date` is `YYYY-MM-DD` and nothing else; and a value that is not a scalar at
+all — a list, a mapping — satisfies nothing and is reported as it was written. A rejected value is
+not recorded on the edge, so every attribute the graph carries is one its declaration accepts. No
+fix suggestion.
 
 ## The graph
 
@@ -202,4 +245,5 @@ testdata/fixtures/status-drift/0001-serve-images-from-the-application-server.md:
 That run exits 1. The other directories are named for the finding or the behaviour they exercise —
 `cycle`, `union-cycle`, `union-cycle-shadowed`, `superseded-orphan`, `id-collision`, `dangling`,
 `dangling-reference`, `empty-edge`, `invalid-yaml`, `inverse-mismatch`, `cardinality`, `withdrawn`,
-`any-of`, `list-attrs`, `fan-in`, `depends-impact`.
+`any-of`, `list-attrs`, `fan-in`, `depends-impact`, `projections`, `edge-attrs`. The last two carry
+a `docdag.yaml` of their own, so run them with `--config <dir>/docdag.yaml`.

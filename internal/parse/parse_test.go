@@ -3,8 +3,10 @@ package parse
 import (
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -971,5 +973,184 @@ func TestLocalize(t *testing.T) {
 				t.Fatalf("path = %q, want %q", docs[0].Path, tt.want)
 			}
 		})
+	}
+}
+
+func TestRefEntries(t *testing.T) {
+	tests := []struct {
+		name string
+		fm   map[string]any
+		key  string
+		want []RefEntry
+		bad  []string
+	}{
+		{
+			name: "a list of plain references carries no attributes",
+			fm:   map[string]any{"supersedes": []any{"0001", "ADR-2"}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}, {Ref: "ADR-2"}},
+		},
+		{
+			name: "a mapping naming a ref is an attributed reference",
+			fm: map[string]any{"supersedes": []any{
+				map[string]any{"ref": "0001", "reason": "conflict"},
+			}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001", Attrs: map[string]any{"reason": "conflict"}}},
+		},
+		{
+			name: "a list mixes plain and attributed references",
+			fm: map[string]any{"supersedes": []any{
+				"0001",
+				map[string]any{"ref": "0002", "reason": "vocabulary"},
+			}},
+			key: "supersedes",
+			want: []RefEntry{
+				{Ref: "0001"},
+				{Ref: "0002", Attrs: map[string]any{"reason": "vocabulary"}},
+			},
+		},
+		{
+			name: "attribute values keep the type YAML decoded them as",
+			fm: map[string]any{"measures": []any{
+				map[string]any{"ref": "0001", "agreement": 0.92, "model": "haiku", "expires": "2026-01-01"},
+			}},
+			key: "measures",
+			want: []RefEntry{{Ref: "0001", Attrs: map[string]any{
+				"agreement": 0.92, "model": "haiku", "expires": "2026-01-01",
+			}}},
+		},
+		{
+			name: "a numeric reference is stringified, in a mapping too",
+			fm: map[string]any{"supersedes": []any{
+				uint64(2),
+				map[string]any{"ref": uint64(13), "reason": "conflict"},
+			}},
+			key: "supersedes",
+			want: []RefEntry{
+				{Ref: "2"},
+				{Ref: "13", Attrs: map[string]any{"reason": "conflict"}},
+			},
+		},
+		{
+			name: "a scalar is a single-element list",
+			fm:   map[string]any{"supersedes": "0001"},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}},
+		},
+		{
+			name: "a lone mapping is a single-element list",
+			fm:   map[string]any{"supersedes": map[string]any{"ref": "0001", "reason": "conflict"}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001", Attrs: map[string]any{"reason": "conflict"}}},
+		},
+		{
+			name: "surrounding whitespace is trimmed on both spellings",
+			fm: map[string]any{"supersedes": []any{
+				"  0001  ",
+				map[string]any{"ref": "  0002  "},
+			}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}, {Ref: "0002", Attrs: map[string]any{}}},
+		},
+		{
+			name: "blank entries are dropped",
+			fm:   map[string]any{"supersedes": []any{"0001", "", "   "}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}},
+		},
+		{
+			name: "a mapping without a ref names nothing and is reported",
+			fm: map[string]any{"supersedes": []any{
+				"0001",
+				map[string]any{"reason": "conflict"},
+			}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}},
+			bad:  []string{"map[reason:conflict]"},
+		},
+		{
+			name: "a mapping whose ref is blank names nothing either",
+			fm:   map[string]any{"supersedes": []any{map[string]any{"ref": "   ", "reason": "conflict"}}},
+			key:  "supersedes",
+			want: []RefEntry{},
+			bad:  []string{"map[reason:conflict ref:   ]"},
+		},
+		{
+			name: "a mapping whose ref is not a scalar names nothing either",
+			fm:   map[string]any{"supersedes": []any{map[string]any{"ref": []any{"0001"}}}},
+			key:  "supersedes",
+			want: []RefEntry{},
+			bad:  []string{"map[ref:[0001]]"},
+		},
+		{
+			name: "a nested sequence is not a reference",
+			fm:   map[string]any{"supersedes": []any{"0001", []any{uint64(2)}}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}},
+			bad:  []string{"[2]"},
+		},
+		{
+			name: "an empty list has no entries",
+			fm:   map[string]any{"supersedes": []any{}},
+			key:  "supersedes",
+			want: []RefEntry{},
+		},
+		{name: "a missing key has no entries", fm: map[string]any{"status": "accepted"}, key: "supersedes"},
+		{name: "a nil frontmatter has no entries", key: "supersedes"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, bad := RefEntries(tt.fm, tt.key)
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("RefEntries(%q) = %#v, want %#v", tt.key, got, tt.want)
+			}
+			if !slices.Equal(bad, tt.bad) {
+				t.Errorf("RefEntries(%q) invalid = %#v, want %#v", tt.key, bad, tt.bad)
+			}
+		})
+	}
+}
+
+func TestRefEntriesLeavesRefsAlone(t *testing.T) {
+	// An edge that declares no attributes reads its key with Refs, and a mapping
+	// there has to keep meaning what it always meant: an entry that names no
+	// document. The two readings of one list are what makes attributes opt-in.
+	fm := map[string]any{"supersedes": []any{"0001", map[string]any{"ref": "0002", "reason": "conflict"}}}
+
+	refs, invalid := Refs(fm, "supersedes")
+
+	if !slices.Equal(refs, []string{"0001"}) {
+		t.Errorf("refs = %#v, want only the scalar entry", refs)
+	}
+	if !slices.Equal(invalid, []string{"map[reason:conflict ref:0002]"}) {
+		t.Errorf("invalid = %#v, want the mapping rendered as written", invalid)
+	}
+}
+
+func TestFileRecordsKeyLinesWithAttributedEntries(t *testing.T) {
+	// An attributed entry is a mapping inside a list, not a frontmatter key, so
+	// a finding about it still lands on the line the edge key was written on.
+	cfg := config.ADRPreset()
+	content := "---\ntitle: A decision\nstatus: accepted\nsupersedes:\n  - ref: \"0001\"\n    reason: conflict\ndate: 2025-01-01\n---\n\n# A decision\n"
+	dir := testWriteDocs(t, map[string]string{"0002-a-decision.md": content})
+
+	doc, err := File(filepath.Join(dir, "0002-a-decision.md"), cfg)
+	if err != nil {
+		t.Fatalf("File: %v", err)
+	}
+
+	want := map[string]int{"title": 2, "status": 3, "supersedes": 4, "date": 7}
+	if !maps.Equal(doc.KeyLines, want) {
+		t.Fatalf("keyLines = %v, want %v", doc.KeyLines, want)
+	}
+	entries, invalid := RefEntries(doc.Frontmatter, "supersedes")
+	if len(invalid) != 0 {
+		t.Fatalf("invalid = %v, want none", invalid)
+	}
+	if len(entries) != 1 || entries[0].Ref != "0001" || entries[0].Attrs["reason"] != "conflict" {
+		t.Fatalf("entries = %#v, want one attributed reference to 0001", entries)
 	}
 }

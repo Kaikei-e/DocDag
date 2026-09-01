@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -127,4 +128,12 @@ func testAssertGolden(t *testing.T, name, got string) {
 	if got != string(want) {
 		t.Errorf("rendering does not match %s\ngot:\n%s\nwant:\n%s", path, got, want)
 	}
+}
+
+// testEqualLinks compares two exported edges by value: an edge carries its
+// attributes in a map, so == is not available to a listing assertion.
+func testEqualLinks(a, b NodeLinkEdge) bool {
+	return a.Source == b.Source && a.Target == b.Target &&
+		a.Type == b.Type && a.Origin == b.Origin &&
+		maps.Equal(a.Attrs, b.Attrs)
 }

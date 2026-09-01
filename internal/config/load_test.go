@@ -224,7 +224,7 @@ template: templates/decision.md
 			t.Errorf("template = %q", got.Template)
 		}
 		wantEdges := []EdgeSpec{{Name: "supersedes", Key: "replaces", Acyclic: true, Direction: DirectionReverse}}
-		if !slices.Equal(got.Edges, wantEdges) {
+		if !reflect.DeepEqual(got.Edges, wantEdges) {
 			t.Errorf("edges = %+v, want %+v", got.Edges, wantEdges)
 		}
 		wantDerived := []DerivedEdgeSpec{{Field: "state", Pattern: `(?i)^replaced by (\S+)`, Edge: "supersedes", Direction: DirectionReverse}}
@@ -809,5 +809,48 @@ func TestMergeOverridesTheFilenameTemplate(t *testing.T) {
 	}
 	if kept := Merge(ADRPreset(), Config{}); kept.Filename != ADRPreset().Filename {
 		t.Errorf("Filename = %q, want the base %q", kept.Filename, ADRPreset().Filename)
+	}
+}
+
+func TestLoadEdgeAttributes(t *testing.T) {
+	file := `edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+    attrs:
+      reason: {required: true, one_of: [recurrence, conflict]}
+  - name: measures
+    key: measures
+    direction: forward
+    attrs:
+      agreement: {required: true, type: number}
+      expires: {type: date}
+`
+	root := testTree(t, map[string]string{"docdag.yaml": file})
+
+	got, err := Load(filepath.Join(root, "docdag.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	want := []EdgeSpec{
+		{
+			Name: "supersedes", Key: "supersedes", Acyclic: true, Direction: DirectionForward,
+			Attrs: map[string]EdgeAttrSpec{"reason": {Required: true, OneOf: []string{"recurrence", "conflict"}}},
+		},
+		{
+			Name: "measures", Key: "measures", Direction: DirectionForward,
+			Attrs: map[string]EdgeAttrSpec{
+				"agreement": {Required: true, Type: AttrTypeNumber},
+				"expires":   {Type: AttrTypeDate},
+			},
+		},
+	}
+	if !reflect.DeepEqual(got.Edges, want) {
+		t.Fatalf("edges = %+v, want %+v", got.Edges, want)
+	}
+	if err := Merge(ADRPreset(), got).Validate(); err != nil {
+		t.Fatalf("Validate = %v, want the merged configuration to be valid", err)
 	}
 }

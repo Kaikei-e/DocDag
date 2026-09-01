@@ -4,6 +4,7 @@ package model
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 )
 
@@ -67,6 +68,9 @@ const (
 	RuleEmptyEdge              = "empty_edge"
 	RuleInverseMismatch        = "inverse_mismatch"
 	RuleCardinality            = "cardinality"
+	RuleEdgeAttrUnknown        = "edge_attr_unknown"
+	RuleEdgeAttrMissing        = "edge_attr_missing"
+	RuleEdgeAttrInvalid        = "edge_attr_invalid"
 	RuleImmutableViolation     = "immutable_violation"
 )
 
@@ -149,12 +153,32 @@ func scalar(raw any) (string, bool) {
 }
 
 // Edge is one directed relation between two nodes. Reference-layer edges carry
-// an empty Type and OriginReference.
+// an empty Type and OriginReference. Attrs holds the attributes the edge was
+// declared with, normalized to the canonical string form of the value written
+// down, and is empty for an edge whose spec declares none — which every derived
+// and every reference edge is.
 type Edge struct {
-	From   ID       `json:"from"`
-	To     ID       `json:"to"`
-	Type   EdgeType `json:"type"`
-	Origin Origin   `json:"origin"`
+	From   ID                `json:"from"`
+	To     ID                `json:"to"`
+	Type   EdgeType          `json:"type"`
+	Origin Origin            `json:"origin"`
+	Attrs  map[string]string `json:"attrs,omitempty"`
+}
+
+// Equal compares two edges by value. Attributes make an Edge uncomparable with
+// ==, so every comparison goes through this method, and an absent attribute set
+// equals an empty one: an edge carrying no attributes was written the same way
+// whichever of the two the builder happened to record.
+func (e Edge) Equal(other Edge) bool {
+	return e.From == other.From && e.To == other.To &&
+		e.Type == other.Type && e.Origin == other.Origin &&
+		maps.Equal(e.Attrs, other.Attrs)
+}
+
+// Attr reports the value of one edge attribute.
+func (e Edge) Attr(key string) (string, bool) {
+	value, ok := e.Attrs[key]
+	return value, ok
 }
 
 // Location is a position in a file. Line and Column are 1-based; zero means

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -238,4 +239,29 @@ func TestExportUnwritableTargetExitsThree(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "absent", "graph.json")
 	got := run(t, "export", "--out", path, "--dir", fixture(t, "ok-basic"))
 	assertExit(t, got, 3)
+}
+
+func TestExportCarriesEdgeAttributes(t *testing.T) {
+	dir := fixture(t, "edge-attrs")
+
+	got := run(t, "export", "--format", "json", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	doc := decodeJSON[render.NodeLink](t, got.stdout)
+	attrs := map[string]map[string]string{}
+	for _, l := range doc.Links {
+		attrs[fmt.Sprintf("%s|%s|%s", l.Source, l.Type, l.Target)] = l.Attrs
+	}
+	want := map[string]string{"reason": "conflict"}
+	if got := attrs["0002|supersedes|0001"]; !maps.Equal(got, want) {
+		t.Errorf("supersedes attrs = %v, want %v", got, want)
+	}
+	measured := map[string]string{"agreement": "0.92", "model": "sonnet", "expires": "2026-01-01"}
+	if got := attrs["0004|measures|0002"]; !maps.Equal(got, measured) {
+		t.Errorf("measures attrs = %v, want %v", got, measured)
+	}
+	// An edge that declares no attributes exports the object it always did.
+	if got, ok := attrs["0007|supersedes|0008"]; !ok || len(got) != 0 {
+		t.Errorf("attrs = %v, %v, want an edge without an attrs member", got, ok)
+	}
 }

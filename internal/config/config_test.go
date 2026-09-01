@@ -48,7 +48,7 @@ func TestConfigEdge(t *testing.T) {
 			if ok != tt.ok {
 				t.Fatalf("ok = %v, want %v", ok, tt.ok)
 			}
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("Edge(%q) = %+v, want %+v", tt.edge, got, tt.want)
 			}
 		})
@@ -214,6 +214,60 @@ func TestConfigValidate(t *testing.T) {
 			name: "two edges sharing one inverse key",
 			mutate: func(c *Config) {
 				c.Edges[0].Inverse, c.Edges[1].Inverse = "linked_from", "linked_from"
+			},
+			wantErr: true,
+		},
+		{
+			name: "an edge declaring attributes",
+			mutate: func(c *Config) {
+				c.Edges[0].Attrs = map[string]EdgeAttrSpec{
+					"reason":    {Required: true, OneOf: []string{"conflict", "vocabulary"}},
+					"agreement": {Type: AttrTypeNumber},
+					"expires":   {Type: AttrTypeDate},
+					"model":     {Required: true, Type: AttrTypeString},
+				}
+			},
+		},
+		{
+			name: "an edge attribute with an unknown type",
+			mutate: func(c *Config) {
+				c.Edges[0].Attrs = map[string]EdgeAttrSpec{"agreement": {Type: "float"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "an edge attribute bounding a number by a string vocabulary",
+			mutate: func(c *Config) {
+				c.Edges[0].Attrs = map[string]EdgeAttrSpec{
+					"agreement": {Type: AttrTypeNumber, OneOf: []string{"high", "low"}},
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "an edge attribute named after the reserved reference key",
+			mutate: func(c *Config) {
+				c.Edges[0].Attrs = map[string]EdgeAttrSpec{EdgeRefKey: {Required: true}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "an edge attribute without a name",
+			mutate: func(c *Config) {
+				c.Edges[0].Attrs = map[string]EdgeAttrSpec{"": {Required: true}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "an edge attribute check escalated to an error it already speaks at",
+			mutate: func(c *Config) {
+				c.Structural = map[string]model.Severity{model.RuleEdgeAttrInvalid: model.SeverityError}
+			},
+		},
+		{
+			name: "an edge attribute check lowered to a warning",
+			mutate: func(c *Config) {
+				c.Structural = map[string]model.Severity{model.RuleEdgeAttrMissing: model.SeverityWarn}
 			},
 			wantErr: true,
 		},
@@ -1014,6 +1068,106 @@ func TestProjectionAccessors(t *testing.T) {
 		}
 		if got := len(spec.Whens()); got != 2 {
 			t.Fatalf("Whens = %d, want 2", got)
+		}
+	})
+}
+
+func TestEdgeAttrSpecAcceptsAndWants(t *testing.T) {
+	tests := []struct {
+		name  string
+		spec  EdgeAttrSpec
+		value string
+		want  bool
+		wants string
+	}{
+		{name: "a string takes anything", spec: EdgeAttrSpec{}, value: "haiku", want: true, wants: "a string"},
+		{name: "a string takes an empty value", spec: EdgeAttrSpec{Type: AttrTypeString}, value: "", want: true, wants: "a string"},
+		{name: "a number takes a decimal", spec: EdgeAttrSpec{Type: AttrTypeNumber}, value: "0.92", want: true, wants: "a number"},
+		{name: "a number takes an integer", spec: EdgeAttrSpec{Type: AttrTypeNumber}, value: "3", want: true, wants: "a number"},
+		{name: "a number takes a negative", spec: EdgeAttrSpec{Type: AttrTypeNumber}, value: "-1.5", want: true, wants: "a number"},
+		{name: "a number refuses a word", spec: EdgeAttrSpec{Type: AttrTypeNumber}, value: "high", wants: "a number"},
+		{name: "a number refuses an empty value", spec: EdgeAttrSpec{Type: AttrTypeNumber}, value: "", wants: "a number"},
+		{name: "a date takes an ISO 8601 day", spec: EdgeAttrSpec{Type: AttrTypeDate}, value: "2026-01-01", want: true, wants: "a date as YYYY-MM-DD"},
+		{name: "a date refuses a month nobody has", spec: EdgeAttrSpec{Type: AttrTypeDate}, value: "2026-13-01", wants: "a date as YYYY-MM-DD"},
+		{name: "a date refuses a timestamp", spec: EdgeAttrSpec{Type: AttrTypeDate}, value: "2026-01-01T00:00:00Z", wants: "a date as YYYY-MM-DD"},
+		{name: "a date refuses a shortened day", spec: EdgeAttrSpec{Type: AttrTypeDate}, value: "2026-1-1", wants: "a date as YYYY-MM-DD"},
+		{
+			name:  "a vocabulary takes one of its words",
+			spec:  EdgeAttrSpec{OneOf: []string{"recurrence", "conflict"}},
+			value: "conflict",
+			want:  true,
+			wants: "one of: recurrence, conflict",
+		},
+		{
+			// Statuses fold case because a person writes them in prose; an edge
+			// attribute is a closed machine vocabulary a preset revision renames
+			// wholesale, so it compares exactly.
+			name:  "a vocabulary refuses another spelling of one of its words",
+			spec:  EdgeAttrSpec{OneOf: []string{"recurrence", "conflict"}},
+			value: "Conflict",
+			wants: "one of: recurrence, conflict",
+		},
+		{
+			name:  "a vocabulary refuses a word nobody declared",
+			spec:  EdgeAttrSpec{OneOf: []string{"recurrence", "conflict"}},
+			value: "rewrite",
+			wants: "one of: recurrence, conflict",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.spec.Accepts(tt.value); got != tt.want {
+				t.Errorf("Accepts(%q) = %v, want %v", tt.value, got, tt.want)
+			}
+			if got := tt.spec.Wants(); got != tt.wants {
+				t.Errorf("Wants = %q, want %q", got, tt.wants)
+			}
+		})
+	}
+}
+
+func TestEdgeSpecAttrs(t *testing.T) {
+	spec := EdgeSpec{
+		Name: "measures",
+		Key:  "measures",
+		Attrs: map[string]EdgeAttrSpec{
+			"model":     {Required: true},
+			"agreement": {Required: true, Type: AttrTypeNumber},
+		},
+	}
+
+	t.Run("the declared names are sorted", func(t *testing.T) {
+		if got := spec.AttrNames(); !slices.Equal(got, []string{"agreement", "model"}) {
+			t.Fatalf("AttrNames = %v, want them sorted", got)
+		}
+	})
+
+	t.Run("a declared attribute is found by name", func(t *testing.T) {
+		attr, ok := spec.Attr("agreement")
+
+		if !ok || attr.ValueType() != AttrTypeNumber {
+			t.Fatalf("Attr(agreement) = %+v, %v, want the number declaration", attr, ok)
+		}
+	})
+
+	t.Run("an attribute nobody declared is not found", func(t *testing.T) {
+		if attr, ok := spec.Attr("expires"); ok {
+			t.Fatalf("Attr(expires) = %+v, want none", attr)
+		}
+	})
+
+	t.Run("an edge declaring no attributes has none", func(t *testing.T) {
+		bare := EdgeSpec{Name: "supersedes", Key: "supersedes"}
+
+		if got := bare.AttrNames(); len(got) != 0 {
+			t.Fatalf("AttrNames = %v, want none", got)
+		}
+	})
+
+	t.Run("a declaration without a type reads a string", func(t *testing.T) {
+		if got := spec.Attrs["model"].ValueType(); got != AttrTypeString {
+			t.Fatalf("ValueType = %q, want %q", got, AttrTypeString)
 		}
 	})
 }

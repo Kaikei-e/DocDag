@@ -44,33 +44,42 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 		g.Nodes[doc.ID] = buildNode(doc, cfg)
 	}
 
-	origins := make(map[edgeKey]model.Origin)
+	records := make(map[edgeKey]edgeRecord)
 	for _, doc := range docs {
 		for _, spec := range cfg.Edges {
 			t := model.EdgeType(spec.Name)
-			refs, invalid := parse.Refs(doc.Frontmatter, spec.Key)
-			if declaresNothing(doc, spec.Key, refs, invalid) {
+			entries, invalid := edgeEntries(doc, spec)
+			if declaresNothing(doc, spec.Key, len(entries), len(invalid)) {
 				findings = append(findings, emptyEdge(cfg, doc, spec.Key))
 			}
 			if spec.Inverse != "" {
-				if mirrored, bad := parse.Refs(doc.Frontmatter, spec.Inverse); declaresNothing(doc, spec.Inverse, mirrored, bad) {
+				// An inverse key mirrors edges rather than declaring them, so it
+				// takes plain references whatever the edge's attributes are.
+				mirrored, bad := parse.Refs(doc.Frontmatter, spec.Inverse)
+				if declaresNothing(doc, spec.Inverse, len(mirrored), len(bad)) {
 					findings = append(findings, emptyEdge(cfg, doc, spec.Inverse))
 				}
 			}
 			for _, entry := range invalid {
 				findings = append(findings, unresolvableRef(cfg, doc, spec.Key, t, entry))
 			}
-			for _, ref := range refs {
-				if !config.IDShaped(ref) {
-					findings = append(findings, invalidRef(cfg, doc, spec.Key, t, ref))
+			for _, entry := range entries {
+				// Attributes describe what a document wrote down, so they are
+				// checked whatever the reference beside them resolves to: a
+				// missing reason is worth reporting on an entry whose target is
+				// itself a finding.
+				attrs, attrFindings := edgeAttrs(cfg, doc, spec, entry)
+				findings = append(findings, attrFindings...)
+				if !config.IDShaped(entry.Ref) {
+					findings = append(findings, invalidRef(cfg, doc, spec.Key, t, entry.Ref))
 					continue
 				}
-				target, ok := normalizer.Normalize(ref)
+				target, ok := normalizer.Normalize(entry.Ref)
 				if !ok {
-					findings = append(findings, unresolvableRef(cfg, doc, spec.Key, t, ref))
+					findings = append(findings, unresolvableRef(cfg, doc, spec.Key, t, entry.Ref))
 					continue
 				}
-				recordEdge(origins, doc.ID, target, t, spec.Direction, model.OriginStructured)
+				recordEdge(records, doc.ID, target, t, spec.Direction, model.OriginStructured, attrs)
 			}
 		}
 		for _, derived := range parse.Derived(doc, cfg) {
@@ -80,10 +89,12 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 				findings = append(findings, unresolvableRef(cfg, doc, derived.Field, t, derived.Target))
 				continue
 			}
-			recordEdge(origins, doc.ID, target, t, derived.Spec.Direction, model.OriginDerived)
+			// A derived edge comes from a field value rather than an entry, so
+			// there is nowhere to write an attribute down: it carries none.
+			recordEdge(records, doc.ID, target, t, derived.Spec.Direction, model.OriginDerived, nil)
 		}
 	}
-	g.Edges = sortedEdges(origins)
+	g.Edges = sortedEdges(records)
 
 	severity, validated := cfg.ReferenceSeverity()
 	refs := make(map[edgeKey]bool)
@@ -145,16 +156,28 @@ func buildNode(doc *parse.Document, cfg config.Config) *model.Node {
 	return n
 }
 
-func recordEdge(origins map[edgeKey]model.Origin, doc, target model.ID, t model.EdgeType, direction string, origin model.Origin) {
+// edgeRecord is one edge as the builder has it so far: how it entered the graph
+// and the attributes the entry that declared it carried.
+type edgeRecord struct {
+	origin model.Origin
+	attrs  map[string]string
+}
+
+func recordEdge(records map[edgeKey]edgeRecord, doc, target model.ID, t model.EdgeType, direction string, origin model.Origin, attrs map[string]string) {
 	from, to := doc, target
 	if direction == config.DirectionReverse {
 		from, to = target, doc
 	}
 	k := edgeKey{from: from, to: to, t: t}
-	if previous, ok := origins[k]; ok && previous == model.OriginStructured {
+	// One relation declared twice is one edge, and it keeps what its first
+	// structured declaration said. Documents are built in name order and a
+	// frontmatter list keeps the order it was written in, so first-wins names
+	// the same entry on every run; a derived edge still yields to a structured
+	// one, which is why only a structured predecessor stops the write.
+	if previous, ok := records[k]; ok && previous.origin == model.OriginStructured {
 		return
 	}
-	origins[k] = origin
+	records[k] = edgeRecord{origin: origin, attrs: attrs}
 }
 
 func unresolvableRef(cfg config.Config, doc *parse.Document, key string, t model.EdgeType, ref string) model.Finding {
@@ -169,9 +192,9 @@ func unresolvableRef(cfg config.Config, doc *parse.Document, key string, t model
 
 // declaresNothing reports an edge key written down and then left empty, which
 // reads as a declared relation but builds no edge.
-func declaresNothing(doc *parse.Document, key string, refs, invalid []string) bool {
+func declaresNothing(doc *parse.Document, key string, entries, invalid int) bool {
 	_, present := doc.Frontmatter[key]
-	return present && len(refs) == 0 && len(invalid) == 0
+	return present && entries == 0 && invalid == 0
 }
 
 func emptyEdge(cfg config.Config, doc *parse.Document, key string) model.Finding {
@@ -261,10 +284,10 @@ func referenceTarget(cfg config.Config, link parse.Link) (string, bool) {
 	return ref, cfg.IsReference(ref)
 }
 
-func sortedEdges(origins map[edgeKey]model.Origin) []model.Edge {
-	edges := make([]model.Edge, 0, len(origins))
-	for k, origin := range origins {
-		edges = append(edges, model.Edge{From: k.from, To: k.to, Type: k.t, Origin: origin})
+func sortedEdges(records map[edgeKey]edgeRecord) []model.Edge {
+	edges := make([]model.Edge, 0, len(records))
+	for k, record := range records {
+		edges = append(edges, model.Edge{From: k.from, To: k.to, Type: k.t, Origin: record.origin, Attrs: record.attrs})
 	}
 	slices.SortFunc(edges, compareEdges)
 	return edges

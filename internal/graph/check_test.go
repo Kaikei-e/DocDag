@@ -346,7 +346,7 @@ func TestCheckInverse(t *testing.T) {
 		g := Build(docs, cfg)
 
 		want := []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}
-		if !slices.Equal(g.Edges, want) {
+		if !slices.EqualFunc(g.Edges, want, model.Edge.Equal) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
 		}
 	})

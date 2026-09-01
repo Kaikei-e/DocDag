@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"reflect"
 	"regexp"
 	"slices"
 	"testing"
@@ -52,7 +53,7 @@ func TestADRPreset(t *testing.T) {
 			{Name: "depends-on", Key: "depends-on", Acyclic: true, Direction: DirectionForward},
 		}
 
-		if !slices.Equal(cfg.Edges, want) {
+		if !reflect.DeepEqual(cfg.Edges, want) {
 			t.Fatalf("edges = %+v, want %+v", cfg.Edges, want)
 		}
 	})

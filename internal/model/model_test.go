@@ -201,7 +201,7 @@ func TestGraphEdgesOfType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := g.EdgesOfType(tt.t); !slices.Equal(got, tt.want) {
+			if got := g.EdgesOfType(tt.t); !slices.EqualFunc(got, tt.want, Edge.Equal) {
 				t.Fatalf("EdgesOfType(%q) = %+v, want %+v", tt.t, got, tt.want)
 			}
 		})
@@ -336,4 +336,57 @@ func TestFindingJSONShape(t *testing.T) {
 	if strings.Contains(string(bare), `"related"`) {
 		t.Errorf("finding JSON = %s, want an empty related list omitted", bare)
 	}
+}
+
+func TestEdgeAttributes(t *testing.T) {
+	attributed := Edge{
+		From: "0002", To: "0001", Type: "supersedes", Origin: OriginStructured,
+		Attrs: map[string]string{"reason": "conflict"},
+	}
+
+	t.Run("an attribute is read by name", func(t *testing.T) {
+		if got, ok := attributed.Attr("reason"); !ok || got != "conflict" {
+			t.Fatalf("Attr(reason) = %q, %v, want conflict", got, ok)
+		}
+		if got, ok := attributed.Attr("expires"); ok {
+			t.Fatalf("Attr(expires) = %q, %v, want none", got, ok)
+		}
+	})
+
+	t.Run("edges are compared by value, attributes included", func(t *testing.T) {
+		same := attributed
+		same.Attrs = map[string]string{"reason": "conflict"}
+		other := attributed
+		other.Attrs = map[string]string{"reason": "vocabulary"}
+
+		if !attributed.Equal(same) {
+			t.Error("Equal = false for two edges carrying the same attributes")
+		}
+		if attributed.Equal(other) {
+			t.Error("Equal = true for two edges carrying different attributes")
+		}
+	})
+
+	t.Run("no attributes and an empty set are one thing", func(t *testing.T) {
+		bare := Edge{From: "0002", To: "0001", Type: "supersedes", Origin: OriginStructured}
+		empty := bare
+		empty.Attrs = map[string]string{}
+
+		if !bare.Equal(empty) {
+			t.Error("Equal = false, want an absent attribute set to equal an empty one")
+		}
+		if bare.Equal(attributed) {
+			t.Error("Equal = true for an edge with attributes and one without")
+		}
+	})
+
+	t.Run("an edge without attributes carries no attrs member", func(t *testing.T) {
+		payload, err := json.Marshal(Edge{From: "0002", To: "0001", Type: "supersedes", Origin: OriginStructured})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(payload), `"attrs"`) {
+			t.Errorf("edge JSON = %s, want an empty attribute set omitted", payload)
+		}
+	})
 }

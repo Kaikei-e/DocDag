@@ -280,7 +280,7 @@ func Attr(fm map[string]any, key string) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	return scalar(value)
+	return Scalar(value)
 }
 
 // Refs reads a list-valued frontmatter key as raw, un-normalized references. A
@@ -289,17 +289,13 @@ func Attr(fm map[string]any, key string) (string, bool) {
 // decodes as a nested sequence, and dropping it silently would hide the very
 // link the tool exists to find.
 func Refs(fm map[string]any, key string) (refs, invalid []string) {
-	value, ok := fm[key]
-	if !ok || value == nil {
+	items, ok := listItems(fm, key)
+	if !ok {
 		return nil, nil
-	}
-	items, isList := value.([]any)
-	if !isList {
-		items = []any{value}
 	}
 	refs = make([]string, 0, len(items))
 	for _, item := range items {
-		ref, ok := scalar(item)
+		ref, ok := Scalar(item)
 		if !ok {
 			invalid = append(invalid, fmt.Sprint(item))
 			continue
@@ -312,9 +308,89 @@ func Refs(fm map[string]any, key string) (refs, invalid []string) {
 	return refs, invalid
 }
 
-// scalar renders a decoded YAML scalar as the string it was written as. A
-// zero-padded reference decodes as a number, so numbers must stringify.
-func scalar(value any) (string, bool) {
+// RefEntry is one entry under an edge key: the raw, un-normalized reference it
+// names and the attributes it was written with. Attrs holds the values as YAML
+// decoded them, so the caller can report a value that is not a scalar rather
+// than lose it; a plain reference carries none.
+type RefEntry struct {
+	Ref   string
+	Attrs map[string]any
+}
+
+// RefEntries reads a list-valued frontmatter key as references that may carry
+// attributes: a scalar item is a plain reference, and a mapping item naming a
+// ref key is an attributed one, the remaining keys being its attributes. As in
+// Refs, invalid holds the entries that are neither, rendered as written — a
+// mapping without a ref names no document, and a caller must not drop it in
+// silence. Only an edge whose spec declares attributes reads its key this way;
+// every other edge keeps taking plain references alone.
+func RefEntries(fm map[string]any, key string) (entries []RefEntry, invalid []string) {
+	items, ok := listItems(fm, key)
+	if !ok {
+		return nil, nil
+	}
+	entries = make([]RefEntry, 0, len(items))
+	for _, item := range items {
+		if ref, isScalar := Scalar(item); isScalar {
+			if ref = strings.TrimSpace(ref); ref == "" {
+				continue
+			}
+			entries = append(entries, RefEntry{Ref: ref})
+			continue
+		}
+		entry, ok := attributedEntry(item)
+		if !ok {
+			invalid = append(invalid, fmt.Sprint(item))
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries, invalid
+}
+
+// attributedEntry reads one mapping item as an attributed reference. A mapping
+// whose ref is missing, is not a scalar or is blank names nothing, so it is not
+// an entry at all and the caller reports it the way it reports any other item
+// that is not a reference.
+func attributedEntry(item any) (RefEntry, bool) {
+	mapping, isMapping := item.(map[string]any)
+	if !isMapping {
+		return RefEntry{}, false
+	}
+	ref, isScalar := Scalar(mapping[config.EdgeRefKey])
+	if !isScalar {
+		return RefEntry{}, false
+	}
+	if ref = strings.TrimSpace(ref); ref == "" {
+		return RefEntry{}, false
+	}
+	attrs := make(map[string]any, len(mapping)-1)
+	for name, value := range mapping {
+		if name != config.EdgeRefKey {
+			attrs[name] = value
+		}
+	}
+	return RefEntry{Ref: ref, Attrs: attrs}, true
+}
+
+// listItems renders a frontmatter value as the list it stands for: a scalar is
+// a one-element list, and a key that is absent or empty is no list at all.
+func listItems(fm map[string]any, key string) ([]any, bool) {
+	value, ok := fm[key]
+	if !ok || value == nil {
+		return nil, false
+	}
+	items, isList := value.([]any)
+	if !isList {
+		return []any{value}, true
+	}
+	return items, true
+}
+
+// Scalar renders a decoded YAML scalar as the string it was written as, and
+// reports whether the value is a scalar at all. A zero-padded reference decodes
+// as a number, so numbers must stringify.
+func Scalar(value any) (string, bool) {
 	switch v := value.(type) {
 	case string:
 		return v, true

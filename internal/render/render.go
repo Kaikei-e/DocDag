@@ -37,12 +37,15 @@ type NodeLinkNode struct {
 	Path   string   `json:"path"`
 }
 
-// NodeLinkEdge is one edge in the node-link JSON export.
+// NodeLinkEdge is one edge in the node-link JSON export. Attrs holds the edge's
+// attributes and is omitted for an edge that carries none, so a corpus whose
+// edges declare no attributes exports exactly what it always did.
 type NodeLinkEdge struct {
-	Source model.ID       `json:"source"`
-	Target model.ID       `json:"target"`
-	Type   model.EdgeType `json:"type"`
-	Origin model.Origin   `json:"origin"`
+	Source model.ID          `json:"source"`
+	Target model.ID          `json:"target"`
+	Type   model.EdgeType    `json:"type"`
+	Origin model.Origin      `json:"origin"`
+	Attrs  map[string]string `json:"attrs,omitempty"`
 }
 
 // NodeLink is the node-link JSON document.
@@ -126,7 +129,7 @@ func NodeLinkJSON(w io.Writer, g *model.Graph, opts Options) error {
 		doc.Nodes = append(doc.Nodes, NodeLinkNode{ID: n.ID, Title: n.Title, Status: n.Status, Path: n.Path})
 	}
 	for _, e := range v.typed {
-		doc.Links = append(doc.Links, NodeLinkEdge{Source: e.From, Target: e.To, Type: e.Type, Origin: e.Origin})
+		doc.Links = append(doc.Links, NodeLinkEdge{Source: e.From, Target: e.To, Type: e.Type, Origin: e.Origin, Attrs: e.Attrs})
 	}
 	for _, e := range v.refs {
 		doc.Links = append(doc.Links, NodeLinkEdge{Source: e.From, Target: e.To, Type: e.Type, Origin: e.Origin})

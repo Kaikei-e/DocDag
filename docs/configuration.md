@@ -100,6 +100,78 @@ rules:
     message: "is retired, nothing supersedes it, and it carries no explained tag"
 ```
 
+## Edge attributes
+
+An edge may declare attributes its entries carry. An edge that declares none — every edge of the
+`adr` preset — takes plain references and nothing else:
+
+```yaml
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+    attrs:
+      reason: {required: true, one_of: [recurrence, premise-collapse, conflict, vocabulary]}
+  - name: measures
+    key: measures
+    direction: forward
+    attrs:
+      agreement: {required: true, type: number}
+      model:     {required: true, type: string}
+      expires:   {type: date}                    # optional, and a date when written
+```
+
+An entry under such a key is then either a plain reference or a mapping naming one:
+
+```yaml
+supersedes:
+  - ref: "0001"          # the reference; every other key of the mapping is an attribute
+    reason: conflict
+measures:
+  - ref: "0002"
+    agreement: 0.92
+    model: sonnet
+    expires: 2026-01-01
+```
+
+`type:` is `string` (the default), `number` or `date`, a date being `YYYY-MM-DD`; `one_of:` is a
+closed vocabulary of strings, compared exactly rather than case-insensitively, and it implies
+`string`. Declaring `one_of` on a `number` or a `date`, naming a type nothing knows, and declaring
+an attribute called `ref` — the key the reference itself is written under — are configuration errors
+(exit 3). An unknown attribute, a missing required one and a value the declaration rejects are the
+`edge_attr_unknown`, `edge_attr_missing` and `edge_attr_invalid` findings of
+[checks.md](checks.md); `required: true` reaches plain references too, since an entry that carries
+no attributes carries no required one either. An `inverse:` key mirrors edges rather than declaring
+them, so it takes plain references whatever its edge declares, and a derived edge comes from a field
+value and carries no attributes at all.
+
+The attributes an edge carries are part of `export --format json`, as an `attrs` object on the link,
+and a link whose edge carries none is exported exactly as it was before.
+
+The `adr` preset declares no attributes, so its edges behave as they always have. A corpus that
+wants to record *why* one decision replaced another re-declares the edges itself — writing `edges:`
+replaces the preset's list, so name every edge the corpus keeps:
+
+```yaml
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+    attrs:
+      reason: {one_of: [recurrence, premise-collapse, conflict, vocabulary]}
+  - name: depends-on
+    key: depends-on
+    acyclic: true
+    direction: forward
+```
+
+Leaving `required` off, as above, keeps every `supersedes: ["0001"]` already in the corpus valid and
+lets a document state a reason where it has one. Adding `required: true` makes each of those entries
+an `edge_attr_missing` error, which is the migration: rewrite the entries, then require the
+attribute.
+
 ## List replacement
 
 The `edges:` and `rules:` lists above show where the new keys go; writing one of them — or

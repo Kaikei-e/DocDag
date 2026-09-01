@@ -7,7 +7,9 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/goccy/go-yaml"
 
@@ -98,6 +100,91 @@ type EdgeSpec struct {
 	MaxInbound  int `yaml:"max_inbound,omitempty"`
 	MaxOutbound int `yaml:"max_outbound,omitempty"`
 	MinOutbound int `yaml:"min_outbound,omitempty"`
+	// Attrs declares the attributes an entry under Key may carry. An edge that
+	// declares none takes plain references only, which is what every edge took
+	// before attributes existed.
+	Attrs map[string]EdgeAttrSpec `yaml:"attrs,omitempty"`
+}
+
+// EdgeRefKey is the key an attributed edge entry names its target under:
+// `{ref: 0001, reason: conflict}`. It is reserved, so an edge cannot declare an
+// attribute of that name and shadow the reference itself.
+const EdgeRefKey = "ref"
+
+// Edge attribute value types. A declaration that names none reads a string, and
+// one_of is a closed string vocabulary, so it implies the same.
+const (
+	AttrTypeString = "string"
+	AttrTypeNumber = "number"
+	AttrTypeDate   = "date"
+)
+
+// AttrDateLayout is the one date an edge attribute accepts: ISO 8601 calendar
+// dates, the spelling frontmatter already writes dates in.
+const AttrDateLayout = "2006-01-02"
+
+// EdgeAttrSpec declares one attribute of an edge: whether every entry has to
+// carry it, the shape of its value, and the closed vocabulary it comes from.
+type EdgeAttrSpec struct {
+	Required bool     `yaml:"required,omitempty"`
+	Type     string   `yaml:"type,omitempty"`
+	OneOf    []string `yaml:"one_of,omitempty"`
+}
+
+// ValueType reports the type an attribute value is read as, string being what a
+// declaration without a type asks for.
+func (a EdgeAttrSpec) ValueType() string {
+	if a.Type == "" {
+		return AttrTypeString
+	}
+	return a.Type
+}
+
+// Accepts reports whether a value satisfies the attribute. The one_of
+// comparison is exact and case-sensitive, unlike a status value: a status
+// vocabulary describes prose a person writes by hand, while an edge attribute
+// is a closed machine vocabulary that a preset revision renames wholesale, and
+// two spellings of one word would make that revision ambiguous.
+func (a EdgeAttrSpec) Accepts(value string) bool {
+	if len(a.OneOf) > 0 {
+		return slices.Contains(a.OneOf, value)
+	}
+	switch a.ValueType() {
+	case AttrTypeNumber:
+		_, err := strconv.ParseFloat(value, 64)
+		return err == nil
+	case AttrTypeDate:
+		_, err := time.Parse(AttrDateLayout, value)
+		return err == nil
+	}
+	return true
+}
+
+// Wants describes what the attribute accepts, as the phrase a finding about a
+// rejected value ends with.
+func (a EdgeAttrSpec) Wants() string {
+	if len(a.OneOf) > 0 {
+		return "one of: " + strings.Join(a.OneOf, ", ")
+	}
+	switch a.ValueType() {
+	case AttrTypeNumber:
+		return "a number"
+	case AttrTypeDate:
+		return "a date as YYYY-MM-DD"
+	}
+	return "a string"
+}
+
+// AttrNames returns the attributes an edge declares, sorted, so a message that
+// enumerates the vocabulary reads the same on every run.
+func (s EdgeSpec) AttrNames() []string {
+	return slices.Sorted(maps.Keys(s.Attrs))
+}
+
+// Attr returns the declaration of one edge attribute.
+func (s EdgeSpec) Attr(name string) (EdgeAttrSpec, bool) {
+	spec, ok := s.Attrs[name]
+	return spec, ok
 }
 
 // DerivedEdgeSpec declares an edge inferred from a frontmatter field value.
@@ -445,6 +532,9 @@ var structuralSeverities = map[string]model.Severity{
 	model.RuleEmptyEdge:              model.SeverityError,
 	model.RuleInverseMismatch:        model.SeverityError,
 	model.RuleCardinality:            model.SeverityError,
+	model.RuleEdgeAttrUnknown:        model.SeverityError,
+	model.RuleEdgeAttrMissing:        model.SeverityError,
+	model.RuleEdgeAttrInvalid:        model.SeverityError,
 }
 
 // Severity reports the severity a structural check speaks at, after whatever
@@ -595,6 +685,9 @@ func (c Config) validateEdges() error {
 			return fmt.Errorf("edge %q: %w", spec.Name, err)
 		}
 		if err := validBounds(spec); err != nil {
+			return err
+		}
+		if err := validEdgeAttrs(spec); err != nil {
 			return err
 		}
 		declared[spec.Name] = true
@@ -823,6 +916,29 @@ func (c Config) validateDerivedEdges() error {
 		}
 		if err := validDirection(spec.Direction); err != nil {
 			return fmt.Errorf("derived edge on %q: %w", spec.Field, err)
+		}
+	}
+	return nil
+}
+
+// validEdgeAttrs holds an attribute declaration to a vocabulary the checker can
+// answer: a name of its own that is not the reserved reference key, one of the
+// three value types, and one_of only where the values are strings.
+func validEdgeAttrs(spec EdgeSpec) error {
+	for _, name := range spec.AttrNames() {
+		attr := spec.Attrs[name]
+		switch {
+		case name == "":
+			return fmt.Errorf("edge %q: attribute without a name: %w", spec.Name, model.ErrInvalidConfig)
+		case name == EdgeRefKey:
+			return fmt.Errorf("edge %q: attribute %q is reserved for the reference itself: %w",
+				spec.Name, name, model.ErrInvalidConfig)
+		case attr.Type != "" && attr.Type != AttrTypeString && attr.Type != AttrTypeNumber && attr.Type != AttrTypeDate:
+			return fmt.Errorf("edge %q: attribute %q: unknown type %q, want %s, %s or %s: %w",
+				spec.Name, name, attr.Type, AttrTypeString, AttrTypeNumber, AttrTypeDate, model.ErrInvalidConfig)
+		case len(attr.OneOf) > 0 && attr.ValueType() != AttrTypeString:
+			return fmt.Errorf("edge %q: attribute %q: one_of reads a %s, not a %s: %w",
+				spec.Name, name, AttrTypeString, attr.ValueType(), model.ErrInvalidConfig)
 		}
 	}
 	return nil

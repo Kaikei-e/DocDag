@@ -974,3 +974,49 @@ func TestAProjectionReferenceCycleIsAConfigurationError(t *testing.T) {
 		t.Errorf("stderr = %q, want it to name the projection cycle", got.stderr)
 	}
 }
+
+func TestValidateEdgeAttributes(t *testing.T) {
+	dir := fixture(t, "edge-attrs")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertLines(t, "findings", findingLines(got.stdout), []string{
+		`0005-retire-the-per-host-log-index.md:4: ERROR edge_attr_invalid 0005: supersedes reference "0006" attribute "reason" is "rewrite", want one of: recurrence, premise-collapse, conflict, vocabulary`,
+		`0005-retire-the-per-host-log-index.md:4: ERROR edge_attr_unknown 0005: supersedes reference "0006" carries unknown attribute "note", declared: reason`,
+		`0007-sample-debug-logs.md:4: ERROR edge_attr_missing 0007: supersedes reference "0008" is missing required attribute "reason"`,
+		`0007-sample-debug-logs.md:6: ERROR dangling_ref 0007: depends-on reference "map[ref:0003]" does not name a document`,
+		`0009-measure-sampling-agreement.md:4: ERROR edge_attr_invalid 0009: measures reference "0007" attribute "agreement" is "high", want a number`,
+		`0009-measure-sampling-agreement.md:4: ERROR edge_attr_invalid 0009: measures reference "0007" attribute "expires" is "soon", want a date as YYYY-MM-DD`,
+	})
+}
+
+func TestValidateRejectsAnEdgeAttributeDeclarationItCannotAnswer(t *testing.T) {
+	tests := []struct {
+		name  string
+		attrs string
+		want  string
+	}{
+		{name: "an unknown type", attrs: "      agreement: {type: float}\n", want: "unknown type"},
+		{name: "a vocabulary on a number", attrs: "      agreement: {type: number, one_of: [high, low]}\n", want: "one_of"},
+		{name: "the reserved reference key", attrs: "      ref: {required: true}\n", want: "reserved"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeDocs(t, map[string]string{
+				"docdag.yaml": "edges:\n" +
+					"  - name: supersedes\n    key: supersedes\n    acyclic: true\n    direction: forward\n" +
+					"    attrs:\n" + tt.attrs,
+				"docs/adr/0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n",
+			})
+			t.Chdir(dir)
+
+			got := run(t, "validate")
+
+			assertExit(t, got, 3)
+			if !strings.Contains(got.stderr, tt.want) {
+				t.Errorf("stderr = %q, want it to name %q", got.stderr, tt.want)
+			}
+		})
+	}
+}

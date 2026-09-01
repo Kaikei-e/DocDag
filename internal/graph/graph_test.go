@@ -96,7 +96,7 @@ func TestBuildTypedEdges(t *testing.T) {
 
 		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}
-		if !slices.Equal(g.Edges, want) {
+		if !slices.EqualFunc(g.Edges, want, model.Edge.Equal) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
 		}
 	})
@@ -112,7 +112,7 @@ func TestBuildTypedEdges(t *testing.T) {
 
 		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0001", config.EdgeDependsOn)}
-		if !slices.Equal(g.Edges, want) {
+		if !slices.EqualFunc(g.Edges, want, model.Edge.Equal) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
 		}
 	})
@@ -128,7 +128,7 @@ func TestBuildTypedEdges(t *testing.T) {
 
 		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}
-		if !slices.Equal(g.Edges, want) {
+		if !slices.EqualFunc(g.Edges, want, model.Edge.Equal) {
 			t.Fatalf("edges = %+v, want %+v (three spellings of one reference are one edge)", g.Edges, want)
 		}
 	})
@@ -152,7 +152,7 @@ func TestBuildTypedEdges(t *testing.T) {
 
 		g := Build(docs, reversed)
 		want := []model.Edge{testEdge("0003", "0002", config.EdgeSupersedes)}
-		if !slices.Equal(g.Edges, want) {
+		if !slices.EqualFunc(g.Edges, want, model.Edge.Equal) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
 		}
 	})
@@ -167,7 +167,7 @@ func TestBuildTypedEdges(t *testing.T) {
 
 		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0002", "0099", config.EdgeSupersedes)}
-		if !slices.Equal(g.Edges, want) {
+		if !slices.EqualFunc(g.Edges, want, model.Edge.Equal) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
 		}
 	})
@@ -227,10 +227,10 @@ func TestBuildTypedEdges(t *testing.T) {
 
 		ascending := Build(order("0001", "0002", "0003"), cfg)
 		shuffled := Build(order("0003", "0001", "0002"), cfg)
-		if !slices.Equal(ascending.Edges, want) {
+		if !slices.EqualFunc(ascending.Edges, want, model.Edge.Equal) {
 			t.Fatalf("edges = %+v, want %+v (sorted by from, type, to)", ascending.Edges, want)
 		}
-		if !slices.Equal(shuffled.Edges, ascending.Edges) {
+		if !slices.EqualFunc(shuffled.Edges, ascending.Edges, model.Edge.Equal) {
 			t.Fatalf("document order changed the edge order: %+v vs %+v", shuffled.Edges, ascending.Edges)
 		}
 	})
@@ -247,7 +247,7 @@ func TestBuildDerivedEdges(t *testing.T) {
 
 		g := Build(docs, cfg)
 		want := []model.Edge{testDerivedEdge("0003", "0002", config.EdgeSupersedes)}
-		if !slices.Equal(g.Edges, want) {
+		if !slices.EqualFunc(g.Edges, want, model.Edge.Equal) {
 			t.Fatalf("edges = %+v, want %+v (the referenced document is the new one)", g.Edges, want)
 		}
 	})
@@ -260,7 +260,7 @@ func TestBuildDerivedEdges(t *testing.T) {
 
 		g := Build(docs, cfg)
 		want := []model.Edge{testDerivedEdge("0003", "0002", config.EdgeSupersedes)}
-		if !slices.Equal(g.Edges, want) {
+		if !slices.EqualFunc(g.Edges, want, model.Edge.Equal) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
 		}
 	})
@@ -292,7 +292,7 @@ func TestBuildDerivedEdges(t *testing.T) {
 
 		g := Build(docs, cfg)
 		want := []model.Edge{testEdge("0003", "0002", config.EdgeSupersedes)}
-		if !slices.Equal(g.Edges, want) {
+		if !slices.EqualFunc(g.Edges, want, model.Edge.Equal) {
 			t.Fatalf("edges = %+v, want %+v (agreement collapses to the structured edge)", g.Edges, want)
 		}
 	})
@@ -309,7 +309,7 @@ func TestBuildReferenceLayer(t *testing.T) {
 
 		g := Build(docs, cfg)
 		want := []model.Edge{testRefEdge("0002", "0001")}
-		if !slices.Equal(g.RefEdges, want) {
+		if !slices.EqualFunc(g.RefEdges, want, model.Edge.Equal) {
 			t.Fatalf("reference edges = %+v, want %+v", g.RefEdges, want)
 		}
 		if len(g.Edges) != 0 {
@@ -343,7 +343,7 @@ func TestBuildReferenceLayerTakesOnlyIdentityShapedLinks(t *testing.T) {
 	g := Build(docs, cfg)
 
 	want := []model.Edge{testRefEdge("0002", "0001")}
-	if !slices.Equal(g.RefEdges, want) {
+	if !slices.EqualFunc(g.RefEdges, want, model.Edge.Equal) {
 		t.Fatalf("reference edges = %+v, want %+v", g.RefEdges, want)
 	}
 }
