@@ -24,7 +24,7 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 | `docdag query --binding [--fields <list>]` | every binding document | exit 2 if combined with `--ancestors`, `--descendants`, `--edge` or `--include-refs` |
 | `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all]` | the document, what it resolves to and its neighbourhood, each quoting one section | exit 1 unknown reference, exit 2 unknown edge type |
 | `docdag export [--format mermaid\|dot\|json] [--include-refs] [--connected] [--edge <type>]... [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 2 on an unknown edge type, exit 3 if the output file cannot be written |
-| `docdag stats` | document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree | — |
+| `docdag stats [--fields]` | document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree; with `--fields`, the frontmatter fields instead | exit 3 without `--fields` if the configuration declares no `supersedes` edge |
 | `docdag new <title> [--id <ref>] [--supersedes <ref>]... [--depends-on <ref>]... [--dry-run]` | the path of the created document, or the plan under `--dry-run` | exit 1 on an unknown reference or a claimed identifier, exit 3 on a write error |
 
 `docdag context` and `--fields` are covered in [agents.md](agents.md), along with
@@ -35,6 +35,27 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 `docdag export --edge <type>` keeps only the named edge types, repeat it to keep several, and
 `--connected` drops every document no remaining typed edge touches — the two compose, so
 `--connected --edge supersedes` draws the supersession chains alone.
+
+## stats
+
+`docdag stats --fields` answers about frontmatter rather than degrees: one row per field, with the
+documents that write it, the day one of those documents last changed, and whether `fields:` retired
+it. It is what a removal is decided on, so a declared field nobody writes is still a row, at zero:
+
+```
+field   documents  last change  deprecated
+status  6          2026-03-04   -
+owner   2          2026-01-02   yes
+team    0          -            yes
+```
+
+The day comes from `git log`, in one invocation for the whole corpus. Outside a repository, or where
+git cannot answer, the column is `-` rather than an error: `stats` is a report, not a check. On a
+corpus that declares `kinds:`, `kind` is the directory's answer and is read on every document, so
+its row counts the whole corpus rather than the documents that write the key. The
+field report needs no edge type, so it answers for a corpus the degree statistics cannot describe.
+`--format json` writes `{"fields": [...]}` with the same values, `deprecated` always present and
+`last_change` left out where there is none.
 
 ## new
 
@@ -85,12 +106,14 @@ testdata/fixtures/dangling/0002-ship-logs-to-a-central-collector.md:4: ERROR dan
 ### json
 
 `--format json` writes one object, versioned so a consumer can tell a shape change from a content
-change. `location` is the primary position and `related` names the other files a finding involves —
-the peers of a collision, the rest of a cycle:
+change. `preset_version` is the revision of the configuration the corpus was checked under, left out
+where it names none; `location` is the primary position and `related` names the other files a
+finding involves — the peers of a collision, the rest of a cycle:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "preset_version": 1,
   "findings": [
     {
       "severity": "error",
@@ -132,3 +155,11 @@ second `--format text` run written into `$GITHUB_STEP_SUMMARY` to show the rest 
 `--format rdjson` writes the [reviewdog](https://github.com/reviewdog/reviewdog) diagnostic format
 as a single `DiagnosticResult`, for `reviewdog -f=rdjson`. It carries neither a summary line nor a
 remedy: the format has no field for one.
+
+## JSON headers
+
+The two JSON outputs that are objects — `validate --format json` and `context --format json` — are
+headed by a `schema_version` and, where the configuration names one, a `preset_version`. Both are at
+`schema_version: 2`. The listings are arrays of records rather than objects (`query`, `query
+--fields`, `resolve`), so they carry no header; `preset_version` is read from `validate` beside
+them. The text, `md`, `github` and `rdjson` formats are unversioned: a header is a JSON affair.

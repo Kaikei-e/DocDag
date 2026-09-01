@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -814,7 +815,7 @@ func TestBuildAcrossKinds(t *testing.T) {
 		}
 
 		g := Build(docs, cfg)
-		findings := Validate(g, cfg)
+		findings := Validate(g, cfg, time.Time{})
 
 		if len(g.Edges) != 1 {
 			t.Fatalf("edges = %+v, want the edge to have resolved", g.Edges)
@@ -830,7 +831,7 @@ func TestBuildAcrossKinds(t *testing.T) {
 			testKindDoc("deviation", "dev-0001", map[string]any{"status": "proposed"}),
 		}
 
-		findings := Validate(Build(docs, vocabulary), vocabulary)
+		findings := Validate(Build(docs, vocabulary), vocabulary, time.Time{})
 
 		// The clause vocabulary does not carry proposed; the deviation kind
 		// declares none and inherits the top-level one, which does.

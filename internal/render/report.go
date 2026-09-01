@@ -11,8 +11,9 @@ import (
 )
 
 // ReportSchemaVersion is the version of the JSON validation report. A consumer
-// that reads it can tell a shape change from a content change.
-const ReportSchemaVersion = 1
+// that reads it can tell a shape change from a content change. Version 2 heads
+// the report with the preset revision the corpus was checked under.
+const ReportSchemaVersion = 2
 
 // Tool identity carried by the machine-readable report formats.
 const (
@@ -20,9 +21,12 @@ const (
 	toolURL  = "https://github.com/Kaikei-e/DocDag"
 )
 
-// Report is the JSON shape of `docdag validate`.
+// Report is the JSON shape of `docdag validate`. PresetVersion is the revision
+// of the preset the corpus is written against, left out where the configuration
+// names none, so a repository can pin what its documents were checked under.
 type Report struct {
 	SchemaVersion int             `json:"schema_version"`
+	PresetVersion int             `json:"preset_version,omitempty"`
 	Findings      []model.Finding `json:"findings"`
 	Summary       model.Summary   `json:"summary"`
 }
@@ -84,9 +88,15 @@ func writeSummary(out *errWriter, summary model.Summary) {
 	}
 }
 
-// FindingsJSON writes the findings and the summary as a JSON report.
-func FindingsJSON(w io.Writer, findings []model.Finding, summary model.Summary) error {
-	report := Report{SchemaVersion: ReportSchemaVersion, Findings: findings, Summary: summary}
+// FindingsJSON writes the findings and the summary as a JSON report, headed by
+// the schema version and the preset revision the corpus was checked under.
+func FindingsJSON(w io.Writer, findings []model.Finding, summary model.Summary, presetVersion int) error {
+	report := Report{
+		SchemaVersion: ReportSchemaVersion,
+		PresetVersion: presetVersion,
+		Findings:      findings,
+		Summary:       summary,
+	}
 	if report.Findings == nil {
 		report.Findings = []model.Finding{}
 	}
@@ -313,6 +323,51 @@ func StatsText(w io.Writer, s graph.Statistics) error {
 func StatsJSON(w io.Writer, s graph.Statistics) error {
 	if err := writeJSON(w, s); err != nil {
 		return fmt.Errorf("write statistics: %w", err)
+	}
+	return nil
+}
+
+// noValue stands in for a column a report has no answer for, so every row has
+// the same number of columns and a reader never has to count separators.
+const noValue = "-"
+
+// FieldUsageText writes the per-field usage as an aligned table. It carries a
+// header row, unlike the degree statistics: four columns of numbers and dates
+// say nothing about themselves.
+func FieldUsageText(w io.Writer, usage []graph.FieldUsage) error {
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	fmt.Fprintf(tw, "field\tdocuments\tlast change\tdeprecated\n")
+	for _, u := range usage {
+		deprecated := noValue
+		if u.Deprecated {
+			deprecated = "yes"
+		}
+		last := u.LastChange
+		if last == "" {
+			last = noValue
+		}
+		fmt.Fprintf(tw, "%s\t%d\t%s\t%s\n", u.Field, u.Documents, last, deprecated)
+	}
+	if err := tw.Flush(); err != nil {
+		return fmt.Errorf("write field usage: %w", err)
+	}
+	return nil
+}
+
+// FieldUsageReport is the JSON shape of `docdag stats --fields`: an object
+// rather than a bare array, so a later revision can head the rows with
+// something without moving them.
+type FieldUsageReport struct {
+	Fields []graph.FieldUsage `json:"fields"`
+}
+
+// FieldUsageJSON writes the per-field usage as JSON.
+func FieldUsageJSON(w io.Writer, usage []graph.FieldUsage) error {
+	if usage == nil {
+		usage = []graph.FieldUsage{}
+	}
+	if err := writeJSON(w, FieldUsageReport{Fields: usage}); err != nil {
+		return fmt.Errorf("write field usage: %w", err)
 	}
 	return nil
 }

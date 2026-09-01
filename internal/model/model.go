@@ -75,6 +75,7 @@ const (
 	RuleKindMismatch           = "kind_mismatch"
 	RuleUnknownField           = "unknown_field"
 	RuleEdgeKindMismatch       = "edge_kind_mismatch"
+	RuleDeprecatedField        = "deprecated_field"
 	RuleImmutableViolation     = "immutable_violation"
 )
 

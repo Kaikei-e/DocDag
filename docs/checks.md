@@ -18,12 +18,12 @@ A finding reads:
 | **Rule** | the rule's own `severity:` | `rules:` defines them; the preset ships two, and a config that writes `rules:` replaces the list |
 | **Reference and history** | `references.dangling`, or fixed | `dangling_reference` is off by default; `immutable_violation` needs `--immutable-since` |
 
-`structural:` accepts exactly these nineteen names: `cycle`, `dangling_ref`, `id_collision`,
+`structural:` accepts exactly these twenty names: `cycle`, `dangling_ref`, `id_collision`,
 `invalid_frontmatter`, `missing_frontmatter`, `unknown_status`, `derived_conflict`,
 `unstructured_supersedes`, `invalid_ref`, `empty_edge`, `inverse_mismatch`, `cardinality`,
 `edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`, `id_mismatch`, `kind_mismatch`,
-`unknown_field`, `edge_kind_mismatch`. Naming anything else — `status_drift` and
-`superseded_orphan` included, since they are rules — is a configuration error and exits 3.
+`unknown_field`, `edge_kind_mismatch`, `deprecated_field`. Naming anything else — `status_drift`
+and `superseded_orphan` included, since they are rules — is a configuration error and exits 3.
 
 ## Status is a projection
 
@@ -75,7 +75,8 @@ the vocabulary — the vocabulary of the document's own kind, where kinds declar
 binds nothing, and because nothing supersedes it, it raises no `superseded_orphan` warning either.
 
 Unrecognized frontmatter keys are ignored entirely, so another tool's fields raise nothing — unless
-they are in a kind declared `closed: true`, which is `unknown_field` below.
+they are in a kind declared `closed: true`, which is `unknown_field` below, or declared under `fields:` and retired, which is
+`deprecated_field`.
 
 ### `empty_edge` — error, structural
 
@@ -130,8 +131,9 @@ A kind declared `closed: true` carries a frontmatter key the configuration does 
 `frontmatter key "owner" is not declared by the closed kind "clause", declared: date, enforces, id,
 kind, status, supersedes, title`. One finding per unknown key, each on its own key's line, and the
 known keys are listed in alphabetical order. They are `title`, `date`, `id`, `kind`, the status
-field, and every edge `key:` and `inverse:` plus every derived-edge `field:`. A kind that is not
-closed ignores unknown keys, which is what every corpus does by default. No fix suggestion.
+field, every edge `key:` and `inverse:`, every derived-edge `field:`, and every name declared under
+`fields:` — the corpus's own and the kind's. A kind that is not closed ignores unknown keys, which
+is what every corpus does by default. No fix suggestion.
 
 ### `edge_kind_mismatch` — error, structural
 
@@ -147,6 +149,35 @@ endpoint of the wrong kind under `related`. Only an endpoint the corpus holds is
 reference naming no document has no kind to be wrong about, and is a `dangling_ref` instead. A
 reference that names a document of the wrong kind still resolves, so this finding says what is
 actually wrong rather than reporting the reference as naming nothing. No fix suggestion.
+
+## Field lifecycle
+
+### `deprecated_field` — warn, structural, error past its sunset
+
+A document writes a frontmatter key the configuration retired under `fields:`; see
+[configuration.md](configuration.md). One finding per retired key per document, each on the line
+the key is written on. The detail names what the declaration says and nothing it does not:
+
+```
+frontmatter key "owner" is deprecated
+frontmatter key "owner" is deprecated since preset version 2
+frontmatter key "owner" is deprecated since preset version 2, sunset 2027-01-01
+frontmatter key "owner" is deprecated since preset version 2, past its sunset 2027-01-01
+```
+
+The last form is an **error**; the first three are warnings. The comparison is by calendar day
+against the day the command runs, and the sunset day itself is the last day the field is tolerated,
+so a `sunset: 2027-01-01` first errors on 2027-01-02. Because the day is the corpus's own deadline,
+the escalation happens whatever `structural:` says; what `structural: {deprecated_field: error}`
+raises is the pre-sunset form, which is how a corpus finishes a migration ahead of its own date.
+
+Fix: `migrate owner to owned-by`, where the declaration names a `migrate_to`. A field being removed
+rather than moved carries no suggestion — only the author knows what the value was for.
+
+A kind that declares the key itself reads its own declaration, so a field the corpus retired is not
+retired for a kind that re-declares it. And a declared field — retired or not — is a *known* key, so
+a `closed: true` kind accepts it instead of reporting `unknown_field`: a migration in progress is
+not a mistake.
 
 ## Edge attributes
 

@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -709,7 +710,7 @@ func TestCheck(t *testing.T) {
 		nil,
 	)
 
-	got := Check(g, cfg)
+	got := Check(g, cfg, time.Time{})
 
 	t.Run("every built-in check contributes", func(t *testing.T) {
 		for _, rule := range []string{model.RuleCycle, model.RuleDanglingRef, model.RuleUnknownStatus} {
@@ -1148,7 +1149,7 @@ func TestValidate(t *testing.T) {
 		Location: testNodeLocation("0004", 2),
 	}}
 
-	got := Validate(g, cfg)
+	got := Validate(g, cfg, time.Time{})
 
 	t.Run("structural checks, rules and build findings all appear", func(t *testing.T) {
 		want := []string{
@@ -1180,7 +1181,7 @@ func TestValidate(t *testing.T) {
 			nil,
 		)
 
-		if findings := Validate(clean, cfg); len(findings) != 0 {
+		if findings := Validate(clean, cfg, time.Time{}); len(findings) != 0 {
 			t.Fatalf("findings = %+v, want none", findings)
 		}
 	})

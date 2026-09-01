@@ -537,6 +537,96 @@ func TestConfigValidate(t *testing.T) {
 			mutate:  func(c *Config) { c.Edges[0].To = []string{"clause"} },
 			wantErr: true,
 		},
+		{
+			name: "a retired field with the whole lifecycle written down",
+			mutate: func(c *Config) {
+				c.PresetVersion = 3
+				c.Fields = map[string]FieldSpec{
+					"owner": {Deprecated: true, Since: 2, MigrateTo: "owned-by", Sunset: "2027-01-01"},
+				}
+			},
+		},
+		{
+			name:   "a field declared without retiring it",
+			mutate: func(c *Config) { c.Fields = map[string]FieldSpec{"owner": {}} },
+		},
+		{
+			name:    "a sunset that is not a date",
+			mutate:  func(c *Config) { c.Fields = map[string]FieldSpec{"owner": {Deprecated: true, Sunset: "soon"}} },
+			wantErr: true,
+		},
+		{
+			name: "a sunset written the American way",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"owner": {Deprecated: true, Sunset: "01/01/2027"}}
+			},
+			wantErr: true,
+		},
+		{
+			name:    "a negative since",
+			mutate:  func(c *Config) { c.Fields = map[string]FieldSpec{"owner": {Deprecated: true, Since: -1}} },
+			wantErr: true,
+		},
+		{
+			name:    "a migrate_to without a deprecation",
+			mutate:  func(c *Config) { c.Fields = map[string]FieldSpec{"owner": {MigrateTo: "owned-by"}} },
+			wantErr: true,
+		},
+		{
+			name:    "a sunset without a deprecation",
+			mutate:  func(c *Config) { c.Fields = map[string]FieldSpec{"owner": {Sunset: "2027-01-01"}} },
+			wantErr: true,
+		},
+		{
+			name:    "a since without a deprecation",
+			mutate:  func(c *Config) { c.Fields = map[string]FieldSpec{"owner": {Since: 2}} },
+			wantErr: true,
+		},
+		{
+			name:    "a field without a name",
+			mutate:  func(c *Config) { c.Fields = map[string]FieldSpec{"": {Deprecated: true}} },
+			wantErr: true,
+		},
+		{
+			name: "a field named after an edge key",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{c.Edges[0].Key: {Deprecated: true}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a field named after an inverse key",
+			mutate: func(c *Config) {
+				c.Edges[0].Inverse = "superseded_by"
+				c.Fields = map[string]FieldSpec{"superseded_by": {Deprecated: true}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a kind declaring fields of its own",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Kinds["clause"] = KindSpec{Dir: "spec/clauses", Fields: map[string]FieldSpec{
+					"owner": {Deprecated: true, MigrateTo: "owned-by"},
+				}}
+			},
+		},
+		{
+			name: "a kind's field declaration is held to the same shape",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Kinds["clause"] = KindSpec{Dir: "spec/clauses", Fields: map[string]FieldSpec{
+					"owner": {Deprecated: true, Sunset: "whenever"},
+				}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a deprecation escalated to an error",
+			mutate: func(c *Config) {
+				c.Structural = map[string]model.Severity{model.RuleDeprecatedField: model.SeverityError}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1319,7 +1409,7 @@ func TestConfigKnownFrontmatterKeys(t *testing.T) {
 	t.Run("the preset knows its own vocabulary", func(t *testing.T) {
 		want := []string{"date", "depends-on", "id", "kind", "status", "supersedes", "title"}
 
-		if got := ADRPreset().KnownFrontmatterKeys(); !slices.Equal(got, want) {
+		if got := ADRPreset().KnownFrontmatterKeys(""); !slices.Equal(got, want) {
 			t.Fatalf("KnownFrontmatterKeys = %v, want %v", got, want)
 		}
 	})
@@ -1329,7 +1419,7 @@ func TestConfigKnownFrontmatterKeys(t *testing.T) {
 		// corpus that renames status carries the new key everywhere.
 		cfg := Merge(ADRPreset(), Config{StatusField: "state"})
 
-		got := cfg.KnownFrontmatterKeys()
+		got := cfg.KnownFrontmatterKeys("")
 
 		if slices.Contains(got, "status") || !slices.Contains(got, "state") {
 			t.Fatalf("KnownFrontmatterKeys = %v, want the renamed field rather than status", got)
@@ -1340,8 +1430,111 @@ func TestConfigKnownFrontmatterKeys(t *testing.T) {
 		cfg := ADRPreset()
 		cfg.Edges[0].Inverse = "superseded_by"
 
-		if got := cfg.KnownFrontmatterKeys(); !slices.Contains(got, "superseded_by") {
+		if got := cfg.KnownFrontmatterKeys(""); !slices.Contains(got, "superseded_by") {
 			t.Fatalf("KnownFrontmatterKeys = %v, want it to carry the inverse key", got)
+		}
+	})
+
+	t.Run("a declared field is a known key, deprecated or not", func(t *testing.T) {
+		cfg := ADRPreset()
+		cfg.Fields = map[string]FieldSpec{
+			"owner": {Deprecated: true, MigrateTo: "owned-by"},
+			"team":  {},
+		}
+
+		got := cfg.KnownFrontmatterKeys("")
+
+		for _, want := range []string{"owner", "team"} {
+			if !slices.Contains(got, want) {
+				t.Fatalf("KnownFrontmatterKeys = %v, want it to carry the declared field %q", got, want)
+			}
+		}
+	})
+
+	t.Run("a kind's own fields are known to that kind alone", func(t *testing.T) {
+		cfg := ADRPreset()
+		cfg.Fields = map[string]FieldSpec{"owner": {Deprecated: true}}
+		cfg.Kinds = map[string]KindSpec{
+			"clause":  {Dir: "spec/clauses", Fields: map[string]FieldSpec{"level": {}}},
+			"conform": {Dir: "spec/conform"},
+		}
+
+		clause, conform := cfg.KnownFrontmatterKeys("clause"), cfg.KnownFrontmatterKeys("conform")
+
+		if !slices.Contains(clause, "level") || !slices.Contains(clause, "owner") {
+			t.Fatalf("KnownFrontmatterKeys(clause) = %v, want the kind's field and the top-level one", clause)
+		}
+		if slices.Contains(conform, "level") {
+			t.Fatalf("KnownFrontmatterKeys(conform) = %v, want another kind's field left out", conform)
+		}
+	})
+}
+
+func TestConfigFields(t *testing.T) {
+	cfg := ADRPreset()
+	cfg.Fields = map[string]FieldSpec{
+		"owner": {Deprecated: true, Since: 2, MigrateTo: "owned-by", Sunset: "2027-01-01"},
+		"team":  {},
+	}
+	cfg.Kinds = map[string]KindSpec{
+		"clause": {Dir: "spec/clauses", Fields: map[string]FieldSpec{
+			"owner": {},
+			"level": {Deprecated: true},
+		}},
+		"conform": {Dir: "spec/conform"},
+	}
+
+	t.Run("a kind reads the top-level declarations", func(t *testing.T) {
+		spec, ok := cfg.Field("conform", "owner")
+
+		if !ok || !spec.Deprecated || spec.MigrateTo != "owned-by" {
+			t.Fatalf("Field(conform, owner) = %+v, %v, want the top-level declaration", spec, ok)
+		}
+	})
+
+	t.Run("a kind's own declaration wins over the top-level one", func(t *testing.T) {
+		// The kind is describing that key for its own documents, so a clause
+		// writing owner is not writing a retired field.
+		spec, ok := cfg.Field("clause", "owner")
+
+		if !ok || spec.Deprecated {
+			t.Fatalf("Field(clause, owner) = %+v, %v, want the kind's own declaration", spec, ok)
+		}
+	})
+
+	t.Run("a field nobody declared is not found", func(t *testing.T) {
+		if spec, ok := cfg.Field("", "tags"); ok {
+			t.Fatalf("Field(tags) = %+v, want none", spec)
+		}
+	})
+
+	t.Run("every declared name is reported, sorted", func(t *testing.T) {
+		if got := cfg.DeclaredFields(); !slices.Equal(got, []string{"level", "owner", "team"}) {
+			t.Fatalf("DeclaredFields = %v, want the top-level and per-kind names sorted", got)
+		}
+	})
+
+	t.Run("a corpus-wide report flags a field any kind retired", func(t *testing.T) {
+		if !cfg.FieldDeprecated("level") {
+			t.Error("FieldDeprecated(level) = false, want the clause kind's retirement to show")
+		}
+		if !cfg.FieldDeprecated("owner") {
+			t.Error("FieldDeprecated(owner) = false, want the top-level retirement to show")
+		}
+		if cfg.FieldDeprecated("team") {
+			t.Error("FieldDeprecated(team) = true, want a declared field nobody retired")
+		}
+	})
+
+	t.Run("a sunset reads as a day, and an unwritten one as nothing", func(t *testing.T) {
+		spec, _ := cfg.Field("", "owner")
+		day, ok := spec.SunsetDate()
+
+		if !ok || day.Format(AttrDateLayout) != "2027-01-01" {
+			t.Fatalf("SunsetDate = %v, %v, want the declared day", day, ok)
+		}
+		if _, ok := (FieldSpec{Deprecated: true}).SunsetDate(); ok {
+			t.Error("SunsetDate reported a day for a declaration that names none")
 		}
 	})
 }

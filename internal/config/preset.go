@@ -15,14 +15,21 @@ const DerivedSupersededPattern = `(?i)^superseded[\s-]+by[\s-]+(\S+)`
 // code so another preset can hold a different notion of force.
 const ProjectionAcceptedUnsuperseded = "accepted_unsuperseded"
 
+// ADRPresetVersion is the revision the built-in ADR configuration is at. The
+// preset predates the versioning, so it starts at 1 like every other: a header
+// that names a revision everywhere is worth more than one that is absent
+// wherever the corpus happens to use the built-in preset.
+const ADRPresetVersion = 1
+
 // ADRPreset returns the built-in Architecture Decision Record configuration.
 func ADRPreset() Config {
 	eq := func(v string) AttrCondition { return AttrCondition{Eq: &v} }
 	not := func(v string) AttrCondition { return AttrCondition{Not: &v} }
 	return Config{
-		Preset:      PresetADR,
-		IDWidth:     DefaultIDWidth,
-		StatusField: DefaultStatusField,
+		Preset:        PresetADR,
+		PresetVersion: ADRPresetVersion,
+		IDWidth:       DefaultIDWidth,
+		StatusField:   DefaultStatusField,
 		StatusValues: []string{
 			StatusProposed,
 			StatusAccepted,

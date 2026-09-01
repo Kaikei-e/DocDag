@@ -107,6 +107,32 @@ type KindSpec struct {
 	ID           string   `yaml:"id,omitempty"`
 	StatusValues []string `yaml:"status_values,omitempty"`
 	Closed       bool     `yaml:"closed,omitempty"`
+	// Fields declares the frontmatter lifecycle of this kind's documents, over
+	// the top-level declarations: a kind naming a field describes that key for
+	// its own documents, not for everybody's.
+	Fields map[string]FieldSpec `yaml:"fields,omitempty"`
+}
+
+// FieldSpec declares one frontmatter field's lifecycle: whether the
+// configuration has retired the key, the preset revision that retired it, the
+// key its value moves to, and the day it stops being tolerated. The vocabulary
+// a declared field's *value* comes from — a closed set, a requirement — is a
+// later ADR's addition to this type; nothing here reads a value yet.
+type FieldSpec struct {
+	Deprecated bool   `yaml:"deprecated,omitempty"`
+	Since      int    `yaml:"since,omitempty"`
+	MigrateTo  string `yaml:"migrate_to,omitempty"`
+	Sunset     string `yaml:"sunset,omitempty"`
+}
+
+// SunsetDate reports the day a deprecated field stops being tolerated, and
+// whether the declaration names a day at all.
+func (f FieldSpec) SunsetDate() (time.Time, bool) {
+	if f.Sunset == "" {
+		return time.Time{}, false
+	}
+	day, err := time.Parse(AttrDateLayout, f.Sunset)
+	return day, err == nil
 }
 
 // EdgeSpec declares one typed constraint edge and the frontmatter key that
@@ -148,8 +174,9 @@ const (
 	AttrTypeDate   = "date"
 )
 
-// AttrDateLayout is the one date an edge attribute accepts: ISO 8601 calendar
-// dates, the spelling frontmatter already writes dates in.
+// AttrDateLayout is the one date the configuration accepts: ISO 8601 calendar
+// dates, the spelling frontmatter already writes dates in. It is what an edge
+// attribute of type date takes and what a field's sunset is written as.
 const AttrDateLayout = "2006-01-02"
 
 // EdgeAttrSpec declares one attribute of an edge: whether every entry has to
@@ -496,19 +523,28 @@ func (p ProjectionSpec) AttrKeys() []string {
 // Config is the effective configuration. A preset is nothing more than a
 // built-in Config value, so every field is expressible in docdag.yaml.
 type Config struct {
-	Preset  string `yaml:"preset,omitempty"`
-	Dir     string `yaml:"dir,omitempty"`
-	IDWidth int    `yaml:"id_width,omitempty"`
+	Preset string `yaml:"preset,omitempty"`
+	// PresetVersion is the revision of the preset the corpus is written
+	// against. It is carried in the output headers so a repository can pin the
+	// revision its documents were checked under.
+	PresetVersion int    `yaml:"preset_version,omitempty"`
+	Dir           string `yaml:"dir,omitempty"`
+	IDWidth       int    `yaml:"id_width,omitempty"`
 	// Kinds declares the document kinds of a multi-kind corpus, keyed by kind
 	// name. A configuration that declares none is single-kind: Dir, IDWidth and
 	// StatusValues describe that one kind, exactly as they always have.
-	Kinds        map[string]KindSpec `yaml:"kinds,omitempty"`
-	StatusField  string              `yaml:"status_field,omitempty"`
-	StatusValues []string            `yaml:"status_values,omitempty"`
-	Edges        []EdgeSpec          `yaml:"edges,omitempty"`
-	DerivedEdges []DerivedEdgeSpec   `yaml:"derived_edges,omitempty"`
-	Rules        []Rule              `yaml:"rules,omitempty"`
-	Projections  []ProjectionSpec    `yaml:"projections,omitempty"`
+	Kinds map[string]KindSpec `yaml:"kinds,omitempty"`
+	// Fields declares the lifecycle of the frontmatter keys the documents
+	// write: which of them are retired, where their values move and when they
+	// stop being tolerated. A key nobody declares is not unknown, only
+	// undeclared, so a corpus pays for this only where it migrates something.
+	Fields       map[string]FieldSpec `yaml:"fields,omitempty"`
+	StatusField  string               `yaml:"status_field,omitempty"`
+	StatusValues []string             `yaml:"status_values,omitempty"`
+	Edges        []EdgeSpec           `yaml:"edges,omitempty"`
+	DerivedEdges []DerivedEdgeSpec    `yaml:"derived_edges,omitempty"`
+	Rules        []Rule               `yaml:"rules,omitempty"`
+	Projections  []ProjectionSpec     `yaml:"projections,omitempty"`
 	// Binding names the projection that defines the set of documents in force.
 	// It is a preset's answer to "what is current", not a hard-coded one.
 	Binding      string         `yaml:"binding,omitempty"`
@@ -572,6 +608,10 @@ var structuralSeverities = map[string]model.Severity{
 	model.RuleKindMismatch:           model.SeverityError,
 	model.RuleUnknownField:           model.SeverityError,
 	model.RuleEdgeKindMismatch:       model.SeverityError,
+	// A deprecation warns while the field is still tolerated. Past its sunset
+	// the check speaks at error whatever is written here: the day is the
+	// corpus's own deadline, and structural: raises the form before it.
+	model.RuleDeprecatedField: model.SeverityWarn,
 }
 
 // Severity reports the severity a structural check speaks at, after whatever
@@ -610,13 +650,67 @@ func (c Config) KindStatusValues(name string) []string {
 	return c.StatusValues
 }
 
+// FieldSpecs returns the field declarations a document of one kind reads: the
+// top-level ones, with the kind's own replacing them by name. A kind that
+// declares a field is describing that key for its own documents, so its
+// declaration wins wherever the two speak about the same key.
+func (c Config) FieldSpecs(kind string) map[string]FieldSpec {
+	own := c.Kinds[kind].Fields
+	if len(own) == 0 {
+		return c.Fields
+	}
+	merged := make(map[string]FieldSpec, len(c.Fields)+len(own))
+	maps.Copy(merged, c.Fields)
+	maps.Copy(merged, own)
+	return merged
+}
+
+// Field returns one field declaration as a document of a kind reads it.
+func (c Config) Field(kind, name string) (FieldSpec, bool) {
+	spec, ok := c.FieldSpecs(kind)[name]
+	return spec, ok
+}
+
+// DeclaredFields returns every field name the configuration declares, at the
+// top level or under a kind, sorted. A report over the whole corpus reads them
+// all: a migration is finished exactly when a retired field's count reaches
+// zero, so the row has to survive the last document that wrote it.
+func (c Config) DeclaredFields() []string {
+	names := make(map[string]bool, len(c.Fields))
+	for name := range c.Fields {
+		names[name] = true
+	}
+	for _, spec := range c.Kinds {
+		for name := range spec.Fields {
+			names[name] = true
+		}
+	}
+	return slices.Sorted(maps.Keys(names))
+}
+
+// FieldDeprecated reports whether any declaration of a name retires it. A
+// corpus-wide report aggregates the kinds, so a field one kind retired is
+// flagged there; what a particular document reads comes from Field.
+func (c Config) FieldDeprecated(name string) bool {
+	if c.Fields[name].Deprecated {
+		return true
+	}
+	for _, spec := range c.Kinds {
+		if spec.Fields[name].Deprecated {
+			return true
+		}
+	}
+	return false
+}
+
 // KnownFrontmatterKeys returns the frontmatter keys a closed kind accepts,
-// sorted: the keys the engine itself reads, the status field, and every key the
-// configured edges declare or mirror or a derived edge reads. It is built from
-// the configuration rather than written down, so a corpus that renames a key
-// does not also have to widen the set; a later revision adds the keys a kind
-// declares under fields: by extending this one place.
-func (c Config) KnownFrontmatterKeys() []string {
+// sorted: the keys the engine itself reads, the status field, every key the
+// configured edges declare or mirror or a derived edge reads, and every field
+// the configuration declares for that kind. It is built from the configuration
+// rather than written down, so a corpus that renames a key does not also have
+// to widen the set, and declaring a field under fields: is how a closed kind
+// admits a key nothing else in the configuration mentions.
+func (c Config) KnownFrontmatterKeys(kind string) []string {
 	keys := map[string]bool{
 		KeyTitle:            true,
 		KeyDate:             true,
@@ -632,6 +726,11 @@ func (c Config) KnownFrontmatterKeys() []string {
 	}
 	for _, spec := range c.DerivedEdges {
 		keys[spec.Field] = true
+	}
+	// A deprecated field is still a declared one: a closed kind that reported
+	// it as unknown would say the key is a mistake rather than a migration.
+	for name := range c.FieldSpecs(kind) {
+		keys[name] = true
 	}
 	return slices.Sorted(maps.Keys(keys))
 }
@@ -715,6 +814,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validateEdges(); err != nil {
+		return err
+	}
+	if err := c.validateFields(); err != nil {
 		return err
 	}
 	if err := c.validateRules(); err != nil {
@@ -878,6 +980,77 @@ func (c Config) validateInverseKeys(keys map[string]bool) error {
 			return fmt.Errorf("edge %q: inverse key %q is already the inverse of another edge: %w", spec.Name, spec.Inverse, model.ErrInvalidConfig)
 		}
 		inverses[spec.Inverse] = true
+	}
+	return nil
+}
+
+// validateFields holds the field declarations to what the deprecation check can
+// answer: a name of its own, a lifecycle written only where something is being
+// retired, and a sunset the check can compare a day against.
+func (c Config) validateFields() error {
+	owners := c.edgeKeyOwners()
+	if err := validateFieldSpecs("", c.Fields, owners); err != nil {
+		return err
+	}
+	for _, name := range c.KindNames() {
+		if err := validateFieldSpecs(fmt.Sprintf("kind %q: ", name), c.Kinds[name].Fields, owners); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// edgeKeyOwners names, per frontmatter key an edge declares or mirrors, the
+// edge that owns it. A field declaration on such a key would give one key two
+// lifecycles, and retiring it would say the relation is over without retiring
+// the edge that holds it.
+func (c Config) edgeKeyOwners() map[string]string {
+	owners := make(map[string]string, 2*len(c.Edges))
+	for _, spec := range c.Edges {
+		owners[spec.Key] = spec.Name
+		if spec.Inverse != "" {
+			owners[spec.Inverse] = spec.Name
+		}
+	}
+	return owners
+}
+
+func validateFieldSpecs(where string, fields map[string]FieldSpec, owners map[string]string) error {
+	for _, name := range slices.Sorted(maps.Keys(fields)) {
+		if name == "" {
+			return fmt.Errorf("%sfield without a name: %w", where, model.ErrInvalidConfig)
+		}
+		spec := fields[name]
+		subject := fmt.Sprintf("%sfield %q", where, name)
+		if owner, taken := owners[name]; taken {
+			return fmt.Errorf("%s is the frontmatter key of edge %q, which carries its own lifecycle: %w",
+				subject, owner, model.ErrInvalidConfig)
+		}
+		if spec.Since < 0 {
+			return fmt.Errorf("%s: since %d is negative: %w", subject, spec.Since, model.ErrInvalidConfig)
+		}
+		if _, ok := spec.SunsetDate(); spec.Sunset != "" && !ok {
+			return fmt.Errorf("%s: sunset %q is not a date as YYYY-MM-DD: %w", subject, spec.Sunset, model.ErrInvalidConfig)
+		}
+		if spec.Deprecated {
+			continue
+		}
+		// The other three keys describe a retirement, so writing one without
+		// deprecated: true is a declaration that says nothing and reports
+		// nothing — a typo the corpus would never see the effect of.
+		for _, written := range []struct {
+			key     string
+			written bool
+		}{
+			{"since", spec.Since != 0},
+			{"migrate_to", spec.MigrateTo != ""},
+			{"sunset", spec.Sunset != ""},
+		} {
+			if written.written {
+				return fmt.Errorf("%s: %s describes nothing without deprecated: true: %w",
+					subject, written.key, model.ErrInvalidConfig)
+			}
+		}
 	}
 	return nil
 }

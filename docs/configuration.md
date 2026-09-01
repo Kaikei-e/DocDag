@@ -10,6 +10,7 @@ The file below is the `adr` preset in full — what DocDag applies with no confi
 
 ```yaml
 preset: adr
+preset_version: 1              # the revision this configuration is at
 dir: docs/decisions            # default: discovered, see above
 id_width: 4
 status_field: status
@@ -175,8 +176,10 @@ rules:
 
 `closed: true` makes the kind's frontmatter a closed set: every key the configuration does not know
 is an `unknown_field` finding, one per key, on the key's own line. The known keys are `title`,
-`date`, `id`, `kind`, the status field, and every `key:` and `inverse:` an edge declares plus every
-`field:` a derived edge reads — so renaming a key in the configuration widens the set with it.
+`date`, `id`, `kind`, the status field, every `key:` and `inverse:` an edge declares, every `field:`
+a derived edge reads, and every name declared under `fields:` — so renaming a key in the
+configuration widens the set with it, and declaring a field is how a closed kind admits a key
+nothing else in the configuration mentions.
 Kinds are open by default, which is what every corpus had before: unrecognized keys are ignored, and
 another tool's fields raise nothing.
 
@@ -289,12 +292,74 @@ lets a document state a reason where it has one. Adding `required: true` makes e
 an `edge_attr_missing` error, which is the migration: rewrite the entries, then require the
 attribute.
 
+## preset_version and fields
+
+`preset_version:` is the revision of the configuration a corpus is written against. It is a plain
+integer the configuration carries and DocDag never interprets: it is written into the JSON output
+headers — `validate --format json` and `context --format json` — so a repository can pin the
+revision its documents were checked under. The `adr` preset is revision 1, and a corpus that
+overrides it says so by writing its own number.
+
+`fields:` declares the lifecycle of the frontmatter keys the documents write. A key nobody declares
+is not unknown, only undeclared, so a corpus pays for this only where it is migrating something:
+
+```yaml
+preset_version: 3
+fields:
+  owner:                       # the key being retired
+    deprecated: true           # writing it is the deprecated_field finding
+    since: 2                   # the preset revision that retired it
+    migrate_to: owned-by       # where the value goes; becomes the fix line
+    sunset: 2027-01-01         # the last day it is tolerated; after it, an error
+  team: {}                     # declared, not retired: a known key and nothing more
+```
+
+`deprecated: true` is what makes a declaration do anything. `since`, `migrate_to` and `sunset`
+describe a retirement, so writing one of them without `deprecated: true` is a configuration error
+(exit 3), as is a `sunset` that is not a `YYYY-MM-DD` day, a negative `since`, a nameless field, and
+a field named after an edge's `key:` or `inverse:` — that key's lifecycle belongs to the edge, and
+retiring it would say the relation is over without retiring the edge.
+
+A declared field is a **known** key, so a `closed: true` kind accepts it rather than reporting
+`unknown_field`: a migration in progress is not a mistake. Kinds may declare `fields:` of their own,
+which win over the top-level ones by name, so a key one kind still uses is not retired for it:
+
+```yaml
+kinds:
+  clause:
+    dir: spec/clauses
+    closed: true
+    fields:
+      owner: {}                # clauses still write it, whatever the corpus says
+```
+
+`docdag stats --fields` counts the corpus by field — how many documents write each one, when a
+document that writes it last changed, and which are retired — so a removal is decided on numbers.
+A declared field nobody writes is still a row, at zero: that is what a finished migration looks
+like. See [commands.md](commands.md).
+
+### Revising a preset safely
+
+Whether a revision is compatible is answered by running the checks twice rather than by a feature:
+
+```console
+$ docdag validate --config old.yaml --format json > old.json
+$ docdag validate --config new.yaml --format json > new.json
+$ diff <(jq -S '.findings' old.json) <(jq -S '.findings' new.json)
+```
+
+An unchanged findings set means the revision is compatible — a minor bump. A changed one means the
+revision decides something differently about documents nobody edited, which is a major bump, and the
+diff names exactly which documents moved. Bump `preset_version:` accordingly, so a repository
+pinning a revision knows what it pinned.
+
 ## List replacement
 
 The `edges:` and `rules:` lists above show where the new keys go; writing one of them — or
-`derived_edges:`, `projections:` or the `kinds:` map — replaces the preset's rather than adding to
-it, and writing it as an explicit empty list (`derived_edges: []`, `kinds: {}`) clears the preset's
-without putting anything in its place. Writing `edges:` also drops the inherited projections that
+`derived_edges:`, `projections:` or the `kinds:` and `fields:` maps — replaces the preset's rather
+than adding to it, and writing it as an explicit empty list (`derived_edges: []`, `kinds: {}`)
+clears the preset's without putting anything in its place. `preset_version:` is a scalar, so writing
+it replaces the preset's revision and leaving it out keeps it. Writing `edges:` also drops the inherited projections that
 read an edge type the new list does not declare, and the `binding:` that named one of them: a
 projection over a vocabulary the corpus replaced away cannot be evaluated. `binding:` is a scalar,
 so writing it replaces the preset's and leaving it out keeps it.

@@ -1,6 +1,7 @@
 // Package vcs asks git about a working tree by running it. The append-only
-// history check needs the committed shape of a file and nothing more, so there
-// is no repository library here, only the four questions that check asks.
+// history check needs the committed shape of a file and nothing more, and the
+// field report needs the day each file last changed, so there is no repository
+// library here, only the handful of questions those two ask.
 package vcs
 
 import (
@@ -52,7 +53,7 @@ type Change struct {
 // are not detected: a moved document is a deletion and an addition, and the
 // deletion is what a caller asking about a closed record needs to hear.
 func (r *Repo) Changes(base, dir string) ([]Change, error) {
-	scope, err := r.scope(dir)
+	scope, err := r.Rel(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +66,7 @@ func (r *Repo) Changes(base, dir string) ([]Change, error) {
 
 // Untracked lists the files under dir that git does not track.
 func (r *Repo) Untracked(dir string) ([]string, error) {
-	scope, err := r.scope(dir)
+	scope, err := r.Rel(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -85,12 +86,62 @@ func (r *Repo) File(rev, path string) ([]byte, error) {
 	return out, nil
 }
 
-// scope turns a filesystem directory into the repository-relative pathspec git
-// wants.
-func (r *Repo) scope(dir string) (string, error) {
-	abs, err := filepath.Abs(dir)
+// LastChanged reports the day each file under dirs last changed, keyed by the
+// path git names it under and written as YYYY-MM-DD. Naming no directory asks
+// about the whole working tree.
+//
+// It is one git invocation for the whole corpus rather than one per document: a
+// log walk already knows the paths of every commit it reads, and a subprocess
+// per document is a stall a report does not need.
+func (r *Repo) LastChanged(dirs ...string) (map[string]string, error) {
+	// The NUL before each commit's date is what separates one commit's file
+	// list from the next: a path can be spelled like a date, and a bare line
+	// cannot say which of the two it is.
+	args := []string{"log", "--format=%x00%cs", "--name-only", "--"}
+	for _, dir := range dirs {
+		scope, err := r.Rel(dir)
+		if err != nil {
+			return nil, err
+		}
+		args = append(args, scope)
+	}
+	out, err := run(r.root, args...)
 	if err != nil {
-		return "", fmt.Errorf("resolve %s: %w", dir, err)
+		return nil, fmt.Errorf("read the log: %w", err)
+	}
+	return parseLastChanged(out), nil
+}
+
+// parseLastChanged reads the log walk: one NUL-introduced chunk per commit, its
+// date on the first line and the paths it touched on the rest. A merge carries
+// no paths and contributes nothing. The largest day per path wins rather than
+// the first, because a rebased history can hold a later commit date deeper in
+// the walk than the order suggests.
+func parseLastChanged(out []byte) map[string]string {
+	changed := map[string]string{}
+	for _, chunk := range bytes.Split(out, []byte{0}) {
+		lines := strings.Split(string(chunk), "\n")
+		day := strings.TrimSpace(lines[0])
+		if day == "" {
+			continue
+		}
+		for _, path := range lines[1:] {
+			if path != "" && day > changed[path] {
+				changed[path] = day
+			}
+		}
+	}
+	return changed
+}
+
+// Rel names a filesystem path the way git does: relative to the working tree
+// root and slash-separated. It is the spelling a pathspec takes and the one
+// every path git prints comes back in, so a caller matching its own files
+// against git's output goes through here.
+func (r *Repo) Rel(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", path, err)
 	}
 	root, err := filepath.EvalSymlinks(r.root)
 	if err != nil {
@@ -101,7 +152,7 @@ func (r *Repo) scope(dir string) (string, error) {
 	}
 	rel, err := filepath.Rel(root, abs)
 	if err != nil {
-		return "", fmt.Errorf("%s is outside %s: %w", dir, r.root, err)
+		return "", fmt.Errorf("%s is outside %s: %w", path, r.root, err)
 	}
 	return filepath.ToSlash(rel), nil
 }

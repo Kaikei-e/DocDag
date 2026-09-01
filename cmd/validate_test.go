@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
 	"github.com/Kaikei-e/DocDag/internal/render"
 )
@@ -794,6 +795,9 @@ func TestValidateJSONReportCarriesLocations(t *testing.T) {
 	if report.SchemaVersion != render.ReportSchemaVersion {
 		t.Errorf("schema_version = %d, want %d", report.SchemaVersion, render.ReportSchemaVersion)
 	}
+	if report.PresetVersion != config.ADRPresetVersion {
+		t.Errorf("preset_version = %d, want the preset's %d", report.PresetVersion, config.ADRPresetVersion)
+	}
 	if len(report.Findings) != 1 {
 		t.Fatalf("findings = %+v, want one", report.Findings)
 	}
@@ -1093,4 +1097,56 @@ func TestValidateRejectsADirectoryBesideKinds(t *testing.T) {
 	if !strings.Contains(got.stderr, "kinds") {
 		t.Errorf("stderr = %q, want it to say the kinds carry the directories", got.stderr)
 	}
+}
+
+func TestValidateReportsADeprecatedField(t *testing.T) {
+	docs := map[string]string{
+		"0001-name-a-service-owner.md": "---\ntitle: Name a service owner\nstatus: accepted\nowner: platform\ndate: 2025-01-01\n---\n\n# Name a service owner\n",
+	}
+
+	t.Run("a field still inside its sunset warns and passes", func(t *testing.T) {
+		dir := writeDocs(t, docs)
+		cfg := writeDocs(t, map[string]string{"docdag.yaml": "preset_version: 3\nfields:\n  owner: {deprecated: true, since: 2, migrate_to: owned-by, sunset: 2999-01-01}\n"})
+
+		got := run(t, "validate", "--dir", dir, "--config", filepath.Join(cfg, "docdag.yaml"))
+
+		assertExit(t, got, 0)
+		assertLines(t, "findings", findingLines(got.stdout), []string{
+			`0001-name-a-service-owner.md:4: WARN deprecated_field 0001: frontmatter key "owner" is deprecated since preset version 2, sunset 2999-01-01`,
+		})
+		if !strings.Contains(got.stdout, "fix: migrate owner to owned-by") {
+			t.Errorf("report = %q, want the migration named as the fix", got.stdout)
+		}
+	})
+
+	t.Run("a field past its sunset fails the corpus", func(t *testing.T) {
+		dir := writeDocs(t, docs)
+		cfg := writeDocs(t, map[string]string{"docdag.yaml": "fields:\n  owner: {deprecated: true, sunset: 2000-01-01}\n"})
+
+		got := run(t, "validate", "--dir", dir, "--config", filepath.Join(cfg, "docdag.yaml"))
+
+		assertExit(t, got, 1)
+		assertLines(t, "findings", findingLines(got.stdout), []string{
+			`0001-name-a-service-owner.md:4: ERROR deprecated_field 0001: frontmatter key "owner" is deprecated, past its sunset 2000-01-01`,
+		})
+	})
+
+	t.Run("the preset version heads the JSON report", func(t *testing.T) {
+		dir := writeDocs(t, docs)
+		cfg := writeDocs(t, map[string]string{"docdag.yaml": "preset_version: 3\nfields:\n  owner: {deprecated: true}\n"})
+
+		got := run(t, "validate", "--format", "json", "--dir", dir, "--config", filepath.Join(cfg, "docdag.yaml"))
+
+		assertExit(t, got, 0)
+		report := decodeJSON[render.Report](t, got.stdout)
+		if report.SchemaVersion != 2 {
+			t.Errorf("schema_version = %d, want 2", report.SchemaVersion)
+		}
+		if report.PresetVersion != 3 {
+			t.Errorf("preset_version = %d, want the configured 3", report.PresetVersion)
+		}
+		if len(report.Findings) != 1 || report.Findings[0].Rule != model.RuleDeprecatedField {
+			t.Fatalf("findings = %+v, want the deprecation", report.Findings)
+		}
+	})
 }

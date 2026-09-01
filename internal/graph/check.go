@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -114,7 +115,7 @@ func kindFindings(cfg config.Config, doc *parse.Document) []model.Finding {
 	if !ok || !spec.Closed {
 		return findings
 	}
-	known := cfg.KnownFrontmatterKeys()
+	known := cfg.KnownFrontmatterKeys(doc.Kind)
 	for _, key := range slices.Sorted(maps.Keys(doc.Frontmatter)) {
 		if slices.Contains(known, key) {
 			continue
@@ -637,8 +638,10 @@ func derivedOwner(cfg config.Config, e model.Edge) model.ID {
 	return e.From
 }
 
-// Check runs every built-in structural check. These cannot be disabled.
-func Check(g *model.Graph, cfg config.Config) []model.Finding {
+// Check runs every built-in structural check. These cannot be disabled. asOf is
+// the day the time-dependent checks compare against — a field sunset is the
+// only one today — and the zero time means today.
+func Check(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
 	findings := []model.Finding{}
 	findings = append(findings, CheckCycles(g, cfg)...)
 	findings = append(findings, CheckDangling(g, cfg)...)
@@ -647,6 +650,7 @@ func Check(g *model.Graph, cfg config.Config) []model.Finding {
 	findings = append(findings, CheckEdgeKinds(g, cfg)...)
 	findings = append(findings, CheckStatusVocabulary(g, cfg)...)
 	findings = append(findings, CheckDerived(g, cfg)...)
+	findings = append(findings, CheckDeprecatedFields(g, cfg, asOf)...)
 	SortFindings(findings)
 	return findings
 }
@@ -898,11 +902,14 @@ func ruleLocation(cfg config.Config, n *model.Node, cond config.Condition) model
 }
 
 // Validate runs the structural checks and the configured rules, returning the
-// findings already recorded on the graph too, in deterministic order.
-func Validate(g *model.Graph, cfg config.Config) []model.Finding {
+// findings already recorded on the graph too, in deterministic order. asOf is
+// the day the time-dependent checks compare against, the zero time meaning
+// today: the CLI hands over the day it runs on, and a caller with no opinion
+// about the date does not have to invent one.
+func Validate(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
 	findings := make([]model.Finding, 0, len(g.Findings))
 	findings = append(findings, g.Findings...)
-	findings = append(findings, Check(g, cfg)...)
+	findings = append(findings, Check(g, cfg, asOf)...)
 	findings = append(findings, EvalRules(g, cfg)...)
 	SortFindings(findings)
 	return findings

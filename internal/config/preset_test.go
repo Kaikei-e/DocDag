@@ -39,6 +39,18 @@ func TestADRPreset(t *testing.T) {
 		}
 	})
 
+	t.Run("the preset names its revision", func(t *testing.T) {
+		// The preset predates the versioning, so it starts at 1: an output
+		// header that names a revision everywhere is worth more than one that
+		// goes missing wherever the built-in preset is used.
+		if cfg.PresetVersion != 1 {
+			t.Errorf("preset_version = %d, want 1", cfg.PresetVersion)
+		}
+		if len(cfg.Fields) != 0 {
+			t.Errorf("fields = %+v, want the preset to retire nothing", cfg.Fields)
+		}
+	})
+
 	t.Run("the standard status values", func(t *testing.T) {
 		want := []string{"proposed", "accepted", "rejected", "deprecated", "superseded", "withdrawn"}
 

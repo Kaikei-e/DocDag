@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"cmp"
+	"maps"
 	"slices"
 	"strings"
 
@@ -24,6 +26,61 @@ type DepthCount struct {
 type ReferenceCount struct {
 	ID    model.ID `json:"id"`
 	Count int      `json:"count"`
+}
+
+// FieldUsage is how one frontmatter field is used across the corpus: how many
+// documents write it, whether the configuration retired it, and the day a
+// document that writes it last changed. LastChange is empty where no repository
+// answered — a report says what it knows rather than failing for want of git.
+type FieldUsage struct {
+	Field      string `json:"field"`
+	Documents  int    `json:"documents"`
+	Deprecated bool   `json:"deprecated"`
+	LastChange string `json:"last_change,omitempty"`
+}
+
+// ComputeFieldUsage summarises the frontmatter fields the corpus writes, plus
+// the ones it declares and nobody writes: a migration is finished exactly when
+// a retired field's count reaches zero, so that row has to outlive the last
+// document that carried it. changed maps a document path onto the day it last
+// changed; a path it does not hold contributes no date.
+func ComputeFieldUsage(g *model.Graph, cfg config.Config, changed map[string]string) []FieldUsage {
+	counts := make(map[string]int, len(g.Nodes))
+	last := make(map[string]string, len(g.Nodes))
+	for _, id := range g.NodeIDs() {
+		n := g.Nodes[id]
+		day := changed[n.Path]
+		// The node's attributes are the frontmatter as the corpus reads it, so
+		// on a multi-kind corpus the kind the directory answered is among them
+		// whether or not the document wrote it down.
+		for key := range n.Attrs {
+			counts[key]++
+			// ISO 8601 days sort chronologically, so the largest is the latest.
+			if day > last[key] {
+				last[key] = day
+			}
+		}
+	}
+	for _, name := range cfg.DeclaredFields() {
+		if _, counted := counts[name]; !counted {
+			counts[name] = 0
+		}
+	}
+	usage := make([]FieldUsage, 0, len(counts))
+	for _, name := range slices.Sorted(maps.Keys(counts)) {
+		usage = append(usage, FieldUsage{
+			Field:      name,
+			Documents:  counts[name],
+			Deprecated: cfg.FieldDeprecated(name),
+			LastChange: last[name],
+		})
+	}
+	// The rarest fields are the ones a removal decision is about, so the table
+	// counts down towards them; ties read alphabetically.
+	slices.SortFunc(usage, func(a, b FieldUsage) int {
+		return cmp.Or(b.Documents-a.Documents, strings.Compare(a.Field, b.Field))
+	})
+	return usage
 }
 
 // Statistics is the degree-based corpus summary. Every field is computable in

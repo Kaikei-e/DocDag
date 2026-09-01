@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
@@ -31,14 +32,20 @@ func testReport(t *testing.T, fixture string) ([]model.Finding, model.Summary) {
 	}
 	parse.Localize(docs, root)
 	g := graph.Build(docs, cfg)
-	findings := graph.Suggest(graph.Validate(g, cfg), g, cfg)
+	findings := graph.Suggest(graph.Validate(g, cfg, time.Time{}), g, cfg)
 	return findings, graph.Summarize(g, findings)
+}
+
+// testPresetFindingsJSON writes the report the way the CLI does under the ADR
+// preset, so the golden files pin the header a user actually sees.
+func testPresetFindingsJSON(w io.Writer, findings []model.Finding, summary model.Summary) error {
+	return FindingsJSON(w, findings, summary, config.ADRPreset().PresetVersion)
 }
 
 func TestReportGolden(t *testing.T) {
 	writers := map[string]func(io.Writer, []model.Finding, model.Summary) error{
 		"txt":    FindingsText,
-		"json":   FindingsJSON,
+		"json":   testPresetFindingsJSON,
 		"github": FindingsGitHub,
 		"rdjson": FindingsRDJSON,
 	}
@@ -120,11 +127,11 @@ func TestFindingsTextLineFormat(t *testing.T) {
 
 func TestFindingsJSONCarriesTheSchemaVersion(t *testing.T) {
 	var buf bytes.Buffer
-	if err := FindingsJSON(&buf, nil, model.Summary{Documents: 1}); err != nil {
+	if err := FindingsJSON(&buf, nil, model.Summary{Documents: 1}, 3); err != nil {
 		t.Fatalf("FindingsJSON: %v", err)
 	}
-	if !strings.HasPrefix(strings.TrimSpace(buf.String()), "{\n  \"schema_version\": 1,") {
-		t.Fatalf("report = %s, want the schema version first", buf.String())
+	if !strings.HasPrefix(strings.TrimSpace(buf.String()), "{\n  \"schema_version\": 2,\n  \"preset_version\": 3,") {
+		t.Fatalf("report = %s, want the schema version and the preset version first", buf.String())
 	}
 	report := Report{}
 	if err := json.Unmarshal(buf.Bytes(), &report); err != nil {
@@ -133,8 +140,23 @@ func TestFindingsJSONCarriesTheSchemaVersion(t *testing.T) {
 	if report.SchemaVersion != ReportSchemaVersion {
 		t.Errorf("schemaVersion = %d, want %d", report.SchemaVersion, ReportSchemaVersion)
 	}
+	if report.PresetVersion != 3 {
+		t.Errorf("presetVersion = %d, want the configured 3", report.PresetVersion)
+	}
 	if report.Findings == nil {
 		t.Error("findings = null, want an empty array")
+	}
+}
+
+func TestFindingsJSONLeavesOutAnUnversionedPreset(t *testing.T) {
+	// A configuration that names no preset version has none to report, and a
+	// consumer pinning one must not read a zero as a revision.
+	var buf bytes.Buffer
+	if err := FindingsJSON(&buf, nil, model.Summary{Documents: 1}, 0); err != nil {
+		t.Fatalf("FindingsJSON: %v", err)
+	}
+	if strings.Contains(buf.String(), "preset_version") {
+		t.Fatalf("report = %s, want no preset_version", buf.String())
 	}
 }
 
@@ -322,7 +344,7 @@ func TestReportRenderersPropagateWriterErrors(t *testing.T) {
 	findings := []model.Finding{{Severity: model.SeverityError, Rule: model.RuleCycle, ID: "0001", Location: model.Location{Path: "0001.md"}}}
 	renderers := map[string]func(io.Writer, []model.Finding, model.Summary) error{
 		"text":   FindingsText,
-		"json":   FindingsJSON,
+		"json":   testPresetFindingsJSON,
 		"github": FindingsGitHub,
 		"rdjson": FindingsRDJSON,
 	}
@@ -379,5 +401,59 @@ func TestFindingsAboutAFileWithoutAnIdentifier(t *testing.T) {
 				t.Fatalf("report = %q, want it to contain %q", out.String(), tt.want)
 			}
 		})
+	}
+}
+
+func TestFieldUsageText(t *testing.T) {
+	usage := []graph.FieldUsage{
+		{Field: "status", Documents: 6, LastChange: "2026-03-04"},
+		{Field: "owner", Documents: 2, Deprecated: true, LastChange: "2026-01-02"},
+		{Field: "team", Documents: 0, Deprecated: true},
+	}
+
+	var buf bytes.Buffer
+	if err := FieldUsageText(&buf, usage); err != nil {
+		t.Fatalf("FieldUsageText: %v", err)
+	}
+
+	want := []string{
+		"field   documents  last change  deprecated",
+		"status  6          2026-03-04   -",
+		"owner   2          2026-01-02   yes",
+		"team    0          -            yes",
+	}
+	got := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(got) != len(want) {
+		t.Fatalf("report =\n%s\nwant %d lines", buf.String(), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestFieldUsageRenderersPropagateWriterErrors(t *testing.T) {
+	usage := []graph.FieldUsage{{Field: "owner", Documents: 2, Deprecated: true}}
+	renderers := map[string]func(io.Writer, []graph.FieldUsage) error{
+		"text": FieldUsageText,
+		"json": FieldUsageJSON,
+	}
+	for name, write := range renderers {
+		t.Run(name, func(t *testing.T) {
+			if err := write(failingWriter{}, usage); err == nil {
+				t.Fatal("err = nil, want the write failure surfaced")
+			}
+		})
+	}
+}
+
+func TestFieldUsageJSONWritesAnEmptyArrayRatherThanNull(t *testing.T) {
+	var buf bytes.Buffer
+	if err := FieldUsageJSON(&buf, nil); err != nil {
+		t.Fatalf("FieldUsageJSON: %v", err)
+	}
+	if !strings.Contains(buf.String(), `"fields": []`) {
+		t.Fatalf("report = %s, want an empty array", buf.String())
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/Kaikei-e/DocDag/internal/brief"
+	"github.com/Kaikei-e/DocDag/internal/config"
 )
 
 func TestContextTextReportsTheReferenceAndItsResolution(t *testing.T) {
@@ -100,6 +101,9 @@ func TestContextJSONCarriesTheWholeBrief(t *testing.T) {
 	b := decodeJSON[brief.Brief](t, got.stdout)
 	if b.SchemaVersion != brief.SchemaVersion {
 		t.Errorf("schema_version = %d, want %d", b.SchemaVersion, brief.SchemaVersion)
+	}
+	if b.PresetVersion != config.ADRPresetVersion {
+		t.Errorf("preset_version = %d, want the preset's %d", b.PresetVersion, config.ADRPresetVersion)
 	}
 	if b.Ref.ID != "0002" || b.Ref.Status != "superseded" {
 		t.Errorf("ref = %+v, want the superseded document", b.Ref)

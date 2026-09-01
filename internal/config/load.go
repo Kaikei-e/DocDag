@@ -113,6 +113,9 @@ func Merge(base, override Config) Config {
 	if override.Preset != "" {
 		merged.Preset = override.Preset
 	}
+	if override.PresetVersion != 0 {
+		merged.PresetVersion = override.PresetVersion
+	}
 	if override.Dir != "" {
 		merged.Dir = override.Dir
 	}
@@ -136,6 +139,12 @@ func Merge(base, override Config) Config {
 	// describes every edge it has.
 	if override.Kinds != nil {
 		merged.Kinds = maps.Clone(override.Kinds)
+	}
+	// The field declarations are a vocabulary too: a corpus that writes fields:
+	// describes every field it declares, and an explicitly empty map says it
+	// declares none.
+	if override.Fields != nil {
+		merged.Fields = maps.Clone(override.Fields)
 	}
 	if override.Edges != nil {
 		merged.Edges = slices.Clone(override.Edges)

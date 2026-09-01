@@ -48,8 +48,30 @@ func suggestion(f model.Finding, g *model.Graph, cfg config.Config) string {
 		return "add a YAML frontmatter block with title and " + statusField(cfg)
 	case model.RuleCycle:
 		return "remove one of the listed edges"
+	case model.RuleDeprecatedField:
+		return migrateField(g, cfg, f)
 	}
 	return ""
+}
+
+// migrateField names the key a retired field's value belongs under, where the
+// declaration says. A field retired without a migrate_to has no mechanical
+// remedy: it is being removed, not moved, and only the author knows what the
+// value was for.
+func migrateField(g *model.Graph, cfg config.Config, f model.Finding) string {
+	match := quotedRef.FindStringSubmatch(f.Detail)
+	if match == nil {
+		return ""
+	}
+	kind := ""
+	if n, ok := g.Node(f.ID); ok {
+		kind = n.Kind
+	}
+	spec, ok := cfg.Field(kind, match[1])
+	if !ok || spec.MigrateTo == "" {
+		return ""
+	}
+	return fmt.Sprintf("migrate %s to %s", match[1], spec.MigrateTo)
 }
 
 // didYouMean names the existing documents closest to the reference that named

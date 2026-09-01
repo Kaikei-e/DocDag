@@ -906,6 +906,97 @@ edges:
 	}
 }
 
+func TestLoadFields(t *testing.T) {
+	// The unquoted sunset is how a person writes a date in YAML, and it has to
+	// reach the checker as the day it reads as.
+	file := `preset_version: 3
+fields:
+  owner: {deprecated: true, since: 2, migrate_to: "owned-by", sunset: 2027-01-01}
+  team: {}
+kinds:
+  clause:
+    dir: spec/clauses
+    fields:
+      level: {deprecated: true, migrate_to: modality}
+`
+	root := testTree(t, map[string]string{"docdag.yaml": file})
+
+	got, err := Load(filepath.Join(root, "docdag.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got.PresetVersion != 3 {
+		t.Errorf("preset_version = %d, want 3", got.PresetVersion)
+	}
+	want := map[string]FieldSpec{
+		"owner": {Deprecated: true, Since: 2, MigrateTo: "owned-by", Sunset: "2027-01-01"},
+		"team":  {},
+	}
+	if !reflect.DeepEqual(got.Fields, want) {
+		t.Errorf("fields = %+v, want %+v", got.Fields, want)
+	}
+	wantKind := map[string]FieldSpec{"level": {Deprecated: true, MigrateTo: "modality"}}
+	if !reflect.DeepEqual(got.Kinds["clause"].Fields, wantKind) {
+		t.Errorf("kind fields = %+v, want %+v", got.Kinds["clause"].Fields, wantKind)
+	}
+}
+
+func TestMergeFields(t *testing.T) {
+	t.Run("a written fields map replaces the base wholesale", func(t *testing.T) {
+		base := ADRPreset()
+		base.Fields = map[string]FieldSpec{"owner": {Deprecated: true}, "team": {}}
+
+		got := Merge(base, Config{Fields: map[string]FieldSpec{"team": {Deprecated: true}}})
+
+		want := map[string]FieldSpec{"team": {Deprecated: true}}
+		if !reflect.DeepEqual(got.Fields, want) {
+			t.Fatalf("fields = %+v, want exactly the override %+v", got.Fields, want)
+		}
+	})
+
+	t.Run("an empty fields map clears the base", func(t *testing.T) {
+		base := ADRPreset()
+		base.Fields = map[string]FieldSpec{"owner": {Deprecated: true}}
+
+		if got := Merge(base, Config{Fields: map[string]FieldSpec{}}); len(got.Fields) != 0 {
+			t.Fatalf("fields = %+v, want the explicit empty map to clear them", got.Fields)
+		}
+	})
+
+	t.Run("an unwritten fields map keeps the base", func(t *testing.T) {
+		base := ADRPreset()
+		base.Fields = map[string]FieldSpec{"owner": {Deprecated: true}}
+
+		if got := Merge(base, Config{IDWidth: 6}); !reflect.DeepEqual(got.Fields, base.Fields) {
+			t.Fatalf("fields = %+v, want the base %+v", got.Fields, base.Fields)
+		}
+	})
+
+	t.Run("the merged map is a copy of the override", func(t *testing.T) {
+		override := Config{Fields: map[string]FieldSpec{"owner": {Deprecated: true}}}
+
+		got := Merge(ADRPreset(), override)
+		override.Fields["team"] = FieldSpec{}
+
+		if _, leaked := got.Fields["team"]; leaked {
+			t.Fatalf("fields = %+v, want the merge to have copied the map", got.Fields)
+		}
+	})
+
+	t.Run("a written preset version replaces the preset's", func(t *testing.T) {
+		if got := Merge(ADRPreset(), Config{PresetVersion: 3}); got.PresetVersion != 3 {
+			t.Fatalf("preset_version = %d, want the override's 3", got.PresetVersion)
+		}
+	})
+
+	t.Run("an unwritten preset version keeps the preset's", func(t *testing.T) {
+		if got := Merge(ADRPreset(), Config{IDWidth: 6}); got.PresetVersion != ADRPresetVersion {
+			t.Fatalf("preset_version = %d, want the preset's %d", got.PresetVersion, ADRPresetVersion)
+		}
+	})
+}
+
 func TestMergeKinds(t *testing.T) {
 	t.Run("a written kinds map replaces the base wholesale", func(t *testing.T) {
 		base := ADRPreset()

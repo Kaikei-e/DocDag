@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -36,7 +37,9 @@ func newValidateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			findings := graph.Validate(g, cfg)
+			// The day is read here rather than inside the checks, so one run
+			// compares every sunset against one date and a test can name it.
+			findings := graph.Validate(g, cfg, time.Now())
 			history, err := immutableFindings(cmd, cfg)
 			if err != nil {
 				return err
@@ -56,7 +59,7 @@ func newValidateCmd() *cobra.Command {
 			out := cmd.OutOrStdout()
 			switch format {
 			case formatJSON:
-				err = render.FindingsJSON(out, reported, summary)
+				err = render.FindingsJSON(out, reported, summary, cfg.PresetVersion)
 			case formatGitHub:
 				err = render.FindingsGitHub(out, reported, summary)
 			case formatRDJSON:

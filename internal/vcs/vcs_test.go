@@ -1,6 +1,7 @@
 package vcs
 
 import (
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -157,6 +158,119 @@ func TestRepoChanges(t *testing.T) {
 			t.Fatalf("Untracked = %v, want the new document", got)
 		}
 	})
+}
+
+func TestRepoLastChanged(t *testing.T) {
+	dir := testRepo(t, map[string]string{
+		"docs/adr/0001-a-decision.md": "# A decision\n",
+		"docs/adr/0002-another.md":    "# Another\n",
+		"README.md":                   "# Readme\n",
+	})
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	first := testCommittedDay(t, dir, "HEAD")
+	// A second commit touching one of the two documents, dated later than the
+	// first whatever day the suite runs on, so the walk has two days to choose
+	// between for that path and one for the other.
+	testWrite(t, dir, map[string]string{"docs/adr/0001-a-decision.md": "# A decision\n\nMore.\n"})
+	testGit(t, dir, "add", "-A")
+	testCommitAt(t, dir, "the second revision", "2099-01-02T12:00:00+00:00")
+
+	t.Run("each file reports the day it last changed", func(t *testing.T) {
+		got, err := repo.LastChanged(filepath.Join(dir, "docs", "adr"))
+		if err != nil {
+			t.Fatalf("LastChanged: %v", err)
+		}
+		want := map[string]string{
+			"docs/adr/0001-a-decision.md": "2099-01-02",
+			"docs/adr/0002-another.md":    first,
+		}
+		if !maps.Equal(got, want) {
+			t.Fatalf("LastChanged = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a directory nobody asked about is left out", func(t *testing.T) {
+		got, err := repo.LastChanged(filepath.Join(dir, "docs", "adr"))
+		if err != nil {
+			t.Fatalf("LastChanged: %v", err)
+		}
+		if _, listed := got["README.md"]; listed {
+			t.Fatalf("LastChanged = %v, want the pathspec to hold it to the documents", got)
+		}
+	})
+
+	t.Run("naming no directory asks about the whole tree", func(t *testing.T) {
+		got, err := repo.LastChanged()
+		if err != nil {
+			t.Fatalf("LastChanged: %v", err)
+		}
+		if got["README.md"] != first {
+			t.Fatalf("LastChanged = %v, want the README dated too", got)
+		}
+	})
+
+	t.Run("a path outside the tree is an error rather than an empty answer", func(t *testing.T) {
+		if _, err := repo.LastChanged(t.TempDir()); err == nil {
+			t.Fatal("LastChanged succeeded outside the working tree, want an error")
+		}
+	})
+}
+
+func TestRepoRel(t *testing.T) {
+	dir := testRepo(t, map[string]string{"docs/adr/0001-a-decision.md": "# A decision\n"})
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	t.Run("a file is named the way git names it", func(t *testing.T) {
+		got, err := repo.Rel(filepath.Join(dir, "docs", "adr", "0001-a-decision.md"))
+		if err != nil {
+			t.Fatalf("Rel: %v", err)
+		}
+		if got != "docs/adr/0001-a-decision.md" {
+			t.Fatalf("Rel = %q, want the repository-relative slash-separated path", got)
+		}
+	})
+
+	t.Run("the working tree root is the current directory", func(t *testing.T) {
+		got, err := repo.Rel(dir)
+		if err != nil {
+			t.Fatalf("Rel: %v", err)
+		}
+		if got != "." {
+			t.Fatalf("Rel = %q, want .", got)
+		}
+	})
+}
+
+// testCommitAt commits with the dates pinned, so a test can say which day a
+// file changed on whatever day it runs. Git reads them from the environment:
+// there is no configuration key for a commit's date.
+func testCommitAt(t *testing.T, dir, message, date string) {
+	t.Helper()
+	cmd := exec.Command("git", "-C", dir,
+		"-c", "user.name=DocDag Test",
+		"-c", "user.email=test@example.test",
+		"-c", "commit.gpgsign=false",
+		"commit", "--quiet", "-m", message)
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, "nonexistent-gitconfig"),
+		"GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_DATE="+date,
+		"GIT_COMMITTER_DATE="+date,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+}
+
+func testCommittedDay(t *testing.T, dir, rev string) string {
+	t.Helper()
+	return strings.TrimSpace(testGit(t, dir, "show", "-s", "--format=%cs", rev))
 }
 
 func TestRepoFile(t *testing.T) {

@@ -14,8 +14,9 @@ import (
 	"github.com/Kaikei-e/DocDag/internal/parse"
 )
 
-// SchemaVersion is the version of the JSON brief.
-const SchemaVersion = 1
+// SchemaVersion is the version of the JSON brief. Version 2 heads it with the
+// preset revision, as the validation report does.
+const SchemaVersion = 2
 
 // Defaults a caller applies when the user asks for nothing in particular.
 const (
@@ -63,9 +64,12 @@ type Budget struct {
 	Degraded int `json:"degraded"`
 }
 
-// Brief is the assembled context of one document.
+// Brief is the assembled context of one document. PresetVersion is the revision
+// of the preset the corpus is written against, left out where the configuration
+// names none.
 type Brief struct {
 	SchemaVersion int     `json:"schema_version"`
+	PresetVersion int     `json:"preset_version,omitempty"`
 	Ref           Entry   `json:"ref"`
 	ResolvesTo    []Entry `json:"resolves_to"`
 	Ancestors     []Entry `json:"ancestors"`
@@ -98,7 +102,13 @@ func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief
 		opts.Section = DefaultSection
 	}
 
-	b := &Brief{SchemaVersion: SchemaVersion, ResolvesTo: []Entry{}, Ancestors: []Entry{}, Descendants: []Entry{}}
+	b := &Brief{
+		SchemaVersion: SchemaVersion,
+		PresetVersion: cfg.PresetVersion,
+		ResolvesTo:    []Entry{},
+		Ancestors:     []Entry{},
+		Descendants:   []Entry{},
+	}
 	ref, err := entry(g, opts.Section, id)
 	if err != nil {
 		return nil, err

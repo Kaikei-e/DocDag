@@ -166,6 +166,87 @@ func TestComputeStatsOnCyclicGraph(t *testing.T) {
 	}
 }
 
+func TestComputeFieldUsage(t *testing.T) {
+	cfg := config.ADRPreset()
+	cfg.Fields = map[string]config.FieldSpec{
+		"owner": {Deprecated: true, MigrateTo: "owned-by"},
+		"team":  {Deprecated: true},
+	}
+	g := testGraph(
+		[]*model.Node{
+			testNodeAttrs("0001", config.StatusAccepted, map[string]any{"owner": "platform"}),
+			testNodeAttrs("0002", config.StatusAccepted, map[string]any{"owner": "payments", "tags": []any{"legacy"}}),
+			testNodeAttrs("0003", config.StatusAccepted, nil),
+		},
+		nil, nil,
+	)
+	changed := map[string]string{"0001.md": "2026-03-04", "0002.md": "2026-01-02"}
+
+	got := ComputeFieldUsage(g, cfg, changed)
+
+	t.Run("fields count down, ties alphabetically", func(t *testing.T) {
+		want := []string{"status", "owner", "tags", "team"}
+		names := make([]string, 0, len(got))
+		for _, u := range got {
+			names = append(names, u.Field)
+		}
+		if !slices.Equal(names, want) {
+			t.Fatalf("fields = %v, want %v", names, want)
+		}
+	})
+
+	t.Run("a written field carries its count and its latest change", func(t *testing.T) {
+		owner := testFieldUsage(t, got, "owner")
+
+		if owner.Documents != 2 {
+			t.Errorf("documents = %d, want 2", owner.Documents)
+		}
+		if owner.LastChange != "2026-03-04" {
+			t.Errorf("last change = %q, want the most recent of the two", owner.LastChange)
+		}
+		if !owner.Deprecated {
+			t.Error("deprecated = false, want the retirement flagged")
+		}
+	})
+
+	t.Run("a declared field nobody writes is still a row", func(t *testing.T) {
+		// A migration is finished exactly when the count reaches zero, so the
+		// row has to outlive the last document that carried it.
+		team := testFieldUsage(t, got, "team")
+
+		if team.Documents != 0 || team.LastChange != "" {
+			t.Fatalf("team = %+v, want an empty row", team)
+		}
+	})
+
+	t.Run("a field nobody declared is counted and not flagged", func(t *testing.T) {
+		tags := testFieldUsage(t, got, "tags")
+
+		if tags.Documents != 1 || tags.Deprecated {
+			t.Fatalf("tags = %+v, want one document and no retirement", tags)
+		}
+	})
+
+	t.Run("a corpus outside a repository reports counts without dates", func(t *testing.T) {
+		for _, u := range ComputeFieldUsage(g, cfg, nil) {
+			if u.LastChange != "" {
+				t.Fatalf("%s last change = %q, want none where git answered nothing", u.Field, u.LastChange)
+			}
+		}
+	})
+}
+
+func testFieldUsage(t *testing.T, usage []FieldUsage, field string) FieldUsage {
+	t.Helper()
+	for _, u := range usage {
+		if u.Field == field {
+			return u
+		}
+	}
+	t.Fatalf("field %q is not in %+v", field, usage)
+	return FieldUsage{}
+}
+
 // testStatsFixture chains 0003 -> 0002 -> 0001 by supersedes, hangs a depends-on
 // edge off it, leaves 0005 unconnected and links three reference-layer edges.
 func testStatsFixture() *model.Graph {
