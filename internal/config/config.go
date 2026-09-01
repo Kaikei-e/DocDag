@@ -20,7 +20,8 @@ import (
 
 // Preset names.
 const (
-	PresetADR = "adr"
+	PresetADR  = "adr"
+	PresetSpec = "spec"
 )
 
 // Defaults applied when neither flags nor docdag.yaml say otherwise.

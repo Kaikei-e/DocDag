@@ -157,6 +157,17 @@ func copyFixture(t *testing.T, name string) string {
 	return dst
 }
 
+// copyFixtureTree copies a whole fixture, subdirectories included, so a test
+// may write into a multi-kind corpus without touching the checkout.
+func copyFixtureTree(t *testing.T, name string) string {
+	t.Helper()
+	dst := t.TempDir()
+	if err := os.CopyFS(dst, os.DirFS(fixture(t, name))); err != nil {
+		t.Fatalf("copy fixture %s: %v", name, err)
+	}
+	return dst
+}
+
 // docPath names a file the way docdag prints one, whatever separator the
 // platform joins paths with.
 func docPath(elem ...string) string { return filepath.ToSlash(filepath.Join(elem...)) }

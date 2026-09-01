@@ -279,6 +279,22 @@ The document's status is `superseded` and nothing supersedes it: `status is supe
 document supersedes it`. Fix: `declare supersedes: 0002 in the replacing document, or set status:
 withdrawn`.
 
+### The `spec` preset's rules
+
+`preset: spec` replaces the two rules above with five of its own, written in
+[configuration.md](configuration.md#the-spec-preset) and carrying no fix suggestion — each names a
+decision rather than an edit:
+
+- `orphan_must` — error. An accepted `level: MUST` clause that no conformance test enforces: `is
+  MUST and accepted but nothing enforces it`. Either write the test or drop the clause to `SHOULD`.
+- `orphan_test` — error. A `conform` document that declares no `enforces:`: `enforces no clause`.
+- `stale_premise` — error. An accepted document one hop from a `retired` premise: `is accepted but a
+  premise is retired`.
+- `deviation_pressure` — warn. Five or more deviations recorded against one clause: `has 5+
+  deviations; reconsider the clause`.
+- `no_counterexample` — warn. An accepted clause with no `counterexample:`: `is accepted without a
+  counterexample`.
+
 ## The reference layer
 
 The reference layer is the untyped links found in document bodies: `[[wikilink]]`,
@@ -333,8 +349,9 @@ testdata/fixtures/status-drift/0001-serve-images-from-the-application-server.md:
 That run exits 1. The other directories are named for the finding or the behaviour they exercise —
 `cycle`, `union-cycle`, `union-cycle-shadowed`, `superseded-orphan`, `id-collision`, `dangling`,
 `dangling-reference`, `empty-edge`, `invalid-yaml`, `inverse-mismatch`, `cardinality`, `withdrawn`,
-`any-of`, `list-attrs`, `fan-in`, `depends-impact`, `projections`, `edge-attrs`, `kinds`. The last
-three carry a `docdag.yaml` of their own, so run them with `--config <dir>/docdag.yaml`.
+`any-of`, `list-attrs`, `fan-in`, `depends-impact`, `projections`, `edge-attrs`, `kinds`,
+`spec-vault`. The last four carry a `docdag.yaml` of their own, so run them with
+`--config <dir>/docdag.yaml`.
 
 `kinds` is the multi-kind corpus: clauses, conformance tests and deviations in three directories,
 carrying one of each kind finding. Its documents live under the kinds rather than in the fixture
@@ -342,4 +359,12 @@ directory itself, so it is run by `--config` alone:
 
 ```console
 $ docdag validate --config testdata/fixtures/kinds/docdag.yaml
+```
+
+`spec-vault` is a small corpus under the `spec` preset — thirteen documents across the seven kinds,
+configured by `preset: spec` and nothing else. Nothing structural is wrong with it; every finding it
+carries comes from a preset rule:
+
+```console
+$ docdag validate --config testdata/fixtures/spec-vault/docdag.yaml
 ```

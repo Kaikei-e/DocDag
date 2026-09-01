@@ -1,9 +1,12 @@
 package newdoc
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -452,4 +455,248 @@ depends-on:
 			}
 		})
 	}
+}
+
+// testKindConfig is the spec preset with its kind directories left as the
+// preset writes them, which is what a plan joins a file name onto.
+func testKindConfig() config.Config { return config.SpecPreset() }
+
+func testKindGraph(kinds map[string]string) *model.Graph {
+	g := &model.Graph{Nodes: make(map[model.ID]*model.Node, len(kinds))}
+	for id, kind := range kinds {
+		g.Nodes[model.ID(id)] = &model.Node{
+			ID:    model.ID(id),
+			Kind:  kind,
+			Path:  id + ".md",
+			Title: "Document " + id,
+		}
+	}
+	return g
+}
+
+func TestNextKindID(t *testing.T) {
+	// A digit-run kind beside kinds whose identifiers are not numbers at all:
+	// only its own documents can be counted, and the others must not make the
+	// count fail.
+	cfg := config.ADRPreset()
+	cfg.IDWidth = 4
+	cfg.Kinds = map[string]config.KindSpec{
+		"note":   {Dir: "notes"},
+		"clause": {Dir: "clauses", ID: config.IDClause},
+	}
+	g := testKindGraph(map[string]string{
+		"0001": "note", "0007": "note", "UZ-V-001": "clause", "UZ-V-009": "clause",
+	})
+
+	got, err := NextKindID(g, cfg, "note")
+	if err != nil {
+		t.Fatalf("NextKindID: %v", err)
+	}
+	if got != "0008" {
+		t.Errorf("NextKindID = %q, want 0008, the one after the highest note", got)
+	}
+}
+
+func TestKindFilename(t *testing.T) {
+	cfg := testKindConfig()
+	tests := []struct {
+		name  string
+		kind  string
+		id    model.ID
+		title string
+		want  string
+	}{
+		{
+			name:  "a file-name shaped identifier names the file, slug and all left out",
+			kind:  config.KindClause,
+			id:    "UZ-V-007",
+			title: "Runs are recorded with their seed",
+			want:  "UZ-V-007.md",
+		},
+		{
+			name:  "an identifier carrying a slash is named by its last segment",
+			kind:  config.KindConform,
+			id:    "conform/uz-v-007",
+			title: "Check that runs record their seed",
+			want:  "uz-v-007.md",
+		},
+		{
+			name:  "a generated measurement keeps the day in its name",
+			kind:  config.KindMeasure,
+			id:    "interp/UZ-V-001@2026-08-01",
+			title: "Agreement on the evidence check",
+			want:  "UZ-V-001@2026-08-01.md",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := KindFilename(cfg, tt.kind, tt.id, tt.title); got != tt.want {
+				t.Errorf("KindFilename(%q, %q) = %q, want %q", tt.kind, tt.id, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("a kind that declares no pattern keeps the filename template", func(t *testing.T) {
+		cfg := config.ADRPreset()
+		cfg.Kinds = map[string]config.KindSpec{"note": {Dir: "notes"}}
+
+		if got := KindFilename(cfg, "note", "0007", "Adopt caches"); got != "0007-adopt-caches.md" {
+			t.Errorf("KindFilename = %q, want the template's answer", got)
+		}
+	})
+
+	t.Run("a corpus without kinds is named as it always was", func(t *testing.T) {
+		if got := KindFilename(config.ADRPreset(), "", "0007", "Adopt caches"); got != "0007-adopt-caches.md" {
+			t.Errorf("KindFilename = %q, want the template's answer", got)
+		}
+	})
+}
+
+func TestEdgeBlockForAKind(t *testing.T) {
+	cfg := testKindConfig()
+
+	t.Run("a clause is offered the edges a clause may declare", func(t *testing.T) {
+		got, err := EdgeBlock(cfg, Request{Kind: config.KindClause})
+		if err != nil {
+			t.Fatalf("EdgeBlock: %v", err)
+		}
+		want := "# supersedes:\n" +
+			"#   - {ref: <clause|premise>, reason: <recurrence|premise-collapse|conflict|vocabulary>}\n" +
+			"# premise:\n#   - <premise>\n" +
+			"# rationale:\n#   - <principle>\n" +
+			"# counterexample:\n#   - <pm>\n"
+		if got != want {
+			t.Errorf("EdgeBlock =\n%s\nwant:\n%s", got, want)
+		}
+	})
+
+	t.Run("a conformance test is offered the one edge it declares", func(t *testing.T) {
+		got, err := EdgeBlock(cfg, Request{Kind: config.KindConform})
+		if err != nil {
+			t.Fatalf("EdgeBlock: %v", err)
+		}
+		if got != "# enforces:\n#   - <clause>\n" {
+			t.Errorf("EdgeBlock = %q, want the enforces stub alone", got)
+		}
+	})
+
+	t.Run("an edge that requires an attribute is not written for the caller", func(t *testing.T) {
+		// The entry would be incomplete, and a creation has no value to put
+		// there: refusing beats handing back a document that fails validation.
+		_, err := EdgeBlock(cfg, Request{Kind: config.KindClause, Supersedes: []string{"UZ-V-001"}})
+
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("err = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+		if !strings.Contains(err.Error(), config.AttrReason) {
+			t.Errorf("err = %v, want it to name the required attribute", err)
+		}
+	})
+
+	t.Run("a corpus without kinds is offered no stubs", func(t *testing.T) {
+		got, err := EdgeBlock(config.ADRPreset(), Request{Title: "Adopt caches"})
+		if err != nil {
+			t.Fatalf("EdgeBlock: %v", err)
+		}
+		if got != "" {
+			t.Errorf("EdgeBlock = %q, want nothing: a single-kind corpus writes what it asked for", got)
+		}
+	})
+}
+
+func TestNewPlanForAKind(t *testing.T) {
+	cfg := testKindConfig()
+	g := testKindGraph(map[string]string{"UZ-V-001": config.KindClause})
+	date := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+
+	t.Run("a clause is written into its own directory, named after its identifier", func(t *testing.T) {
+		plan, err := NewPlan(g, cfg, Request{
+			Kind: config.KindClause, ID: "UZ-V-007", Title: "Runs are recorded with their seed", Date: date,
+		})
+		if err != nil {
+			t.Fatalf("NewPlan: %v", err)
+		}
+		if want := filepath.Join("spec", "clauses", "UZ-V-007.md"); plan.Path != want {
+			t.Errorf("path = %q, want %q", plan.Path, want)
+		}
+		want := "---\n" +
+			"id: UZ-V-007\n" +
+			"kind: clause\n" +
+			"title: Runs are recorded with their seed\n" +
+			"status: proposed\n" +
+			"date: 2026-09-01\n" +
+			"# supersedes:\n" +
+			"#   - {ref: <clause|premise>, reason: <recurrence|premise-collapse|conflict|vocabulary>}\n" +
+			"# premise:\n#   - <premise>\n" +
+			"# rationale:\n#   - <principle>\n" +
+			"# counterexample:\n#   - <pm>\n" +
+			"---\n\n# Runs are recorded with their seed\n"
+		if string(plan.Content) != want {
+			t.Errorf("content =\n%s\nwant:\n%s", plan.Content, want)
+		}
+	})
+
+	t.Run("a kind that answers to no status vocabulary is written without one", func(t *testing.T) {
+		plan, err := NewPlan(g, cfg, Request{
+			Kind: config.KindConform, ID: "conform/uz-v-007", Title: "Check the seed", Date: date,
+		})
+		if err != nil {
+			t.Fatalf("NewPlan: %v", err)
+		}
+		if want := filepath.Join("spec", "conform", "uz-v-007.md"); plan.Path != want {
+			t.Errorf("path = %q, want %q", plan.Path, want)
+		}
+		if strings.Contains(string(plan.Content), cfg.EffectiveStatus()+":") {
+			t.Errorf("content =\n%s\nwant no status key: the kind answers to no vocabulary", plan.Content)
+		}
+		if !strings.Contains(string(plan.Content), "id: conform/uz-v-007\n") {
+			t.Errorf("content =\n%s\nwant the identifier, which no file name of this kind can carry", plan.Content)
+		}
+	})
+
+	t.Run("a declared pattern has no next identifier to take", func(t *testing.T) {
+		_, err := NewPlan(g, cfg, Request{Kind: config.KindClause, Title: "Runs are recorded with their seed"})
+
+		if !errors.Is(err, model.ErrUnknownID) {
+			t.Fatalf("err = %v, want it to wrap model.ErrUnknownID", err)
+		}
+	})
+
+	t.Run("an identifier the kind's pattern rejects is refused", func(t *testing.T) {
+		_, err := NewPlan(g, cfg, Request{Kind: config.KindClause, ID: "0007", Title: "Runs are recorded"})
+
+		if !errors.Is(err, model.ErrUnknownID) {
+			t.Fatalf("err = %v, want it to wrap model.ErrUnknownID", err)
+		}
+	})
+
+	t.Run("a digit-run kind counts up from its own documents", func(t *testing.T) {
+		counted := config.ADRPreset()
+		counted.Kinds = map[string]config.KindSpec{"note": {Dir: "notes"}}
+		notes := testKindGraph(map[string]string{"0003": "note"})
+
+		plan, err := NewPlan(notes, counted, Request{Kind: "note", Title: "A note", Date: date})
+		if err != nil {
+			t.Fatalf("NewPlan: %v", err)
+		}
+		if plan.ID != "0004" {
+			t.Errorf("id = %q, want 0004", plan.ID)
+		}
+		if want := filepath.Join("notes", "0004-a-note.md"); plan.Path != want {
+			t.Errorf("path = %q, want %q", plan.Path, want)
+		}
+		// A kind with no pattern writes no identifier: the file name carries it,
+		// exactly as it does on a corpus that declares no kinds at all.
+		if strings.Contains(string(plan.Content), "id:") {
+			t.Errorf("content =\n%s\nwant no id key", plan.Content)
+		}
+	})
+
+	t.Run("a kind nobody declared is refused", func(t *testing.T) {
+		_, err := NewPlan(g, cfg, Request{Kind: "bogus", ID: "UZ-V-007", Title: "Runs"})
+
+		if !errors.Is(err, model.ErrUnknownID) {
+			t.Fatalf("err = %v, want it to wrap model.ErrUnknownID", err)
+		}
+	})
 }

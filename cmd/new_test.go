@@ -436,3 +436,139 @@ func TestNewRefusesAMultiKindCorpus(t *testing.T) {
 		t.Errorf("stderr = %q, want it to ask for --kind", got.stderr)
 	}
 }
+
+func TestNewRefusesAKindOnACorpusWithoutKinds(t *testing.T) {
+	got := run(t, "new", "Adopt content addressed cache keys", "--kind", "clause", "--dir", fixture(t, "ok-basic"))
+
+	assertExit(t, got, 1)
+	if !strings.Contains(got.stderr, "describes nothing") {
+		t.Errorf("stderr = %q, want it to say the corpus declares no kinds", got.stderr)
+	}
+}
+
+func TestNewRefusesAKindNobodyDeclared(t *testing.T) {
+	got := run(t, "new", "Runs are recorded with their seed", "--kind", "policy", "--config", specVaultConfig(t))
+
+	assertExit(t, got, 1)
+	if !strings.Contains(got.stderr, "unknown kind") || !strings.Contains(got.stderr, "clause") {
+		t.Errorf("stderr = %q, want it to name the unknown kind and the declared ones", got.stderr)
+	}
+}
+
+func TestNewRequiresAnIdentifierForAPatternKind(t *testing.T) {
+	// A declared pattern is a spelling, not a sequence: there is no next
+	// UZ-V-007 to take, so the caller has to say which one it is.
+	got := run(t, "new", "Runs are recorded with their seed", "--kind", "clause", "--config", specVaultConfig(t))
+
+	assertExit(t, got, 1)
+	if !strings.Contains(got.stderr, "--id") {
+		t.Errorf("stderr = %q, want it to ask for the identifier", got.stderr)
+	}
+}
+
+func TestNewCreatesADocumentOfAKind(t *testing.T) {
+	vault := copyFixtureTree(t, "spec-vault")
+	cfg := filepath.Join(vault, "docdag.yaml")
+	title := "Runs are recorded with their seed"
+
+	got := run(t, "new", title, "--kind", "clause", "--id", "UZ-V-007", "--config", cfg)
+
+	assertExit(t, got, 0)
+	// The identifier names the file: the kind's pattern accepts that stem, so
+	// the name and the identity agree without a slug between them.
+	wantPath := docPath(vault, "spec", "clauses", "UZ-V-007.md")
+	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
+
+	created, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read created document: %v", err)
+	}
+	frontmatter, body := splitDocument(t, created)
+	for key, want := range map[string]any{"id": "UZ-V-007", "kind": "clause", "title": title, "status": "proposed"} {
+		if frontmatter[key] != want {
+			t.Errorf("%s = %v, want %v", key, frontmatter[key], want)
+		}
+	}
+	if date := fmt.Sprint(frontmatter["date"]); date == "" {
+		t.Errorf("date = %q, want today", date)
+	}
+	// The edges a clause may declare are offered as comments: an edge key that
+	// is present and names nothing is the empty_edge finding.
+	for _, key := range []string{"supersedes", "premise", "rationale", "counterexample"} {
+		if _, present := frontmatter[key]; present {
+			t.Errorf("frontmatter carries %q, want it commented out: %+v", key, frontmatter)
+		}
+		if !strings.Contains(string(created), "# "+key+":") {
+			t.Errorf("document offers no %q stub:\n%s", key, created)
+		}
+	}
+	// A clause writes no edge a clause may not declare.
+	for _, key := range []string{"enforces", "deviates-from", "measures"} {
+		if strings.Contains(string(created), key+":") {
+			t.Errorf("document offers %q, which a clause may not declare:\n%s", key, created)
+		}
+	}
+	if !strings.Contains(body, "# "+title) {
+		t.Errorf("body is missing the title heading:\n%s", body)
+	}
+}
+
+func TestNewLeavesASpecCorpusExactlyAsItFoundIt(t *testing.T) {
+	vault := copyFixtureTree(t, "spec-vault")
+	cfg := filepath.Join(vault, "docdag.yaml")
+	before := run(t, "validate", "--config", cfg)
+
+	created := run(t, "new", "Runs are recorded with their seed", "--kind", "clause", "--id", "UZ-V-007", "--config", cfg)
+	assertExit(t, created, 0)
+
+	after := run(t, "validate", "--config", cfg)
+	assertExit(t, after, 1)
+	assertLines(t, "findings", findingLines(after.stdout), findingLines(before.stdout))
+}
+
+func TestNewCreatesAKindWithoutAStatusVocabulary(t *testing.T) {
+	vault := copyFixtureTree(t, "spec-vault")
+
+	got := run(t, "new", "Check that runs record their seed",
+		"--kind", "conform", "--id", "conform/uz-v-007", "--config", filepath.Join(vault, "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	// The identifier carries a slash, so its last segment names the file and
+	// the frontmatter carries the whole of it.
+	wantPath := docPath(vault, "spec", "conform", "uz-v-007.md")
+	assertLines(t, "created path", lines(got.stdout), []string{wantPath})
+
+	created, err := os.ReadFile(wantPath)
+	if err != nil {
+		t.Fatalf("read created document: %v", err)
+	}
+	frontmatter, _ := splitDocument(t, created)
+	if frontmatter["id"] != "conform/uz-v-007" {
+		t.Errorf("id = %v, want the whole identifier", frontmatter["id"])
+	}
+	if _, present := frontmatter["status"]; present {
+		t.Errorf("frontmatter carries a status, want none: the kind answers to no vocabulary: %+v", frontmatter)
+	}
+}
+
+func TestNewDryRunPlansADocumentOfAKind(t *testing.T) {
+	vault := copyFixtureTree(t, "spec-vault")
+
+	got := run(t, "new", "Runs are recorded with their seed", "--kind", "clause", "--id", "UZ-V-007",
+		"--dry-run", "--format", "json", "--config", filepath.Join(vault, "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	plan := decodeJSON[render.Plan](t, got.stdout)
+	want := render.Plan{
+		SchemaVersion: render.PlanSchemaVersion,
+		ID:            "UZ-V-007",
+		Path:          docPath(vault, "spec", "clauses", "UZ-V-007.md"),
+		Rewrites:      []render.PlanRewrite{},
+	}
+	if !reflect.DeepEqual(plan, want) {
+		t.Errorf("plan = %+v, want %+v", plan, want)
+	}
+	if _, err := os.Stat(filepath.Join(vault, "spec", "clauses", "UZ-V-007.md")); !os.IsNotExist(err) {
+		t.Error("--dry-run created the document it only planned")
+	}
+}

@@ -368,3 +368,26 @@ func TestQueryAndResolveReadOneGraphOverEveryKind(t *testing.T) {
 		}
 	})
 }
+
+func TestQueryTheBindingSetOfTheSpecPreset(t *testing.T) {
+	config := specVaultConfig(t)
+
+	t.Run("binding is what the preset's effective_must projection holds for", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--config", config)
+
+		// UZ-V-002 is an accepted MUST too, but nothing enforces it, so its
+		// force is a claim rather than a property and it does not bind.
+		assertExit(t, got, 0)
+		assertLines(t, "binding", lines(got.stdout), []string{"UZ-V-001"})
+	})
+
+	t.Run("the projections read as columns", func(t *testing.T) {
+		got := run(t, "query", "UZ-V-001", "--ancestors", "--fields", "id,enforced,effective_must", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "fields", lines(got.stdout), []string{
+			"conform/uz-v-001\tfalse\tfalse",
+			"interp/UZ-V-001@2026-08-01\tfalse\tfalse",
+		})
+	})
+}

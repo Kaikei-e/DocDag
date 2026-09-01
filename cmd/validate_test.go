@@ -1033,6 +1033,41 @@ func kindsConfig(t *testing.T) string {
 	return filepath.Join(fixture(t, "kinds"), "docdag.yaml")
 }
 
+// specVaultConfig is the corpus written under the `spec` preset. Like every
+// multi-kind corpus it is driven by --config alone: the kinds carry the
+// directories, so there is none for --dir to name.
+func specVaultConfig(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(fixture(t, "spec-vault"), "docdag.yaml")
+}
+
+func TestValidateACorpusUnderTheSpecPreset(t *testing.T) {
+	got := run(t, "validate", "--config", specVaultConfig(t))
+
+	assertExit(t, got, 1)
+	// Every finding comes from a preset rule: nothing structural is wrong with
+	// the corpus, and what the rules report is a standard hardening into dogma.
+	assertLines(t, "findings", findingLines(got.stdout), []string{
+		"UZ-V-002.md:4: ERROR orphan_must UZ-V-002: is MUST and accepted but nothing enforces it",
+		"UZ-V-003.md:5: ERROR stale_premise UZ-V-003: is accepted but a premise is retired",
+		"report-states-its-model.md:3: ERROR orphan_test conform/report-states-its-model: enforces no clause",
+		"UZ-V-004.md:3: WARN no_counterexample UZ-V-004: is accepted without a counterexample",
+	})
+}
+
+func TestValidateReportsTheSpecPresetRevision(t *testing.T) {
+	got := run(t, "validate", "--format", "json", "--config", specVaultConfig(t))
+
+	assertExit(t, got, 1)
+	report := decodeJSON[render.Report](t, got.stdout)
+	if report.PresetVersion != config.SpecPresetVersion {
+		t.Errorf("preset_version = %d, want %d", report.PresetVersion, config.SpecPresetVersion)
+	}
+	if report.Summary.Documents != 13 {
+		t.Errorf("documents = %d, want the thirteen the seven kinds hold", report.Summary.Documents)
+	}
+}
+
 func TestValidateAMultiKindCorpus(t *testing.T) {
 	got := run(t, "validate", "--config", kindsConfig(t))
 

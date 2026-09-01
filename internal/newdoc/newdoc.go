@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -40,33 +41,78 @@ date: {{ .Date }}
 ## Decision Outcome
 `
 
+// KindTemplate is the built-in template for a document of a declared kind.
+// What differs from kind to kind is the frontmatter the kind's own
+// declarations produce — the identifier where the kind declares a pattern, the
+// first word of its status vocabulary, the edges it may declare — so one
+// template renders all of them rather than seven written into the binary. The
+// body is a heading and nothing else: what belongs under it is the corpus's
+// business, and `template:` replaces the whole file for a corpus with an
+// opinion about it.
+const KindTemplate = `---
+{{ .IdentityBlock }}kind: {{ .Kind }}
+title: {{ .Title }}
+{{ .StatusBlock }}date: {{ .Date }}
+{{ .EdgeBlock }}---
+
+# {{ .Title }}
+`
+
 // DateLayout is the frontmatter date format.
 const DateLayout = "2006-01-02"
 
+// markdownExt is the extension a document file carries.
+const markdownExt = ".md"
+
 // Request describes the document to create. A zero Date means today, and an
-// empty ID takes the next free identifier.
+// empty ID takes the next free identifier. Kind names the document kind to
+// create, and is empty on a single-kind corpus — which is every corpus that
+// declares no kinds at all.
 type Request struct {
 	ID         string
+	Kind       string
 	Title      string
 	Supersedes []string
 	DependsOn  []string
 	Date       time.Time
 }
 
-// TemplateData is the value applied to the document template. EdgeBlock is a
-// preformatted YAML fragment so templates never have to build lists.
+// TemplateData is the value applied to the document template. Every field
+// named Block is a preformatted YAML fragment, possibly empty, so templates
+// never have to build lists or decide whether a key belongs in the block at
+// all; the rest are plain values.
 type TemplateData struct {
-	ID        model.ID
-	Title     string
-	Status    string
-	Date      string
-	EdgeBlock string
+	ID            model.ID
+	Kind          string
+	Title         string
+	Status        string
+	Date          string
+	IdentityBlock string
+	StatusBlock   string
+	EdgeBlock     string
 }
 
 // NextID returns the first free identifier after the highest one in the corpus.
 func NextID(g *model.Graph, cfg config.Config) (model.ID, error) {
+	return nextID(g, cfg, "")
+}
+
+// NextKindID returns the first free identifier after the highest one the named
+// kind holds. Only that kind's documents are counted: another kind's
+// identifiers are not numbers at all, and where they are they are a sequence
+// of their own.
+func NextKindID(g *model.Graph, cfg config.Config, kind string) (model.ID, error) {
+	return nextID(g, cfg, kind)
+}
+
+// nextID counts up from the highest identifier held, over the whole corpus
+// when kind is empty — which is what a single-kind corpus holds anyway.
+func nextID(g *model.Graph, cfg config.Config, kind string) (model.ID, error) {
 	highest := 0
 	for _, id := range slices.Sorted(maps.Keys(g.Nodes)) {
+		if kind != "" && g.Nodes[id].Kind != kind {
+			continue
+		}
 		n, err := strconv.Atoi(id.String())
 		if err != nil {
 			return "", fmt.Errorf("identifier %q is not a number: %w", id, model.ErrInvalidDocument)
@@ -110,6 +156,24 @@ func Filename(cfg config.Config, id model.ID, title string) string {
 	return strings.ReplaceAll(name, "{id}", id.String())
 }
 
+// KindFilename names the file a new document is written to. Where its kind
+// declares an identifier pattern the identifier names the file: a declared
+// pattern is the canonical spelling, and a file name whose stem the pattern
+// accepts is what the reader turns back into identity, so a slug beside it
+// would leave the name and the identity disagreeing. An identifier carrying a
+// slash — `conform/uz-v-001` — is one no file name can hold, so its last
+// segment names the file and the frontmatter `id:` carries the whole of it. A
+// kind that declares no pattern keeps the digit-run identity, and with it the
+// configured `filename:` template, which is also what an empty kind — a
+// single-kind corpus — gets.
+func KindFilename(cfg config.Config, kind string, id model.ID, title string) string {
+	spec, declared := cfg.Kind(kind)
+	if !declared || spec.ID == "" {
+		return Filename(cfg, id, title)
+	}
+	return path.Base(id.String()) + markdownExt
+}
+
 // LoadTemplate reads the configured template file, falling back to
 // DefaultTemplate when none is configured.
 func LoadTemplate(cfg config.Config) (string, error) {
@@ -123,7 +187,86 @@ func LoadTemplate(cfg config.Config) (string, error) {
 	return string(src), nil
 }
 
-// EdgeBlock renders the requested edge keys as a YAML frontmatter fragment.
+// LoadKindTemplate reads the configured template file, falling back to the
+// built-in template a document of this kind is written from — and, where the
+// request names no kind, to the single-kind one every corpus had before kinds
+// existed. A configured `template:` wins for both: a corpus that writes its
+// own template has said what a new document looks like.
+func LoadKindTemplate(cfg config.Config, kind string) (string, error) {
+	if cfg.Template != "" || kind == "" {
+		return LoadTemplate(cfg)
+	}
+	return KindTemplate, nil
+}
+
+// identityBlock writes the identifier into the frontmatter of a document whose
+// kind declares an identifier pattern. It is written whatever the file name
+// ends up being: the identifier is what people and agents quote, and for a
+// kind whose pattern no file name can hold it is the only place identity can
+// live. A digit-run kind writes none, exactly as a single-kind corpus does —
+// there the file name is the identifier.
+func identityBlock(cfg config.Config, kind string, id model.ID) string {
+	if spec, declared := cfg.Kind(kind); !declared || spec.ID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s: %s\n", config.KeyID, id)
+}
+
+// statusBlock writes the status a new document opens at: the first word of the
+// vocabulary its kind answers to. A kind that answers to none — a
+// machine-written conformance test or measure — gets no status key rather than
+// an invented value, which is what "this kind has no status" looks like in a
+// document.
+func statusBlock(cfg config.Config, kind, status string) string {
+	if status == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s: %s\n", cfg.EffectiveStatus(), status)
+}
+
+// openingStatus is the status a new document is created with: the first word
+// of its kind's vocabulary, and `proposed` on a single-kind corpus, which is
+// what every document created before kinds existed opened at.
+func openingStatus(cfg config.Config, kind string) string {
+	if kind == "" {
+		return config.StatusProposed
+	}
+	vocabulary := cfg.KindStatusValues(kind)
+	if len(vocabulary) == 0 {
+		return ""
+	}
+	return vocabulary[0]
+}
+
+// edgeEnds reports, for the document that writes an edge key down, the kinds
+// its own end may have and the kinds the reference may name. A reverse edge's
+// key names the edge's source, so for it the two swap.
+func edgeEnds(spec config.EdgeSpec) (own, target []string) {
+	if spec.Direction == config.DirectionReverse {
+		return spec.To, spec.From
+	}
+	return spec.From, spec.To
+}
+
+// declarable reports whether a document of this kind may write an edge key at
+// all: the edge constrains its writing end to a set of kinds this one is in,
+// or it constrains it not at all. A request that names no kind declares
+// nothing this way — a single-kind corpus writes exactly the edges it asked
+// for, as it always has.
+func declarable(spec config.EdgeSpec, kind string) bool {
+	if kind == "" {
+		return false
+	}
+	own, _ := edgeEnds(spec)
+	return len(own) == 0 || slices.Contains(own, kind)
+}
+
+// EdgeBlock renders the requested edge keys as a YAML frontmatter fragment,
+// followed — for a document of a declared kind — by a commented stub for every
+// other edge that kind may declare. A stub is a comment rather than an empty
+// key because a key present and naming nothing is the empty_edge finding: the
+// point is to show an author what the configuration offers, not to hand them a
+// document whose first validation fails.
 func EdgeBlock(cfg config.Config, req Request) (string, error) {
 	requested := map[model.EdgeType][]string{
 		config.EdgeSupersedes: req.Supersedes,
@@ -140,22 +283,86 @@ func EdgeBlock(cfg config.Config, req Request) (string, error) {
 	}
 
 	normalizer := cfg.Normalizer()
-	var b strings.Builder
+	var refs, stubs strings.Builder
 	for _, spec := range cfg.Edges {
-		refs := requested[model.EdgeType(spec.Name)]
-		if len(refs) == 0 {
+		entries := requested[model.EdgeType(spec.Name)]
+		if len(entries) == 0 {
+			if declarable(spec, req.Kind) {
+				writeStub(&stubs, spec)
+			}
 			continue
 		}
-		fmt.Fprintf(&b, "%s:\n", spec.Key)
-		for _, ref := range refs {
-			id, ok := normalizer.Normalize(ref)
-			if !ok {
-				return "", fmt.Errorf("unrecognized reference %q: %w", ref, model.ErrUnknownID)
-			}
-			fmt.Fprintf(&b, "  - %q\n", id.String())
+		if err := writeRefs(&refs, spec, entries, normalizer); err != nil {
+			return "", err
 		}
 	}
-	return b.String(), nil
+	return refs.String() + stubs.String(), nil
+}
+
+// writeRefs writes one edge key and the references requested under it.
+func writeRefs(b *strings.Builder, spec config.EdgeSpec, refs []string, normalizer config.IDNormalizer) error {
+	// An entry under an edge that requires an attribute is incomplete without
+	// it, and a creation has nothing to put there: refusing says so, where
+	// writing the entry anyway would hand back a document whose first
+	// validation is an edge_attr_missing error.
+	for _, name := range spec.AttrNames() {
+		if spec.Attrs[name].Required {
+			return fmt.Errorf("edge %q requires the attribute %q on every entry, which a created document has no value for: %w",
+				spec.Name, name, model.ErrInvalidConfig)
+		}
+	}
+	fmt.Fprintf(b, "%s:\n", spec.Key)
+	for _, ref := range refs {
+		id, ok := normalizer.Normalize(ref)
+		if !ok {
+			return fmt.Errorf("unrecognized reference %q: %w", ref, model.ErrUnknownID)
+		}
+		fmt.Fprintf(b, "  - %q\n", id.String())
+	}
+	return nil
+}
+
+// writeStub writes one edge the kind may declare, commented out, with a
+// placeholder entry naming what the edge reaches and the attributes it
+// requires.
+func writeStub(b *strings.Builder, spec config.EdgeSpec) {
+	fmt.Fprintf(b, "# %s:\n#   - %s\n", spec.Key, stubEntry(spec))
+}
+
+// stubEntry describes one entry of an edge: the kinds it may name, and, where
+// the edge requires attributes, the mapping form that carries them.
+func stubEntry(spec config.EdgeSpec) string {
+	_, target := edgeEnds(spec)
+	placeholder := "<ref>"
+	if len(target) > 0 {
+		placeholder = "<" + strings.Join(target, "|") + ">"
+	}
+	pairs := []string{config.EdgeRefKey + ": " + placeholder}
+	for _, name := range spec.AttrNames() {
+		attr := spec.Attrs[name]
+		if attr.Required {
+			pairs = append(pairs, name+": <"+attrPlaceholder(attr)+">")
+		}
+	}
+	if len(pairs) == 1 {
+		return placeholder
+	}
+	return "{" + strings.Join(pairs, ", ") + "}"
+}
+
+// attrPlaceholder describes what one required attribute takes, as the word a
+// stub stands in place of a value with.
+func attrPlaceholder(attr config.EdgeAttrSpec) string {
+	if len(attr.OneOf) > 0 {
+		return strings.Join(attr.OneOf, "|")
+	}
+	switch attr.ValueType() {
+	case config.AttrTypeNumber:
+		return "number"
+	case config.AttrTypeDate:
+		return "YYYY-MM-DD"
+	}
+	return "string"
 }
 
 // Render applies the template to the document data.
@@ -315,7 +522,7 @@ func NewPlan(g *model.Graph, cfg config.Config, req Request) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	tmpl, err := LoadTemplate(cfg)
+	tmpl, err := LoadKindTemplate(cfg, req.Kind)
 	if err != nil {
 		return Plan{}, err
 	}
@@ -323,12 +530,16 @@ func NewPlan(g *model.Graph, cfg config.Config, req Request) (Plan, error) {
 	if date.IsZero() {
 		date = time.Now()
 	}
+	status := openingStatus(cfg, req.Kind)
 	doc, err := Render(tmpl, TemplateData{
-		ID:        id,
-		Title:     req.Title,
-		Status:    config.StatusProposed,
-		Date:      date.Format(DateLayout),
-		EdgeBlock: edges,
+		ID:            id,
+		Kind:          req.Kind,
+		Title:         req.Title,
+		Status:        status,
+		Date:          date.Format(DateLayout),
+		IdentityBlock: identityBlock(cfg, req.Kind, id),
+		StatusBlock:   statusBlock(cfg, req.Kind, status),
+		EdgeBlock:     edges,
 	})
 	if err != nil {
 		return Plan{}, err
@@ -336,7 +547,7 @@ func NewPlan(g *model.Graph, cfg config.Config, req Request) (Plan, error) {
 
 	plan := Plan{
 		ID:       id,
-		Path:     filepath.Join(cfg.Dir, Filename(cfg, id, req.Title)),
+		Path:     filepath.Join(documentsDir(cfg, req.Kind), KindFilename(cfg, req.Kind, id, req.Title)),
 		Content:  doc,
 		Rewrites: make([]Rewrite, 0, len(superseded)),
 	}
@@ -362,16 +573,41 @@ func noCollision(g *model.Graph) error {
 }
 
 // identifier resolves the identifier a request asks for, or the next free one
-// when it asks for none.
+// when it asks for none and the identity rules can count one up.
 func identifier(g *model.Graph, cfg config.Config, req Request) (model.ID, error) {
-	if req.ID == "" {
-		return NextID(g, cfg)
+	if req.Kind == "" {
+		if req.ID == "" {
+			return NextID(g, cfg)
+		}
+		id, ok := cfg.Normalizer().Normalize(req.ID)
+		if !ok {
+			return "", fmt.Errorf("unrecognized reference %q: %w", req.ID, model.ErrUnknownID)
+		}
+		return id, nil
 	}
-	id, ok := cfg.Normalizer().Normalize(req.ID)
-	if !ok {
+	spec, declared := cfg.Kind(req.Kind)
+	if !declared {
+		return "", fmt.Errorf("no kind %q is declared: %w", req.Kind, model.ErrUnknownID)
+	}
+	if req.ID == "" {
+		// Counting up is a property of digit-run identity alone. A declared
+		// pattern is a spelling, not a sequence: what follows UZ-V-006 is a
+		// decision, so the caller has to have made it.
+		if spec.ID != "" {
+			return "", fmt.Errorf("kind %q reads identifiers as %s, which nothing counts up: name the identifier: %w",
+				req.Kind, spec.ID, model.ErrUnknownID)
+		}
+		return NextKindID(g, cfg, req.Kind)
+	}
+	id, ok := cfg.KindNormalizer(req.Kind).Normalize(req.ID)
+	switch {
+	case ok:
+		return id, nil
+	case spec.ID == "":
 		return "", fmt.Errorf("unrecognized reference %q: %w", req.ID, model.ErrUnknownID)
 	}
-	return id, nil
+	return "", fmt.Errorf("%q is not an identifier of kind %q, which reads %s: %w",
+		req.ID, req.Kind, spec.ID, model.ErrUnknownID)
 }
 
 func sameTitle(a, b string) bool { return strings.TrimSpace(a) == strings.TrimSpace(b) }
@@ -428,10 +664,21 @@ func documents(g *model.Graph, cfg config.Config, refs []string) ([]*model.Node,
 }
 
 // documentPath reads a bare file name as relative to the documents directory;
-// anything carrying a directory component already locates itself.
+// anything carrying a directory component already locates itself, which every
+// document of a multi-kind corpus does — it was read out of its kind's own
+// directory.
 func documentPath(cfg config.Config, n *model.Node) string {
 	if filepath.IsAbs(n.Path) || filepath.Dir(n.Path) != "." {
 		return n.Path
 	}
-	return filepath.Join(cfg.Dir, n.Path)
+	return filepath.Join(documentsDir(cfg, n.Kind), n.Path)
+}
+
+// documentsDir names the directory a document of one kind lives in: the kind's
+// own, or the single documents directory of a corpus that declares no kinds.
+func documentsDir(cfg config.Config, kind string) string {
+	if spec, declared := cfg.Kind(kind); declared {
+		return spec.Dir
+	}
+	return cfg.Dir
 }

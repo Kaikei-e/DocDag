@@ -77,6 +77,11 @@ const (
 	RuleEdgeKindMismatch       = "edge_kind_mismatch"
 	RuleDeprecatedField        = "deprecated_field"
 	RuleImmutableViolation     = "immutable_violation"
+	RuleOrphanMust             = "orphan_must"
+	RuleOrphanTest             = "orphan_test"
+	RuleStalePremise           = "stale_premise"
+	RuleDeviationPressure      = "deviation_pressure"
+	RuleNoCounterexample       = "no_counterexample"
 )
 
 // Node is one managed document. Line and KeyLines are the frontmatter

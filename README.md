@@ -8,7 +8,15 @@ graph** from it, enforces DAG invariants on that graph, and answers queries abou
 records rot in ways review does not catch: a decision superseded twice with the status never
 updated, a supersession cycle, a `supersedes: 0042` pointing at a file nobody wrote. Those are graph
 properties, so a graph check can enforce them, and `docdag validate` exits 1 on any error, in one CI
-line. DocDag ships one preset, `adr`, for Architecture Decision Records.
+line.
+
+DocDag ships two presets. `adr` is the default: one directory of Architecture Decision Records,
+identified by a digit run, superseding one another. `spec` is a normative standard as a graph —
+clauses, the conformance tests that enforce them, the deviations recorded against them and the
+measurements taken of them, each kind in a directory of its own with an identifier shape of its own —
+where a `MUST` that no test enforces is a finding rather than a rule. Both are plain configuration:
+[docs/configuration.md](docs/configuration.md) prints each in full, and `docdag.yaml` overrides
+either.
 
 ## The model
 

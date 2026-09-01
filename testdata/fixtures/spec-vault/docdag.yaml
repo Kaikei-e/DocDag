@@ -1,0 +1,5 @@
+# A uzushio-style clause graph under the spec preset: the seven kinds, their
+# edges and the five rules all come from the preset, so the corpus configures
+# nothing beyond naming it. The kind directories are read relative to this
+# file.
+preset: spec

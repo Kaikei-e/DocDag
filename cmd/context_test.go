@@ -194,3 +194,25 @@ func TestContextReadsAMultiKindCorpus(t *testing.T) {
 		"  dev-0001  The importer reports counts without inputs  [accepted]  ",
 	})
 }
+
+func TestContextReadsACorpusUnderTheSpecPreset(t *testing.T) {
+	// One brief over five kinds: the clause, the conformance test that enforces
+	// it, the measurement taken of it, and the premise, principle and
+	// post-mortem it rests on, argues from and failed as. Binding under this
+	// preset is the clauses that actually bind, so a neighbourhood of other
+	// kinds is only reached with --all.
+	got := run(t, "context", "UZ-V-001", "--all", "--config", specVaultConfig(t))
+
+	assertExit(t, got, 0)
+	assertPrefixes(t, "context", lines(got.stdout), []string{
+		"ref",
+		"  UZ-V-001  Every claim carries evidence  [accepted]  ",
+		"ancestors",
+		"  conform/uz-v-001  Check that every claim carries evidence  []  ",
+		"  interp/UZ-V-001@2026-08-01  Agreement on the evidence check, August 2026  []  ",
+		"descendants",
+		"  pm-0001  The nightly report cited a run nobody could repeat  [published]  ",
+		"  premise/runs-are-reproducible  A run can be repeated from what the report names  [accepted]  ",
+		"  principle/evidence-over-assertion  Evidence over assertion  [accepted]  ",
+	})
+}

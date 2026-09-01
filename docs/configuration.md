@@ -214,11 +214,14 @@ the same string the edge's own `to:` decides which document it means. The other 
 a reference to a document of the wrong kind resolves and is reported as the mismatch it is, rather
 than as a reference to nothing.
 
+### Creating a document of a kind
+
+`docdag new` needs `--kind` on a multi-kind corpus: which kind to create, under which identity rules
+and from which template, has no default answer. See [commands.md](commands.md) for what it writes.
+
 ### What a multi-kind corpus does not do yet
 
-`docdag new` refuses one — which kind to create, under which identity rules and from which template,
-has no default answer — and so does `validate --immutable-since`, which reads one directory under
-one identity rule. Per-kind templates arrive with the `spec` preset.
+`validate --immutable-since` refuses one: it reads one directory under one identity rule.
 
 ## Edge attributes
 
@@ -443,11 +446,239 @@ what `stats` counts and what `context` keeps. A configuration that declares no p
 falls back on the built-in definition, accepted and superseded by nothing, which is what the `adr`
 preset's `accepted_unsuperseded` projection writes down.
 
+## The spec preset
+
+`preset: spec` is the second built-in configuration: a normative standard as a graph of clauses, the
+conformance tests that enforce them, the deviations recorded against them and the measurements taken
+of them. It uses every key above — seven kinds, edges constrained by kind and carrying attributes,
+projections and a binding of its own — and a corpus adopts the whole of it with one line:
+
+```yaml
+preset: spec
+```
+
+The file below is that preset in full:
+
+```yaml
+preset: spec
+preset_version: 1
+status_field: status
+
+kinds:
+  clause:
+    dir: spec/clauses
+    id: '^UZ-[A-Z]-\d{3}$'
+    status_values: [proposed, trial, accepted, superseded, withdrawn]
+    closed: true
+    fields:
+      level: {}                 # MUST | SHOULD | MAY, the strength the clause claims
+  conform:
+    dir: spec/conform
+    id: '^conform/[a-z0-9-]+$'
+    fields:
+      test: {}                  # path to the executable test body
+  deviation:
+    dir: spec/deviations
+    id: '^dev-\d{4}$'
+    status_values: [proposed, accepted, resolved, withdrawn]
+    closed: true
+  measure:
+    dir: spec/measures
+    id: '^interp/UZ-[A-Z]-\d{3}@\d{4}-\d{2}-\d{2}$'
+  premise:
+    dir: spec/premises
+    id: '^premise/[a-z0-9/-]+$'
+    status_values: [proposed, accepted, retired, superseded]
+  principle:
+    dir: spec/principles
+    id: '^principle/[a-z0-9/-]+$'
+    status_values: [proposed, accepted, superseded, withdrawn]
+  pm:
+    dir: spec/pm
+    id: '^pm-\d{4}$'
+    status_values: [draft, published]
+
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+    from: [clause, premise]
+    to: [clause, premise]
+    attrs:
+      reason: {required: true, one_of: [recurrence, premise-collapse, conflict, vocabulary]}
+  - name: enforces
+    key: enforces
+    direction: forward
+    from: [conform]
+    to: [clause]
+  - name: deviates-from
+    key: deviates-from
+    direction: forward
+    from: [deviation]
+    to: [clause]
+    attrs:
+      expires: {required: true, type: date}
+  - name: premise
+    key: premise
+    direction: forward
+    from: [clause]
+    to: [premise]
+  - name: rationale
+    key: rationale
+    direction: forward
+    from: [clause]
+    to: [principle]
+  - name: counterexample
+    key: counterexample
+    direction: forward
+    from: [clause, principle]
+    to: [pm]
+  - name: measures
+    key: measures
+    direction: forward
+    from: [measure]
+    to: [clause]
+    attrs:
+      agreement: {required: true, type: number}
+      model: {required: true, type: string}
+
+projections:
+  - name: enforced
+    when: {inbound: enforces}
+  - name: effective_must
+    when:
+      attr: {level: {eq: MUST}, status: {eq: accepted}}
+      inbound: enforces
+      not_inbound: supersedes
+  - name: effective_should
+    any_of:
+      - when:
+          attr: {level: {eq: SHOULD}, status: {eq: accepted}}
+          not_inbound: supersedes
+      - when:
+          attr: {level: {eq: MUST}, status: {eq: accepted}}
+          not_inbound: enforces
+          not: {inbound: supersedes}      # a condition holds one not_inbound; this is the other
+
+binding: effective_must
+
+rules:
+  - name: orphan_must
+    severity: error
+    when:
+      attr: {level: {eq: MUST}, status: {eq: accepted}}
+      not_inbound: enforces
+    message: "is MUST and accepted but nothing enforces it"
+  - name: orphan_test
+    severity: error
+    when:
+      attr: {kind: {eq: conform}}
+      not_outbound: enforces
+    message: "enforces no clause"
+  - name: stale_premise
+    severity: error
+    when:
+      attr: {status: {eq: accepted}}
+      via: {edge: premise, attr: {status: {eq: retired}}}
+    message: "is accepted but a premise is retired"
+  - name: deviation_pressure
+    severity: warn
+    when:
+      attr: {status: {eq: accepted}}
+      inbound: {edge: deviates-from, min: 5}
+    message: "has 5+ deviations; reconsider the clause"
+  - name: no_counterexample
+    severity: warn
+    when:
+      attr: {kind: {eq: clause}, status: {eq: accepted}}
+      not_outbound: counterexample
+    message: "is accepted without a counterexample"
+```
+
+There is no top-level `status_values`, and each kind that answers to a vocabulary carries its own.
+That is deliberate: a kind inherits the top-level vocabulary wherever it declares none, so writing
+one would hand `conform` and `measure` documents — which a machine writes, and which say nothing
+about their own standing — a vocabulary to fall outside of. With none declared anywhere they reach,
+their `status` is unchecked, which is what "this kind has no status" has to be written as.
+
+There is no `filename:` either. Every kind of the preset declares an identifier pattern, and a kind
+that does names its files after the identifier rather than from the template — see
+[filename and template](#filename-and-template).
+
+`testdata/fixtures/spec-vault/` in the repository is a small corpus under this preset.
+
+### The kinds
+
+**clause** — the normative statement itself, `UZ-V-001`, the one document a person writes by hand
+and the one every other kind points at. It claims a strength in `level:` (`MUST`, `SHOULD`, `MAY`),
+and it carries only the relations that are about its own content: `premise:`, `rationale:` and
+`counterexample:`. Its frontmatter is `closed: true`, so a key nobody declared is a finding rather
+than another tool's field; `level` is declared under the kind's `fields:`, which is what admits it.
+
+**conform** — a conformance test, `conform/uz-v-001`, written by whoever builds the harness. It
+declares `enforces:`, and that edge is what gives a `MUST` its force. The identifier carries a
+slash, so no file name can hold it and the document writes `id:` in its frontmatter.
+
+**deviation** — a recorded departure from a clause, `dev-0001`. It declares `deviates-from:` with a
+required `expires:` attribute, so every departure has an end date written on the edge that departs
+rather than in a field of the document. `closed: true`, like a clause: a deviation is a
+hand-written record too.
+
+**measure** — one measurement of one clause on one day, `interp/UZ-V-001@2026-08-01`, generated by
+the standard's own CLI. It declares `measures:` with a required agreement rate and model name.
+
+**premise** — something the standard assumes is true, `premise/runs-are-reproducible`, written by
+whoever noticed the assumption. It is `retired` rather than superseded when the world stops making
+it true, and every accepted clause still resting on a retired premise is a `stale_premise` finding.
+
+**principle** — the reason behind a family of clauses, `principle/evidence-over-assertion`. Clauses
+point at it through `rationale:`, and it may carry a `counterexample:` of its own.
+
+**pm** — a post-mortem, `pm-0001`: the case a clause or a principle failed as. It is written rather
+than decided, so its vocabulary is `draft` and `published` and it is never `accepted` — which keeps
+the rules that read `accepted` from ever reaching one.
+
+### Operating conventions
+
+The preset only enforces what a graph check can. The rest of how a corpus under it is kept is a
+convention, and these four are the ones the rules assume:
+
+**Edges live on the machine-generated side.** A `conform` document declares `enforces:` and a
+`measure` document declares `measures:`; a clause carries neither `enforced-by:` nor `measured-by:`.
+A clause changes when someone decides something, and a test or a measurement appears every time a
+machine runs — declaring the edge on the side that changes often keeps the side that changes rarely
+out of the diff.
+
+**Measure documents are generated, never hand-written.** They are the output of the standard's CLI,
+one file per clause per run. Their freshness is the existence of the file and its git history — what
+`stats --fields` reads — rather than an `updated:` field somebody has to remember to change: a
+hand-maintained freshness field is a derived value written down, and derived values rot.
+
+**A conformance test body lives outside Markdown.** The executable — `test.sh`, a test binary, a
+CI job — is not a document, so the `conform` document is a thin frontmatter wrapper that names its
+path under `test:`. The key is declared under the kind's `fields:`, so `stats --fields` counts it and
+a `closed: true` conform kind would accept it, even though the preset leaves the kind open. DocDag
+does not read the file it points at, and there is no `derived_edges` rule that lifts edges out of
+TOML or JSON: frontmatter stays the one place an edge is declared.
+
+**Force is derived, never written.** No document writes down whether it is binding or what its
+effective level is. `enforced`, `effective_must` and `effective_should` answer both from the graph,
+`query --binding` lists the clauses that actually bind, and a clause claiming `level: MUST` that no
+test enforces is an `orphan_must` error rather than a binding clause.
+
 ## filename and template
 
 Set `template: <path>` to replace the document template `docdag new` uses, and `filename:` to change
 what it names the result — the template must carry `{id}`, may carry `{slug}`, and may not carry a
 path separator.
+
+A kind that declares an `id:` pattern names its files after the identifier instead, and ignores the
+template: the pattern is the canonical spelling, and a file name whose stem the pattern accepts is
+what the reader turns back into identity, so a slug beside it would leave the name and the identity
+disagreeing. An identifier carrying a slash — `conform/uz-v-001` — is one no file name can hold, so
+its last segment names the file (`uz-v-001.md`) and the frontmatter `id:` carries the whole of it. A
+kind that declares no `id:` keeps the digit-run identity, and with it the `filename:` template.
 
 ## Structural escalation
 

@@ -25,7 +25,7 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 | `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all]` | the document, what it resolves to and its neighbourhood, each quoting one section | exit 1 unknown reference, exit 2 unknown edge type |
 | `docdag export [--format mermaid\|dot\|json] [--include-refs] [--connected] [--edge <type>]... [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 2 on an unknown edge type, exit 3 if the output file cannot be written |
 | `docdag stats [--fields]` | document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree; with `--fields`, the frontmatter fields instead | exit 3 without `--fields` if the configuration declares no `supersedes` edge |
-| `docdag new <title> [--id <ref>] [--supersedes <ref>]... [--depends-on <ref>]... [--dry-run]` | the path of the created document, or the plan under `--dry-run` | exit 1 on an unknown reference or a claimed identifier, exit 3 on a write error |
+| `docdag new <title> [--kind <name>] [--id <ref>] [--supersedes <ref>]... [--depends-on <ref>]... [--dry-run]` | the path of the created document, or the plan under `--dry-run` | exit 1 on an unknown reference, a claimed identifier or a `--kind` the corpus cannot answer, exit 3 on a write error |
 
 `docdag context` and `--fields` are covered in [agents.md](agents.md), along with
 `validate --touching`.
@@ -76,6 +76,55 @@ where the text form says `exists` instead of `create`.
 identifier already names a document with the same title, `new` prints its path and writes nothing,
 so re-running an agent's command is harmless; a different title under that identifier is an error.
 `new` also refuses to run at all while the corpus carries an `id_collision`.
+
+### new --kind
+
+A corpus that declares [`kinds:`](configuration.md#kinds) needs `--kind <name>`: which kind to
+create, under which identity rules and from which template, has no default answer. The document is
+written into that kind's directory, and its frontmatter is what the kind's own declarations call
+for — the identifier where the kind declares an `id:` pattern, the kind, the title, the first word
+of the kind's `status_values`, today's date:
+
+```console
+$ docdag new "Runs are recorded with their seed" --kind clause --id UZ-V-007
+spec/clauses/UZ-V-007.md
+```
+
+```yaml
+---
+id: UZ-V-007
+kind: clause
+title: Runs are recorded with their seed
+status: proposed
+date: 2026-09-01
+# supersedes:
+#   - {ref: <clause|premise>, reason: <recurrence|premise-collapse|conflict|vocabulary>}
+# premise:
+#   - <premise>
+# rationale:
+#   - <principle>
+# counterexample:
+#   - <pm>
+---
+```
+
+The edges the kind may declare — the ones whose `from:` names it, and the ones constrained to no
+kind at all — follow as commented stubs naming what each reaches and the attributes it requires. A
+stub is a comment rather than an empty key because a key present and naming nothing is the
+`empty_edge` finding: the point is to show what the configuration offers, not to hand back a
+document whose first validation fails. A kind that answers to no status vocabulary gets no `status:`
+key rather than an invented value.
+
+`--id` is **required** for a kind that declares an `id:` pattern: a pattern is a spelling, not a
+sequence, so there is no next identifier to take, and one the pattern rejects is an error. A kind
+that declares no pattern keeps the digit-run identity, and `new --kind` counts up from the highest
+identifier *that kind* holds. Naming a kind the configuration does not declare, and passing `--kind`
+to a corpus that declares no kinds at all, are both errors (exit 1). `--dry-run`, `--format json`
+and the identifier rules above work exactly as they do without `--kind`.
+
+`--supersedes` and `--depends-on` refuse an edge that declares a required attribute (exit 3): the
+entry would be incomplete, and a creation has no value to put there — write that edge into the
+created document instead.
 
 ## Exit codes
 
