@@ -854,3 +854,198 @@ func TestLoadEdgeAttributes(t *testing.T) {
 		t.Fatalf("Validate = %v, want the merged configuration to be valid", err)
 	}
 }
+
+// testKindsFile is a configuration file declaring two kinds, the shape a
+// multi-kind corpus is described in.
+const testKindsFile = `kinds:
+  clause:
+    dir: spec/clauses
+    id: '^UZ-[A-Z]-\d{3}$'
+    closed: true
+  conform:
+    dir: spec/conform
+    id: '^conform/[a-z0-9-]+$'
+`
+
+func TestLoadKinds(t *testing.T) {
+	file := `kinds:
+  clause:
+    dir: spec/clauses
+    id: '^UZ-[A-Z]-\d{3}$'
+    status_values: [trial, accepted]
+    closed: true
+  conform:
+    dir: spec/conform
+edges:
+  - name: enforces
+    key: enforces
+    direction: forward
+    from: [conform]
+    to: [clause]
+`
+	root := testTree(t, map[string]string{"docdag.yaml": file})
+
+	got, err := Load(filepath.Join(root, "docdag.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	wantKinds := map[string]KindSpec{
+		"clause":  {Dir: "spec/clauses", ID: `^UZ-[A-Z]-\d{3}$`, StatusValues: []string{"trial", "accepted"}, Closed: true},
+		"conform": {Dir: "spec/conform"},
+	}
+	if !reflect.DeepEqual(got.Kinds, wantKinds) {
+		t.Errorf("kinds = %+v, want %+v", got.Kinds, wantKinds)
+	}
+	wantEdges := []EdgeSpec{{
+		Name: "enforces", Key: "enforces", Direction: DirectionForward,
+		From: []string{"conform"}, To: []string{"clause"},
+	}}
+	if !reflect.DeepEqual(got.Edges, wantEdges) {
+		t.Errorf("edges = %+v, want %+v", got.Edges, wantEdges)
+	}
+}
+
+func TestMergeKinds(t *testing.T) {
+	t.Run("a written kinds map replaces the base wholesale", func(t *testing.T) {
+		base := ADRPreset()
+		base.Kinds = map[string]KindSpec{
+			"clause":  {Dir: "spec/clauses"},
+			"premise": {Dir: "spec/premises"},
+		}
+
+		got := Merge(base, Config{Kinds: map[string]KindSpec{"clause": {Dir: "standard/clauses"}}})
+
+		want := map[string]KindSpec{"clause": {Dir: "standard/clauses"}}
+		if !reflect.DeepEqual(got.Kinds, want) {
+			t.Fatalf("kinds = %+v, want exactly the override %+v", got.Kinds, want)
+		}
+	})
+
+	t.Run("an empty kinds map clears the base", func(t *testing.T) {
+		base := ADRPreset()
+		base.Kinds = map[string]KindSpec{"clause": {Dir: "spec/clauses"}}
+
+		got := Merge(base, Config{Kinds: map[string]KindSpec{}})
+
+		if got.Multikind() {
+			t.Fatalf("kinds = %+v, want the explicit empty map to clear them", got.Kinds)
+		}
+	})
+
+	t.Run("an unwritten kinds map keeps the base", func(t *testing.T) {
+		base := ADRPreset()
+		base.Kinds = map[string]KindSpec{"clause": {Dir: "spec/clauses"}}
+
+		got := Merge(base, Config{IDWidth: 6})
+
+		if !reflect.DeepEqual(got.Kinds, base.Kinds) {
+			t.Fatalf("kinds = %+v, want the base %+v", got.Kinds, base.Kinds)
+		}
+	})
+
+	t.Run("the merged map is a copy of the override", func(t *testing.T) {
+		override := Config{Kinds: map[string]KindSpec{"clause": {Dir: "spec/clauses"}}}
+
+		got := Merge(ADRPreset(), override)
+		override.Kinds["conform"] = KindSpec{Dir: "spec/conform"}
+
+		if _, leaked := got.Kinds["conform"]; leaked {
+			t.Fatalf("kinds = %+v, want the merge to have copied the map", got.Kinds)
+		}
+	})
+}
+
+func TestResolveKinds(t *testing.T) {
+	t.Run("kind directories are read relative to the configuration file", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"standard/docdag.yaml":              testKindsFile,
+			"standard/spec/clauses/UZ-V-001.md": testDocument,
+		})
+
+		got, err := Resolve(Options{Root: root, ConfigPath: filepath.Join(root, "standard", "docdag.yaml")})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if want := filepath.Join(root, "standard", "spec", "clauses"); got.Kinds["clause"].Dir != want {
+			t.Errorf("clause dir = %q, want %q", got.Kinds["clause"].Dir, want)
+		}
+		if got.Dir != "" {
+			t.Errorf("dir = %q, want none: the kinds carry the directories", got.Dir)
+		}
+	})
+
+	t.Run("a configuration file at the root roots the kinds there", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml":              testKindsFile,
+			"spec/clauses/UZ-V-001.md": testDocument,
+		})
+
+		got, err := Resolve(Options{Root: root})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if want := filepath.Join(root, "spec", "conform"); got.Kinds["conform"].Dir != want {
+			t.Errorf("conform dir = %q, want %q", got.Kinds["conform"].Dir, want)
+		}
+	})
+
+	t.Run("an absolute kind directory is left alone", func(t *testing.T) {
+		clauses := testTree(t, map[string]string{"UZ-V-001.md": testDocument})
+		root := testTree(t, map[string]string{
+			"docdag.yaml": "kinds:\n  clause:\n    dir: " + filepath.ToSlash(clauses) + "\n",
+		})
+
+		got, err := Resolve(Options{Root: root})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if got.Kinds["clause"].Dir != clauses {
+			t.Errorf("clause dir = %q, want the absolute %q", got.Kinds["clause"].Dir, clauses)
+		}
+	})
+
+	t.Run("kinds skip discovery entirely", func(t *testing.T) {
+		// Nothing under a well-known documents directory, which single-kind
+		// discovery would have failed on.
+		root := testTree(t, map[string]string{
+			"docdag.yaml":              testKindsFile,
+			"spec/clauses/UZ-V-001.md": testDocument,
+		})
+
+		if _, err := Resolve(Options{Root: root}); err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+	})
+
+	t.Run("a written id_width beside kinds is a configuration error", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docdag.yaml": testKindsFile + "id_width: 6\n"})
+
+		_, err := Resolve(Options{Root: root})
+
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("Resolve = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("a written dir beside kinds is a configuration error", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docdag.yaml": testKindsFile + "dir: docs/adr\n"})
+
+		_, err := Resolve(Options{Root: root})
+
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("Resolve = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("a directory option beside kinds is a configuration error", func(t *testing.T) {
+		docs := testTree(t, map[string]string{"0001-a-decision.md": testDocument})
+		root := testTree(t, map[string]string{"docdag.yaml": testKindsFile})
+
+		_, err := Resolve(Options{Root: root, Dir: docs})
+
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("Resolve = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+}

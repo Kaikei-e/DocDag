@@ -298,3 +298,45 @@ func testFixtureGraph(t *testing.T, name string) (*model.Graph, config.Config) {
 func testProjection(name string, when config.Condition) config.ProjectionSpec {
 	return config.ProjectionSpec{Name: name, When: when}
 }
+
+// The kinds the multi-kind tests are written against: clauses whose identifiers
+// a file name can carry and which close their frontmatter, conformance tests
+// whose identifiers carry a slash, and deviations recorded against a clause.
+func testKindsConfig() config.Config {
+	cfg := config.ADRPreset()
+	cfg.Kinds = map[string]config.KindSpec{
+		"clause":    {Dir: "spec/clauses", ID: `^UZ-[A-Z]-\d{3}$`, Closed: true},
+		"conform":   {Dir: "spec/conform", ID: `^conform/[a-z0-9-]+$`},
+		"deviation": {Dir: "spec/deviations", ID: `^dev-\d{4}$`},
+	}
+	cfg.Edges = []config.EdgeSpec{
+		{Name: "supersedes", Key: "supersedes", Acyclic: true, Direction: config.DirectionForward, From: []string{"clause"}, To: []string{"clause"}},
+		{Name: "enforces", Key: "enforces", Direction: config.DirectionForward, From: []string{"conform"}, To: []string{"clause"}},
+	}
+	cfg.DerivedEdges = nil
+	cfg.Projections = nil
+	cfg.Binding = ""
+	cfg.Rules = nil
+	return cfg
+}
+
+// testKindDoc is one document of a multi-kind corpus, as the parser hands it
+// over: its kind is the directory's answer and its identity is already
+// resolved. An empty id is a file that yielded none.
+func testKindDoc(kind, id string, frontmatter map[string]any) *parse.Document {
+	doc := testDoc(id, frontmatter, "")
+	doc.Kind = kind
+	doc.Identity = id
+	doc.Name = id + ".md"
+	doc.Path = "spec/" + kind + "/" + doc.Name
+	return doc
+}
+
+// testKindNode is one node of a multi-kind graph, carrying the kind the way
+// buildNode records it: on the node and as an attribute rules can read.
+func testKindNode(kind, id, status string) *model.Node {
+	n := testNodeAttrs(id, status, map[string]any{config.KeyKind: kind})
+	n.Kind = kind
+	n.Path = "spec/" + kind + "/" + id + ".md"
+	return n
+}

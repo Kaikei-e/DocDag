@@ -254,3 +254,237 @@ func TestConfigNormalizer(t *testing.T) {
 		}
 	})
 }
+
+func TestPatternNormalizer(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		ref     string
+		want    model.ID
+		ok      bool
+	}{
+		{name: "a prefixed identifier", pattern: `^UZ-[A-Z]-\d{3}$`, ref: "UZ-V-001", want: "UZ-V-001", ok: true},
+		{name: "surrounding whitespace", pattern: `^UZ-[A-Z]-\d{3}$`, ref: "  UZ-V-001  ", want: "UZ-V-001", ok: true},
+		{name: "a wikilink", pattern: `^UZ-[A-Z]-\d{3}$`, ref: "[[UZ-V-001]]", want: "UZ-V-001", ok: true},
+		{name: "an aliased wikilink", pattern: `^UZ-[A-Z]-\d{3}$`, ref: "[[UZ-V-001|the evidence clause]]", want: "UZ-V-001", ok: true},
+		{name: "an identifier carrying a slash", pattern: `^conform/[a-z0-9-]+$`, ref: "conform/uz-v-001", want: "conform/uz-v-001", ok: true},
+		{name: "the pattern is not padded onto a width", pattern: `^dev-\d{4}$`, ref: "dev-0007", want: "dev-0007", ok: true},
+		{name: "prose around an identifier", pattern: `^UZ-[A-Z]-\d{3}$`, ref: "see UZ-V-001"},
+		{name: "an unanchored pattern still reads the whole reference", pattern: `UZ-[A-Z]-\d{3}`, ref: "see UZ-V-001"},
+		{name: "a file name is not an identifier", pattern: `^UZ-[A-Z]-\d{3}$`, ref: "UZ-V-001.md"},
+		{name: "a directory prefix is not stripped", pattern: `^UZ-[A-Z]-\d{3}$`, ref: "spec/clauses/UZ-V-001"},
+		{name: "another kind's identifier", pattern: `^UZ-[A-Z]-\d{3}$`, ref: "dev-0007"},
+		{name: "an empty reference", pattern: `^UZ-[A-Z]-\d{3}$`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pattern, err := IDPattern(tt.pattern)
+			if err != nil {
+				t.Fatalf("IDPattern(%q): %v", tt.pattern, err)
+			}
+
+			got, ok := PatternNormalizer{Pattern: pattern}.Normalize(tt.ref)
+
+			if ok != tt.ok {
+				t.Fatalf("ok = %v, want %v", ok, tt.ok)
+			}
+			if got != tt.want {
+				t.Errorf("Normalize(%q) = %q, want %q", tt.ref, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPatternNormalizerMatchesFilename(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		file    string
+		want    bool
+	}{
+		{name: "a stem that is an identifier", pattern: `^UZ-[A-Z]-\d{3}$`, file: "UZ-V-001.md", want: true},
+		{name: "a stem carrying a title", pattern: `^UZ-[A-Z]-\d{3}$`, file: "UZ-V-001-evidence.md"},
+		{name: "another extension", pattern: `^UZ-[A-Z]-\d{3}$`, file: "UZ-V-001.txt"},
+		{name: "an index file", pattern: `^UZ-[A-Z]-\d{3}$`, file: "README.md"},
+		// No file name can carry a slash, so a kind whose identifiers do takes
+		// its identity from the frontmatter instead.
+		{name: "a pattern no file name can satisfy", pattern: `^conform/[a-z0-9-]+$`, file: "uz-v-001.md"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pattern, err := IDPattern(tt.pattern)
+			if err != nil {
+				t.Fatalf("IDPattern(%q): %v", tt.pattern, err)
+			}
+
+			if got := (PatternNormalizer{Pattern: pattern}).MatchesFilename(tt.file); got != tt.want {
+				t.Fatalf("MatchesFilename(%q) = %v, want %v", tt.file, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfigKindNormalizer(t *testing.T) {
+	cfg := ADRPreset()
+	cfg.Kinds = testKinds()
+
+	t.Run("a kind with an id pattern reads that pattern", func(t *testing.T) {
+		got, ok := cfg.KindNormalizer("clause").Normalize("UZ-V-001")
+
+		if !ok || got != "UZ-V-001" {
+			t.Fatalf("Normalize(UZ-V-001) = %q (ok=%v), want the identifier itself", got, ok)
+		}
+	})
+
+	t.Run("a kind with an id pattern rejects a digit run", func(t *testing.T) {
+		if got, ok := cfg.KindNormalizer("clause").Normalize("339"); ok {
+			t.Fatalf("Normalize(339) = %q, want no identifier under a declared pattern", got)
+		}
+	})
+
+	t.Run("a kind without one keeps the digit-run rules", func(t *testing.T) {
+		got, ok := cfg.KindNormalizer("pm").Normalize("ADR-339")
+
+		if !ok || got != "0339" {
+			t.Fatalf("Normalize(ADR-339) = %q (ok=%v), want the padded digit run", got, ok)
+		}
+	})
+}
+
+func TestConfigNormalizerAcrossKinds(t *testing.T) {
+	cfg := ADRPreset()
+	cfg.Kinds = testKinds()
+
+	t.Run("every kind's identifiers resolve", func(t *testing.T) {
+		norm := cfg.Normalizer()
+		for ref, want := range map[string]model.ID{
+			"UZ-V-001":         "UZ-V-001",
+			"conform/uz-v-001": "conform/uz-v-001",
+			"339":              "0339",
+		} {
+			got, ok := norm.Normalize(ref)
+			if !ok || got != want {
+				t.Errorf("Normalize(%q) = %q (ok=%v), want %q", ref, got, ok, want)
+			}
+		}
+	})
+
+	t.Run("a reference no kind accepts resolves to nothing", func(t *testing.T) {
+		if got, ok := cfg.Normalizer().Normalize("uz-v-001"); ok {
+			t.Fatalf("Normalize(uz-v-001) = %q, want no identifier", got)
+		}
+	})
+
+	t.Run("overlapping kinds are tried in sorted name order", func(t *testing.T) {
+		// Both kinds accept the same reference, so the answer has to come from
+		// the configuration's order rather than from a map iteration.
+		overlapping := ADRPreset()
+		overlapping.Kinds = map[string]KindSpec{
+			"beta":  {Dir: "beta", ID: `^X-\d+$`},
+			"alpha": {Dir: "alpha", ID: `^X-\d+$`},
+		}
+		norm, ok := overlapping.Normalizer().(UnionNormalizer)
+		if !ok {
+			t.Fatalf("Normalizer = %T, want a union over the kinds", overlapping.Normalizer())
+		}
+
+		if kind, ok := norm.Kind("X-7"); !ok || kind != "alpha" {
+			t.Fatalf("Kind(X-7) = %q (ok=%v), want the first kind in sorted order", kind, ok)
+		}
+	})
+
+	t.Run("an edge resolves its references against the kinds it points at first", func(t *testing.T) {
+		overlapping := ADRPreset()
+		overlapping.Kinds = map[string]KindSpec{
+			"beta":  {Dir: "beta", ID: `^X-\d+$`},
+			"alpha": {Dir: "alpha", ID: `^X-\d+$`},
+		}
+		spec := EdgeSpec{Name: "enforces", Key: "enforces", Direction: DirectionForward, To: []string{"beta"}}
+
+		norm, ok := overlapping.EdgeNormalizer(spec).(UnionNormalizer)
+		if !ok {
+			t.Fatalf("EdgeNormalizer = %T, want a union over the kinds", overlapping.EdgeNormalizer(spec))
+		}
+		if kind, ok := norm.Kind("X-7"); !ok || kind != "beta" {
+			t.Fatalf("Kind(X-7) = %q (ok=%v), want the kind the edge points at", kind, ok)
+		}
+	})
+
+	t.Run("a reverse edge prefers the kinds its key names", func(t *testing.T) {
+		// A reverse key names the source of the edge it declares, so the kinds
+		// a reference under it may have are the edge's from kinds.
+		overlapping := ADRPreset()
+		overlapping.Kinds = map[string]KindSpec{
+			"beta":  {Dir: "beta", ID: `^X-\d+$`},
+			"alpha": {Dir: "alpha", ID: `^X-\d+$`},
+		}
+		spec := EdgeSpec{Name: "supersedes", Key: "superseded-by", Direction: DirectionReverse, From: []string{"beta"}, To: []string{"alpha"}}
+
+		norm, ok := overlapping.EdgeNormalizer(spec).(UnionNormalizer)
+		if !ok {
+			t.Fatalf("EdgeNormalizer = %T, want a union over the kinds", overlapping.EdgeNormalizer(spec))
+		}
+		if kind, ok := norm.Kind("X-7"); !ok || kind != "beta" {
+			t.Fatalf("Kind(X-7) = %q (ok=%v), want the kind the reverse key names", kind, ok)
+		}
+	})
+
+	t.Run("a corpus without kinds keeps the digit-run normalizer", func(t *testing.T) {
+		norm := ADRPreset().EdgeNormalizer(EdgeSpec{Name: "supersedes", Key: "supersedes", Direction: DirectionForward})
+
+		if got, ok := norm.Normalize("339"); !ok || got != "0339" {
+			t.Fatalf("Normalize(339) = %q (ok=%v), want 0339", got, ok)
+		}
+	})
+}
+
+func TestConfigIDShaped(t *testing.T) {
+	t.Run("a corpus without kinds asks the digit-run rules", func(t *testing.T) {
+		cfg := ADRPreset()
+
+		if !cfg.IDShaped("ADR-0042") || cfg.IDShaped("UZ-V-001") {
+			t.Fatal("IDShaped disagrees with the single-kind rules")
+		}
+	})
+
+	t.Run("a corpus with kinds asks every kind", func(t *testing.T) {
+		cfg := ADRPreset()
+		cfg.Kinds = testKinds()
+
+		for _, ref := range []string{"UZ-V-001", "conform/uz-v-001", "ADR-339"} {
+			if !cfg.IDShaped(ref) {
+				t.Errorf("IDShaped(%q) = false, want a kind to accept it", ref)
+			}
+		}
+		for _, ref := range []string{"see UZ-V-001", "uz-v-001", ""} {
+			if cfg.IDShaped(ref) {
+				t.Errorf("IDShaped(%q) = true, want no kind to accept it", ref)
+			}
+		}
+	})
+}
+
+func TestIDPatternRejectsWhatDoesNotCompile(t *testing.T) {
+	if _, err := IDPattern("^UZ-([A-Z]$"); err == nil {
+		t.Fatal("IDPattern accepted a pattern that does not compile")
+	}
+}
+
+func TestDigitRunNormalizerInsideAUnion(t *testing.T) {
+	// A kind that declares no pattern reads the digit run, but only out of a
+	// reference that is wholly an identity: inside a union it would otherwise
+	// claim every reference the pattern kinds rejected.
+	norm := DigitRunNormalizer{ADRNormalizer{Pad: 4}}
+
+	got, ok := norm.Normalize("ADR-339")
+	if !ok || got != "0339" {
+		t.Fatalf("Normalize(ADR-339) = %q (ok=%v), want 0339", got, ok)
+	}
+	for _, ref := range []string{"see 0042", "uz-v-001", "0042 and 0043"} {
+		if id, ok := norm.Normalize(ref); ok {
+			t.Errorf("Normalize(%q) = %q, want no identifier", ref, id)
+		}
+	}
+}

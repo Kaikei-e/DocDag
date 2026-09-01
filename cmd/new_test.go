@@ -425,3 +425,14 @@ func TestNewResolvesToTheCreatedDocument(t *testing.T) {
 	assertExit(t, resolved, 0)
 	assertLines(t, "resolve", lines(resolved.stdout), []string{"0007"})
 }
+
+func TestNewRefusesAMultiKindCorpus(t *testing.T) {
+	// Which kind to create, under which identity rules and from which template,
+	// is a question the corpus has no default answer to.
+	got := run(t, "new", "Evidence is addressable", "--config", filepath.Join(fixture(t, "kinds"), "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	if !strings.Contains(got.stderr, "new requires --kind on a multi-kind corpus") {
+		t.Errorf("stderr = %q, want it to ask for --kind", got.stderr)
+	}
+}

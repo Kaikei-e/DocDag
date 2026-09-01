@@ -19,6 +19,23 @@ func CheckDocuments(docs []*parse.Document, cfg config.Config) []model.Finding {
 	findings := []model.Finding{}
 	paths := make(map[model.ID][]string, len(docs))
 	for _, doc := range docs {
+		// A file in a kind's directory that yields no identity is reported
+		// rather than skipped: the directory is what declares it a document of
+		// that kind, so a name no identity rule accepts is a mistake, not
+		// another tool's file. A single-kind corpus keeps deciding by the file
+		// name alone, and parse.Dir hands over nothing it rejected.
+		if doc.ID == "" && cfg.Multikind() {
+			// A block that does not decode is why the identity could not be
+			// read; reporting a missing identifier on top of it would name a
+			// symptom and bury the cause.
+			if doc.Err != nil {
+				findings = append(findings, invalidFrontmatter(cfg, doc))
+				continue
+			}
+			findings = append(findings, idMismatch(cfg, doc))
+			continue
+		}
+		findings = append(findings, kindFindings(cfg, doc)...)
 		paths[doc.ID] = append(paths[doc.ID], doc.Path)
 		switch {
 		case doc.Err != nil:
@@ -47,6 +64,72 @@ func CheckDocuments(docs []*parse.Document, cfg config.Config) []model.Finding {
 
 // firstFileLine is where a finding about a whole file points.
 const firstFileLine = 1
+
+// documentLocation points a finding at one of a document's frontmatter keys,
+// falling back to the opening delimiter, and to the first line for a file that
+// carries no frontmatter block at all.
+func documentLocation(doc *parse.Document, keys ...string) model.Location {
+	fallback := doc.FrontmatterLine
+	if fallback == 0 {
+		fallback = firstFileLine
+	}
+	return model.Locate(doc.Path, fallback, doc.KeyLines, keys...)
+}
+
+// idMismatch reports a document whose identity token no identity rule of its
+// kind accepts. It names the pattern the kind declares, because that is what
+// the token has to be rewritten to satisfy — or, for a pattern no file name can
+// carry, what the frontmatter id has to be written as.
+func idMismatch(cfg config.Config, doc *parse.Document) model.Finding {
+	detail := fmt.Sprintf("%q is not an identifier of kind %q", doc.Identity, doc.Kind)
+	if spec, ok := cfg.Kind(doc.Kind); ok && spec.ID != "" {
+		detail += fmt.Sprintf(", which reads %s", spec.ID)
+	}
+	return model.Finding{
+		Severity: cfg.Severity(model.RuleIDMismatch),
+		Rule:     model.RuleIDMismatch,
+		Detail:   detail,
+		Location: documentLocation(doc, config.KeyID),
+	}
+}
+
+// kindFindings reports what a document's kind says about its frontmatter: a
+// written kind that disagrees with the directory it lives in, and, where the
+// kind is closed, every key the configuration does not know.
+func kindFindings(cfg config.Config, doc *parse.Document) []model.Finding {
+	findings := []model.Finding{}
+	if doc.Kind == "" {
+		return findings
+	}
+	if written, ok := parse.Attr(doc.Frontmatter, config.KeyKind); ok && strings.TrimSpace(written) != doc.Kind {
+		findings = append(findings, model.Finding{
+			Severity: cfg.Severity(model.RuleKindMismatch),
+			Rule:     model.RuleKindMismatch,
+			ID:       doc.ID,
+			Detail:   fmt.Sprintf("frontmatter kind %q disagrees with directory kind %q", strings.TrimSpace(written), doc.Kind),
+			Location: documentLocation(doc, config.KeyKind),
+		})
+	}
+	spec, ok := cfg.Kind(doc.Kind)
+	if !ok || !spec.Closed {
+		return findings
+	}
+	known := cfg.KnownFrontmatterKeys()
+	for _, key := range slices.Sorted(maps.Keys(doc.Frontmatter)) {
+		if slices.Contains(known, key) {
+			continue
+		}
+		findings = append(findings, model.Finding{
+			Severity: cfg.Severity(model.RuleUnknownField),
+			Rule:     model.RuleUnknownField,
+			ID:       doc.ID,
+			Detail: fmt.Sprintf("frontmatter key %q is not declared by the closed kind %q, declared: %s",
+				key, doc.Kind, strings.Join(known, ", ")),
+			Location: documentLocation(doc, key),
+		})
+	}
+	return findings
+}
 
 func invalidFrontmatter(cfg config.Config, doc *parse.Document) model.Finding {
 	f := model.Finding{
@@ -270,6 +353,8 @@ func CheckInverse(g *model.Graph, cfg config.Config) []model.Finding {
 func checkInverseKey(g *model.Graph, cfg config.Config, spec config.EdgeSpec) []model.Finding {
 	findings := []model.Finding{}
 	t := model.EdgeType(spec.Name)
+	// An inverse key names the sources of the edges it mirrors, which the
+	// edge's own to: kinds say nothing about, so every kind resolves them.
 	normalizer := cfg.Normalizer()
 	listed := make(map[edgeKey]bool)
 
@@ -277,7 +362,7 @@ func checkInverseKey(g *model.Graph, cfg config.Config, spec config.EdgeSpec) []
 		n := g.Nodes[id]
 		loc := n.Location(spec.Inverse, spec.Key, statusField(cfg))
 		refs, invalid := parse.Refs(n.Attrs, spec.Inverse)
-		for _, entry := range append(slices.Clone(invalid), unshaped(refs)...) {
+		for _, entry := range append(slices.Clone(invalid), unshaped(cfg, refs)...) {
 			findings = append(findings, model.Finding{
 				Severity: cfg.Severity(model.RuleInvalidRef),
 				Rule:     model.RuleInvalidRef,
@@ -288,7 +373,7 @@ func checkInverseKey(g *model.Graph, cfg config.Config, spec config.EdgeSpec) []
 		}
 		for _, ref := range refs {
 			source, ok := normalizer.Normalize(ref)
-			if !ok || !config.IDShaped(ref) {
+			if !ok || !cfg.IDShaped(ref) {
 				continue
 			}
 			if _, known := g.Node(source); !known {
@@ -346,11 +431,12 @@ func inverseMismatch(g *model.Graph, cfg config.Config, spec config.EdgeSpec, ow
 	return f
 }
 
-// unshaped returns the references that name no identity at all.
-func unshaped(refs []string) []string {
+// unshaped returns the references that name no identity at all, under whatever
+// identity rules the configuration holds.
+func unshaped(cfg config.Config, refs []string) []string {
 	out := make([]string, 0, len(refs))
 	for _, ref := range refs {
-		if !config.IDShaped(ref) {
+		if !cfg.IDShaped(ref) {
 			out = append(out, ref)
 		}
 	}
@@ -413,26 +499,82 @@ func cardinality(g *model.Graph, cfg config.Config, spec config.EdgeSpec, id mod
 	return findings
 }
 
-// CheckStatusVocabulary reports statuses outside the configured vocabulary.
-func CheckStatusVocabulary(g *model.Graph, cfg config.Config) []model.Finding {
+// CheckEdgeKinds reports edges whose endpoints are of a kind the edge does not
+// allow. Only an endpoint the corpus holds is checked: a reference naming no
+// document has no kind to be wrong about, and is a dangling_ref of its own.
+func CheckEdgeKinds(g *model.Graph, cfg config.Config) []model.Finding {
 	findings := []model.Finding{}
-	if len(cfg.StatusValues) == 0 {
-		return findings
-	}
-	for _, id := range g.NodeIDs() {
-		raw := g.Nodes[id].Status
-		if strings.TrimSpace(raw) == "" {
+	for _, spec := range cfg.Edges {
+		if len(spec.From) == 0 && len(spec.To) == 0 {
 			continue
 		}
-		if _, known := canonicalStatus(cfg, raw); known {
+		for _, e := range g.EdgesOfType(model.EdgeType(spec.Name)) {
+			for _, side := range []struct {
+				name    string
+				id      model.ID
+				allowed []string
+			}{{"source", e.From, spec.From}, {"target", e.To, spec.To}} {
+				n, known := g.Node(side.id)
+				if !known || len(side.allowed) == 0 || slices.Contains(side.allowed, n.Kind) {
+					continue
+				}
+				findings = append(findings, edgeKindMismatch(g, cfg, spec, e, side.name, n, side.allowed))
+			}
+		}
+	}
+	SortFindings(findings)
+	return findings
+}
+
+// edgeKindMismatch files the finding against the document that declared the
+// edge, on the key it declared it under: that is the line a reader has to
+// change, whichever end of the edge is of the wrong kind.
+func edgeKindMismatch(g *model.Graph, cfg config.Config, spec config.EdgeSpec, e model.Edge, side string, endpoint *model.Node, allowed []string) model.Finding {
+	owner := edgeOwner(spec, e)
+	f := model.Finding{
+		Severity: cfg.Severity(model.RuleEdgeKindMismatch),
+		Rule:     model.RuleEdgeKindMismatch,
+		ID:       owner,
+		Detail: fmt.Sprintf("%s %s %s is kind %q, want one of: %s",
+			spec.Name, side, endpoint.ID, endpoint.Kind, strings.Join(allowed, ", ")),
+	}
+	if n, ok := g.Node(owner); ok {
+		f.Location = edgeLocation(cfg, n, e)
+	}
+	if endpoint.ID != owner {
+		f.Related = []model.Location{endpoint.Location(config.KeyKind)}
+	}
+	return f
+}
+
+// edgeOwner names the document that declared an edge: its source, or its target
+// when the spec reads the key in reverse.
+func edgeOwner(spec config.EdgeSpec, e model.Edge) model.ID {
+	if spec.Direction == config.DirectionReverse {
+		return e.To
+	}
+	return e.From
+}
+
+// CheckStatusVocabulary reports statuses outside the vocabulary their kind
+// answers to, which is the top-level one wherever a kind declares none.
+func CheckStatusVocabulary(g *model.Graph, cfg config.Config) []model.Finding {
+	findings := []model.Finding{}
+	for _, id := range g.NodeIDs() {
+		n := g.Nodes[id]
+		vocabulary := cfg.KindStatusValues(n.Kind)
+		if len(vocabulary) == 0 || strings.TrimSpace(n.Status) == "" {
+			continue
+		}
+		if _, known := canonicalKindStatus(cfg, n.Kind, n.Status); known {
 			continue
 		}
 		findings = append(findings, model.Finding{
 			Severity: cfg.Severity(model.RuleUnknownStatus),
 			Rule:     model.RuleUnknownStatus,
 			ID:       id,
-			Detail:   fmt.Sprintf("status %q is outside the vocabulary %s", raw, strings.Join(cfg.StatusValues, ", ")),
-			Location: g.Nodes[id].Location(statusField(cfg)),
+			Detail:   fmt.Sprintf("status %q is outside the vocabulary %s", n.Status, strings.Join(vocabulary, ", ")),
+			Location: n.Location(statusField(cfg)),
 		})
 	}
 	return findings
@@ -502,6 +644,7 @@ func Check(g *model.Graph, cfg config.Config) []model.Finding {
 	findings = append(findings, CheckDangling(g, cfg)...)
 	findings = append(findings, CheckInverse(g, cfg)...)
 	findings = append(findings, CheckCardinality(g, cfg)...)
+	findings = append(findings, CheckEdgeKinds(g, cfg)...)
 	findings = append(findings, CheckStatusVocabulary(g, cfg)...)
 	findings = append(findings, CheckDerived(g, cfg)...)
 	SortFindings(findings)

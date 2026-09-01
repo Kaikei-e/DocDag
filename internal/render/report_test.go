@@ -334,3 +334,50 @@ func TestReportRenderersPropagateWriterErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestFindingsAboutAFileWithoutAnIdentifier(t *testing.T) {
+	// A file that yields no identifier is filed against no document, so the
+	// renderers name the rule and the detail and leave no gap between them.
+	findings := []model.Finding{{
+		Severity: model.SeverityError,
+		Rule:     model.RuleIDMismatch,
+		Detail:   `"README" is not an identifier of kind "clause"`,
+		Location: model.Location{Path: "spec/clauses/README.md", Line: 1},
+	}}
+	summary := model.Summary{Documents: 1, Errors: 1}
+
+	tests := []struct {
+		name  string
+		write func(io.Writer, []model.Finding, model.Summary) error
+		want  string
+	}{
+		{
+			name:  "text",
+			write: FindingsText,
+			want:  `spec/clauses/README.md:1: ERROR id_mismatch: "README" is not an identifier of kind "clause"`,
+		},
+		{
+			name:  "github",
+			write: FindingsGitHub,
+			want:  `title=id_mismatch::"README" is not an identifier of kind "clause"`,
+		},
+		{
+			name:  "rdjson",
+			write: FindingsRDJSON,
+			want:  `id_mismatch: \"README\" is not an identifier of kind \"clause\"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var out bytes.Buffer
+			if err := tt.write(&out, findings, summary); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			if !strings.Contains(out.String(), tt.want) {
+				t.Fatalf("report = %q, want it to contain %q", out.String(), tt.want)
+			}
+		})
+	}
+}

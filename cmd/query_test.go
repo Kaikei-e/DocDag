@@ -322,3 +322,49 @@ func TestAProjectionIsOnlyAFieldWhereItIsDeclared(t *testing.T) {
 		}
 	})
 }
+
+func TestQueryAndResolveReadOneGraphOverEveryKind(t *testing.T) {
+	config := filepath.Join(fixture(t, "kinds"), "docdag.yaml")
+
+	t.Run("the binding set spans the kinds", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "binding", lines(got.stdout), []string{
+			"UZ-V-001", "UZ-V-003", "UZ-V-004", "UZ-V-005", "UZ-V-006",
+			"conform/uz-v-001", "conform/wrong-target", "dev-0001",
+		})
+	})
+
+	t.Run("ancestors cross a kind boundary", func(t *testing.T) {
+		got := run(t, "query", "UZ-V-001", "--ancestors", "--config", config)
+
+		assertExit(t, got, 0)
+		// The conformance test reaching the deviation that deviates from the
+		// clause is two hops of two edge types: one graph, three kinds.
+		assertLines(t, "ancestors", lines(got.stdout), []string{"UZ-V-006", "conform/uz-v-001", "conform/wrong-target", "dev-0001"})
+	})
+
+	t.Run("resolve follows the supersedes chain of one kind", func(t *testing.T) {
+		got := run(t, "resolve", "UZ-V-002", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "resolve", lines(got.stdout), []string{"UZ-V-003"})
+	})
+
+	t.Run("an identifier of another kind resolves to itself", func(t *testing.T) {
+		got := run(t, "resolve", "conform/uz-v-001", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "resolve", lines(got.stdout), []string{"conform/uz-v-001"})
+	})
+
+	t.Run("a reference no kind accepts is unrecognized", func(t *testing.T) {
+		got := run(t, "resolve", "uz-v-002", "--config", config)
+
+		assertExit(t, got, 1)
+		if !strings.Contains(got.stderr, "unrecognized reference") {
+			t.Errorf("stderr = %q, want an unrecognized reference diagnostic", got.stderr)
+		}
+	})
+}

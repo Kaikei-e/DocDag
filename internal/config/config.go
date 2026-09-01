@@ -5,6 +5,8 @@ package config
 import (
 	"fmt"
 	"maps"
+	"path"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strconv"
@@ -26,6 +28,15 @@ const (
 	DefaultIDWidth     = 4
 	DefaultStatusField = "status"
 	DefaultConfigFile  = "docdag.yaml"
+)
+
+// Frontmatter keys the engine reads on every document whatever its kind
+// declares: the two it renders, and the two that carry identity.
+const (
+	KeyTitle = "title"
+	KeyDate  = "date"
+	KeyID    = "id"
+	KeyKind  = "kind"
 )
 
 // Edge directions. Forward means the containing document is the edge source;
@@ -86,6 +97,18 @@ func (c Config) Scans(region string) bool {
 	return slices.Contains(c.References.Scan, region)
 }
 
+// KindSpec declares one document kind: the directory its documents live in,
+// the shape of their identifiers, the status vocabulary they answer to and
+// whether their frontmatter is a closed set of keys. A kind without an id
+// pattern keeps the digit-run identity a single-kind corpus has, and one
+// without a status vocabulary inherits the top-level one.
+type KindSpec struct {
+	Dir          string   `yaml:"dir"`
+	ID           string   `yaml:"id,omitempty"`
+	StatusValues []string `yaml:"status_values,omitempty"`
+	Closed       bool     `yaml:"closed,omitempty"`
+}
+
 // EdgeSpec declares one typed constraint edge and the frontmatter key that
 // carries its references.
 type EdgeSpec struct {
@@ -93,6 +116,12 @@ type EdgeSpec struct {
 	Key       string `yaml:"key"`
 	Acyclic   bool   `yaml:"acyclic"`
 	Direction string `yaml:"direction"`
+	// From and To are the kinds the edge's endpoints may have, empty meaning
+	// any. They constrain the edge as the graph holds it, so a reverse edge's
+	// From is the kind of the document its key names, not of the one that
+	// wrote the key down.
+	From []string `yaml:"from,omitempty"`
+	To   []string `yaml:"to,omitempty"`
 	// Inverse is the frontmatter key the edge's target must mirror the edge
 	// under. It declares no edges of its own.
 	Inverse string `yaml:"inverse,omitempty"`
@@ -467,15 +496,19 @@ func (p ProjectionSpec) AttrKeys() []string {
 // Config is the effective configuration. A preset is nothing more than a
 // built-in Config value, so every field is expressible in docdag.yaml.
 type Config struct {
-	Preset       string            `yaml:"preset,omitempty"`
-	Dir          string            `yaml:"dir,omitempty"`
-	IDWidth      int               `yaml:"id_width,omitempty"`
-	StatusField  string            `yaml:"status_field,omitempty"`
-	StatusValues []string          `yaml:"status_values,omitempty"`
-	Edges        []EdgeSpec        `yaml:"edges,omitempty"`
-	DerivedEdges []DerivedEdgeSpec `yaml:"derived_edges,omitempty"`
-	Rules        []Rule            `yaml:"rules,omitempty"`
-	Projections  []ProjectionSpec  `yaml:"projections,omitempty"`
+	Preset  string `yaml:"preset,omitempty"`
+	Dir     string `yaml:"dir,omitempty"`
+	IDWidth int    `yaml:"id_width,omitempty"`
+	// Kinds declares the document kinds of a multi-kind corpus, keyed by kind
+	// name. A configuration that declares none is single-kind: Dir, IDWidth and
+	// StatusValues describe that one kind, exactly as they always have.
+	Kinds        map[string]KindSpec `yaml:"kinds,omitempty"`
+	StatusField  string              `yaml:"status_field,omitempty"`
+	StatusValues []string            `yaml:"status_values,omitempty"`
+	Edges        []EdgeSpec          `yaml:"edges,omitempty"`
+	DerivedEdges []DerivedEdgeSpec   `yaml:"derived_edges,omitempty"`
+	Rules        []Rule              `yaml:"rules,omitempty"`
+	Projections  []ProjectionSpec    `yaml:"projections,omitempty"`
 	// Binding names the projection that defines the set of documents in force.
 	// It is a preset's answer to "what is current", not a hard-coded one.
 	Binding      string         `yaml:"binding,omitempty"`
@@ -535,6 +568,10 @@ var structuralSeverities = map[string]model.Severity{
 	model.RuleEdgeAttrUnknown:        model.SeverityError,
 	model.RuleEdgeAttrMissing:        model.SeverityError,
 	model.RuleEdgeAttrInvalid:        model.SeverityError,
+	model.RuleIDMismatch:             model.SeverityError,
+	model.RuleKindMismatch:           model.SeverityError,
+	model.RuleUnknownField:           model.SeverityError,
+	model.RuleEdgeKindMismatch:       model.SeverityError,
 }
 
 // Severity reports the severity a structural check speaks at, after whatever
@@ -544,6 +581,68 @@ func (c Config) Severity(rule string) model.Severity {
 		return raised
 	}
 	return structuralSeverities[rule]
+}
+
+// Multikind reports whether the configuration declares document kinds. A
+// configuration that declares none is the single-kind corpus DocDag has always
+// managed, and every kind-aware code path falls back on that behaviour.
+func (c Config) Multikind() bool { return len(c.Kinds) > 0 }
+
+// Kind returns the spec of one declared kind.
+func (c Config) Kind(name string) (KindSpec, bool) {
+	spec, ok := c.Kinds[name]
+	return spec, ok
+}
+
+// KindNames returns the declared kinds sorted by name. Sorted rather than
+// written order because a map has no order to keep, and every answer derived
+// from the kinds — which one resolves a reference, which directory is read
+// first — has to be the same on every run.
+func (c Config) KindNames() []string { return slices.Sorted(maps.Keys(c.Kinds)) }
+
+// KindStatusValues returns the status vocabulary a kind answers to: its own
+// when it declares one, the top-level vocabulary otherwise. A kind that says
+// nothing about status is not a kind without status.
+func (c Config) KindStatusValues(name string) []string {
+	if spec, ok := c.Kinds[name]; ok && len(spec.StatusValues) > 0 {
+		return spec.StatusValues
+	}
+	return c.StatusValues
+}
+
+// KnownFrontmatterKeys returns the frontmatter keys a closed kind accepts,
+// sorted: the keys the engine itself reads, the status field, and every key the
+// configured edges declare or mirror or a derived edge reads. It is built from
+// the configuration rather than written down, so a corpus that renames a key
+// does not also have to widen the set; a later revision adds the keys a kind
+// declares under fields: by extending this one place.
+func (c Config) KnownFrontmatterKeys() []string {
+	keys := map[string]bool{
+		KeyTitle:            true,
+		KeyDate:             true,
+		KeyID:               true,
+		KeyKind:             true,
+		c.EffectiveStatus(): true,
+	}
+	for _, spec := range c.Edges {
+		keys[spec.Key] = true
+		if spec.Inverse != "" {
+			keys[spec.Inverse] = true
+		}
+	}
+	for _, spec := range c.DerivedEdges {
+		keys[spec.Field] = true
+	}
+	return slices.Sorted(maps.Keys(keys))
+}
+
+// EffectiveStatus names the frontmatter key statuses are read from, which is
+// the default wherever a configuration renames nothing.
+func (c Config) EffectiveStatus() string {
+	if c.StatusField == "" {
+		return DefaultStatusField
+	}
+	return c.StatusField
 }
 
 // Edge returns the spec of one typed edge.
@@ -612,6 +711,9 @@ func (c Config) Validate() error {
 	if c.IDWidth < 0 {
 		return fmt.Errorf("id_width %d is negative: %w", c.IDWidth, model.ErrInvalidConfig)
 	}
+	if err := c.validateKinds(); err != nil {
+		return err
+	}
 	if err := c.validateEdges(); err != nil {
 		return err
 	}
@@ -669,6 +771,69 @@ func (c Config) validateReferences() error {
 	return nil
 }
 
+// validateKinds holds the declared kinds to what the parser can read: a named
+// kind with a directory of its own and, where it declares one, an identifier
+// pattern that compiles. Two kinds sharing a directory would make the kind of a
+// document — and therefore its identity — depend on which one was looked at
+// first, so the directories have to be distinct.
+func (c Config) validateKinds() error {
+	if !c.Multikind() {
+		return nil
+	}
+	// A corpus whose kinds declare their own directories has nothing for a
+	// top-level dir to describe, and one written anyway — in the file or as
+	// --dir — names a directory no kind would claim the documents of.
+	if c.Dir != "" {
+		return fmt.Errorf("dir %q describes nothing beside kinds, which declare their own directories: %w",
+			c.Dir, model.ErrInvalidConfig)
+	}
+	dirs := make(map[string]string, len(c.Kinds))
+	for _, name := range c.KindNames() {
+		spec := c.Kinds[name]
+		switch {
+		case name == "":
+			return fmt.Errorf("kind without a name: %w", model.ErrInvalidConfig)
+		case spec.Dir == "":
+			return fmt.Errorf("kind %q without a dir: %w", name, model.ErrInvalidConfig)
+		}
+		dir := path.Clean(filepath.ToSlash(spec.Dir))
+		if owner, taken := dirs[dir]; taken {
+			return fmt.Errorf("kind %q: dir %q already holds kind %q: %w", name, spec.Dir, owner, model.ErrInvalidConfig)
+		}
+		dirs[dir] = name
+		if spec.ID == "" {
+			continue
+		}
+		if _, err := IDPattern(spec.ID); err != nil {
+			return fmt.Errorf("kind %q: id %q: %v: %w", name, spec.ID, err, model.ErrInvalidConfig)
+		}
+	}
+	return nil
+}
+
+// validateEdgeKinds holds an edge's endpoint constraints to the declared
+// vocabulary: a kind nobody declares constrains nothing, and a constraint on a
+// corpus without kinds could never be violated, so both are typos rather than
+// opinions.
+func (c Config) validateEdgeKinds(spec EdgeSpec) error {
+	for _, side := range []struct {
+		key   string
+		kinds []string
+	}{{"from", spec.From}, {"to", spec.To}} {
+		for _, name := range side.kinds {
+			if !c.Multikind() {
+				return fmt.Errorf("edge %q: %s names kind %q, which the configuration does not declare: %w",
+					spec.Name, side.key, name, model.ErrInvalidConfig)
+			}
+			if _, ok := c.Kind(name); !ok {
+				return fmt.Errorf("edge %q: %s names undeclared kind %q, declare it under kinds: %w",
+					spec.Name, side.key, name, model.ErrInvalidConfig)
+			}
+		}
+	}
+	return nil
+}
+
 func (c Config) validateEdges() error {
 	declared := make(map[string]bool, len(c.Edges))
 	keys := make(map[string]bool, len(c.Edges))
@@ -688,6 +853,9 @@ func (c Config) validateEdges() error {
 			return err
 		}
 		if err := validEdgeAttrs(spec); err != nil {
+			return err
+		}
+		if err := c.validateEdgeKinds(spec); err != nil {
 			return err
 		}
 		declared[spec.Name] = true

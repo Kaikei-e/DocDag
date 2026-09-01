@@ -1154,3 +1154,160 @@ func TestFileRecordsKeyLinesWithAttributedEntries(t *testing.T) {
 		t.Fatalf("entries = %#v, want one attributed reference to 0001", entries)
 	}
 }
+
+// testKindsConfig is the multi-kind configuration the kind tests read: one kind
+// whose identifiers a file name can carry, one whose identifiers carry a slash
+// and cannot, and one keeping the digit-run rules.
+func testKindsConfig(root string) config.Config {
+	cfg := config.ADRPreset()
+	cfg.Kinds = map[string]config.KindSpec{
+		"clause":  {Dir: filepath.Join(root, "clauses"), ID: `^UZ-[A-Z]-\d{3}$`},
+		"conform": {Dir: filepath.Join(root, "conform"), ID: `^conform/[a-z0-9-]+$`},
+		"pm":      {Dir: filepath.Join(root, "pm")},
+	}
+	return cfg
+}
+
+func TestKindFile(t *testing.T) {
+	root := testWriteDocs(t, map[string]string{
+		filepath.Join("clauses", "UZ-V-001.md"): "---\ntitle: Evidence\nkind: clause\nstatus: accepted\n---\n\n# Evidence\n",
+		filepath.Join("clauses", "written.md"):  "---\ntitle: Written\nid: UZ-V-002\n---\n\n# Written\n",
+		filepath.Join("clauses", "README.md"):   "# Clauses\n",
+		filepath.Join("conform", "uz-v-001.md"): "---\ntitle: Check\nid: conform/uz-v-001\n---\n\n# Check\n",
+		filepath.Join("conform", "no-id.md"):    "---\ntitle: No identifier\n---\n\n# No identifier\n",
+		filepath.Join("pm", "0007-outage.md"):   "---\ntitle: Outage\n---\n\n# Outage\n",
+		filepath.Join("clauses", "wrapped.md"):  "---\ntitle: Wrapped\nid: \"[[UZ-V-003]]\"\n---\n\n# Wrapped\n",
+	})
+	cfg := testKindsConfig(root)
+
+	tests := []struct {
+		name     string
+		kind     string
+		file     string
+		wantID   string
+		identity string
+	}{
+		{name: "the file name carries the identity", kind: "clause", file: filepath.Join("clauses", "UZ-V-001.md"), wantID: "UZ-V-001", identity: "UZ-V-001"},
+		{name: "a written id wins over the file name", kind: "clause", file: filepath.Join("clauses", "written.md"), wantID: "UZ-V-002", identity: "UZ-V-002"},
+		{name: "a wikilinked id is unwrapped", kind: "clause", file: filepath.Join("clauses", "wrapped.md"), wantID: "UZ-V-003", identity: "[[UZ-V-003]]"},
+		{name: "an identifier carrying a slash is written down", kind: "conform", file: filepath.Join("conform", "uz-v-001.md"), wantID: "conform/uz-v-001", identity: "conform/uz-v-001"},
+		{name: "a kind without a pattern keeps the digit run", kind: "pm", file: filepath.Join("pm", "0007-outage.md"), wantID: "0007", identity: "0007-outage"},
+		{name: "a name no pattern accepts yields no identity", kind: "clause", file: filepath.Join("clauses", "README.md"), identity: "README"},
+		{name: "a slash pattern without a written id yields no identity", kind: "conform", file: filepath.Join("conform", "no-id.md"), identity: "no-id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc, err := KindFile(filepath.Join(root, tt.file), cfg, tt.kind)
+			if err != nil {
+				t.Fatalf("KindFile: %v", err)
+			}
+
+			if doc.ID.String() != tt.wantID {
+				t.Errorf("id = %q, want %q", doc.ID, tt.wantID)
+			}
+			if doc.Identity != tt.identity {
+				t.Errorf("identity = %q, want %q", doc.Identity, tt.identity)
+			}
+			if doc.Kind != tt.kind {
+				t.Errorf("kind = %q, want %q", doc.Kind, tt.kind)
+			}
+			// Membership of the kind's directory is what makes a file one of
+			// its documents, so nothing is measured against a name pattern.
+			if !doc.MatchesPattern {
+				t.Error("MatchesPattern = false, want every file in a kind's directory to be one of its documents")
+			}
+		})
+	}
+}
+
+func TestKinds(t *testing.T) {
+	root := testWriteDocs(t, map[string]string{
+		filepath.Join("clauses", "UZ-V-002.md"): "---\ntitle: Second\n---\n\n# Second\n",
+		filepath.Join("clauses", "UZ-V-001.md"): "---\ntitle: First\n---\n\n# First\n",
+		filepath.Join("conform", "check.md"):    "---\ntitle: Check\nid: conform/check\n---\n\n# Check\n",
+		filepath.Join("conform", "notes.txt"):   "not markdown\n",
+		filepath.Join("pm", "0007-outage.md"):   "---\ntitle: Outage\n---\n\n# Outage\n",
+	})
+	cfg := testKindsConfig(root)
+
+	t.Run("the kinds are read in sorted order, each directory in name order", func(t *testing.T) {
+		docs, err := Kinds(cfg)
+		if err != nil {
+			t.Fatalf("Kinds: %v", err)
+		}
+
+		wantIDs := []string{"UZ-V-001", "UZ-V-002", "conform/check", "0007"}
+		if got := testIDs(docs); !slices.Equal(got, wantIDs) {
+			t.Fatalf("ids = %v, want %v", got, wantIDs)
+		}
+		wantKinds := []string{"clause", "clause", "conform", "pm"}
+		got := make([]string, 0, len(docs))
+		for _, doc := range docs {
+			got = append(got, doc.Kind)
+		}
+		if !slices.Equal(got, wantKinds) {
+			t.Fatalf("kinds = %v, want %v", got, wantKinds)
+		}
+	})
+
+	t.Run("a kind directory that does not exist is an error", func(t *testing.T) {
+		missing := testKindsConfig(root)
+		missing.Kinds["premise"] = config.KindSpec{Dir: filepath.Join(root, "premises")}
+
+		if _, err := Kinds(missing); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("Kinds = %v, want it to report the missing directory", err)
+		}
+	})
+
+	t.Run("Documents reads the kinds when there are kinds", func(t *testing.T) {
+		docs, err := Documents(cfg)
+		if err != nil {
+			t.Fatalf("Documents: %v", err)
+		}
+		if len(docs) != 4 {
+			t.Fatalf("documents = %v, want the four the kinds hold", testIDs(docs))
+		}
+	})
+
+	t.Run("Documents reads the one directory when there are none", func(t *testing.T) {
+		single := config.ADRPreset()
+		single.Dir = testFixture(t, "ok-basic")
+
+		docs, err := Documents(single)
+		if err != nil {
+			t.Fatalf("Documents: %v", err)
+		}
+		if len(docs) != 6 {
+			t.Fatalf("documents = %v, want the six of the corpus", testIDs(docs))
+		}
+		for _, doc := range docs {
+			if doc.Kind != "" {
+				t.Fatalf("%s kind = %q, want none on a single-kind corpus", doc.Name, doc.Kind)
+			}
+		}
+	})
+}
+
+func TestKindDirKeepsWhatDirSkips(t *testing.T) {
+	// The single-kind reader decides by file name and skips what it does not
+	// recognize. A kind's directory is the declaration instead, so nothing is
+	// skipped and a file that yields no identity comes back to be reported.
+	root := testWriteDocs(t, map[string]string{
+		filepath.Join("clauses", "UZ-V-001.md"): "---\ntitle: First\n---\n\n# First\n",
+		filepath.Join("clauses", "README.md"):   "# Clauses\n",
+	})
+	cfg := testKindsConfig(root)
+
+	docs, err := KindDir(cfg.Kinds["clause"].Dir, cfg, "clause")
+	if err != nil {
+		t.Fatalf("KindDir: %v", err)
+	}
+
+	if got := testNames(docs); !slices.Equal(got, []string{"README.md", "UZ-V-001.md"}) {
+		t.Fatalf("names = %v, want the stray file kept beside the document", got)
+	}
+	if docs[0].ID != "" {
+		t.Errorf("README id = %q, want none", docs[0].ID)
+	}
+}

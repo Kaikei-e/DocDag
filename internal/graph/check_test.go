@@ -1652,3 +1652,251 @@ func TestEvalRuleLocatesAOneHopClauseAtTheEdgeKey(t *testing.T) {
 }
 
 func testGraphInt(v int) *int { return &v }
+
+func TestCheckDocumentsAcrossKinds(t *testing.T) {
+	cfg := testKindsConfig()
+
+	t.Run("a document takes the kind of its directory", func(t *testing.T) {
+		docs := []*parse.Document{testKindDoc("clause", "UZ-V-001", map[string]any{"kind": "clause", "status": "accepted"})}
+
+		if got := CheckDocuments(docs, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a written kind the directory disagrees with is an error", func(t *testing.T) {
+		docs := []*parse.Document{testKindDoc("clause", "UZ-V-001", map[string]any{"kind": "conform", "status": "accepted"})}
+
+		f := testAssertSingleFinding(t, CheckDocuments(docs, cfg), model.RuleKindMismatch, model.SeverityError, "UZ-V-001")
+		if want := `frontmatter kind "conform" disagrees with directory kind "clause"`; f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		if f.Location.Line != docs[0].KeyLines["kind"] {
+			t.Errorf("location = %+v, want the kind key on line %d", f.Location, docs[0].KeyLines["kind"])
+		}
+	})
+
+	t.Run("a document that writes no kind agrees with its directory", func(t *testing.T) {
+		docs := []*parse.Document{testKindDoc("clause", "UZ-V-001", map[string]any{"status": "accepted"})}
+
+		if got := CheckDocuments(docs, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a closed kind reports every key nobody declared, on its own line", func(t *testing.T) {
+		docs := []*parse.Document{
+			testKindDoc("clause", "UZ-V-001", map[string]any{"status": "accepted", "owner": "platform", "reviewer": "ana"}),
+		}
+
+		findings := testFindingsFor(CheckDocuments(docs, cfg), model.RuleUnknownField)
+
+		if len(findings) != 2 {
+			t.Fatalf("findings = %+v, want one per unknown key", findings)
+		}
+		for i, key := range []string{"owner", "reviewer"} {
+			if !strings.Contains(findings[i].Detail, `"`+key+`"`) {
+				t.Errorf("detail = %q, want it to name %q", findings[i].Detail, key)
+			}
+			if findings[i].Location.Line != docs[0].KeyLines[key] {
+				t.Errorf("%s location = %+v, want line %d", key, findings[i].Location, docs[0].KeyLines[key])
+			}
+		}
+		if want := "declared: date, enforces, id, kind, status, supersedes, title"; !strings.HasSuffix(findings[0].Detail, want) {
+			t.Errorf("detail = %q, want it to end with %q", findings[0].Detail, want)
+		}
+	})
+
+	t.Run("an open kind ignores the keys nobody declared", func(t *testing.T) {
+		docs := []*parse.Document{
+			testKindDoc("conform", "conform/check", map[string]any{"status": "accepted", "owner": "platform"}),
+		}
+
+		if got := CheckDocuments(docs, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none: the kind is open", got)
+		}
+	})
+
+	t.Run("a file that yields no identity is reported rather than skipped", func(t *testing.T) {
+		stray := testKindDoc("clause", "", nil)
+		stray.Identity = "README"
+		stray.Path = "spec/clauses/README.md"
+
+		findings := CheckDocuments([]*parse.Document{stray}, cfg)
+
+		f := testAssertSingleFinding(t, findings, model.RuleIDMismatch, model.SeverityError, "")
+		want := `"README" is not an identifier of kind "clause", which reads ^UZ-[A-Z]-\d{3}$`
+		if f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		if f.Location.Path != "spec/clauses/README.md" {
+			t.Errorf("location = %+v, want the file it is about", f.Location)
+		}
+	})
+
+	t.Run("a written id the kind's pattern rejects is the same finding", func(t *testing.T) {
+		wrong := testKindDoc("clause", "", map[string]any{"id": "uz-v-001", "status": "accepted"})
+		wrong.Identity = "uz-v-001"
+
+		f := testAssertSingleFinding(t, CheckDocuments([]*parse.Document{wrong}, cfg), model.RuleIDMismatch, model.SeverityError, "")
+		if f.Location.Line != wrong.KeyLines["id"] {
+			t.Errorf("location = %+v, want the id key on line %d", f.Location, wrong.KeyLines["id"])
+		}
+	})
+
+	t.Run("frontmatter that does not decode is reported as the cause it is", func(t *testing.T) {
+		// The identity could not be read because the block did not parse, so
+		// the decode failure is the finding rather than the missing identifier.
+		broken := testKindDoc("conform", "", nil)
+		broken.Identity = "check"
+		broken.Err = errInvalidFixtureFrontmatter
+
+		findings := CheckDocuments([]*parse.Document{broken}, cfg)
+
+		testAssertSingleFinding(t, findings, model.RuleInvalidFrontmatter, model.SeverityError, "")
+		if got := testFindingsFor(findings, model.RuleIDMismatch); len(got) != 0 {
+			t.Fatalf("findings = %+v, want the decode failure alone", got)
+		}
+	})
+
+	t.Run("two files without an identity do not collide", func(t *testing.T) {
+		// Neither carries an identifier, so they share nothing to collide over.
+		strays := []*parse.Document{testKindDoc("clause", "", nil), testKindDoc("conform", "", nil)}
+
+		findings := CheckDocuments(strays, cfg)
+
+		if got := testFindingsFor(findings, model.RuleIDCollision); len(got) != 0 {
+			t.Fatalf("findings = %+v, want no collision between two files without an identity", got)
+		}
+		if got := testFindingsFor(findings, model.RuleIDMismatch); len(got) != 2 {
+			t.Fatalf("findings = %+v, want one id_mismatch each", got)
+		}
+	})
+
+	t.Run("two kinds normalizing to one identifier collide", func(t *testing.T) {
+		docs := []*parse.Document{
+			testKindDoc("clause", "UZ-V-001", map[string]any{"status": "accepted"}),
+			testKindDoc("conform", "UZ-V-001", map[string]any{"status": "accepted"}),
+		}
+
+		f := testAssertSingleFinding(t, CheckDocuments(docs, cfg), model.RuleIDCollision, model.SeverityError, "UZ-V-001")
+		if !strings.Contains(f.Detail, "spec/conform/UZ-V-001.md") {
+			t.Errorf("detail = %q, want it to name the document of the other kind", f.Detail)
+		}
+	})
+}
+
+func TestCheckEdgeKinds(t *testing.T) {
+	cfg := testKindsConfig()
+
+	t.Run("an edge between the declared kinds reports nothing", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testKindNode("conform", "conform/check", "accepted"), testKindNode("clause", "UZ-V-001", "accepted")},
+			[]model.Edge{testEdge("conform/check", "UZ-V-001", "enforces")},
+			nil,
+		)
+
+		if got := CheckEdgeKinds(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a source of the wrong kind is an error against the document that declared it", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testKindNode("clause", "UZ-V-002", "accepted"), testKindNode("clause", "UZ-V-001", "accepted")},
+			[]model.Edge{testEdge("UZ-V-002", "UZ-V-001", "enforces")},
+			nil,
+		)
+
+		f := testAssertSingleFinding(t, CheckEdgeKinds(g, cfg), model.RuleEdgeKindMismatch, model.SeverityError, "UZ-V-002")
+		if want := `enforces source UZ-V-002 is kind "clause", want one of: conform`; f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		// The finding points at the declaring document's own frontmatter; the
+		// test nodes carry no enforces key, so it falls back on the status
+		// field the way every edge finding does.
+		if f.Location.Path != "spec/clause/UZ-V-002.md" || f.Location.Line != testStatusLine {
+			t.Errorf("location = %+v, want the declaring document's key line", f.Location)
+		}
+	})
+
+	t.Run("a target of the wrong kind is an error", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testKindNode("conform", "conform/check", "accepted"), testKindNode("deviation", "dev-0001", "accepted")},
+			[]model.Edge{testEdge("conform/check", "dev-0001", "enforces")},
+			nil,
+		)
+
+		f := testAssertSingleFinding(t, CheckEdgeKinds(g, cfg), model.RuleEdgeKindMismatch, model.SeverityError, "conform/check")
+		if want := `enforces target dev-0001 is kind "deviation", want one of: clause`; f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		if len(f.Related) != 1 || f.Related[0].Path != "spec/deviation/dev-0001.md" {
+			t.Errorf("related = %+v, want the endpoint of the wrong kind", f.Related)
+		}
+	})
+
+	t.Run("both endpoints of the wrong kind are two findings", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testKindNode("deviation", "dev-0001", "accepted"), testKindNode("deviation", "dev-0002", "accepted")},
+			[]model.Edge{testEdge("dev-0001", "dev-0002", "enforces")},
+			nil,
+		)
+
+		if got := testFindingsFor(CheckEdgeKinds(g, cfg), model.RuleEdgeKindMismatch); len(got) != 2 {
+			t.Fatalf("findings = %+v, want one per endpoint", got)
+		}
+	})
+
+	t.Run("an endpoint the corpus does not hold has no kind to be wrong about", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testKindNode("conform", "conform/check", "accepted")},
+			[]model.Edge{testEdge("conform/check", "UZ-V-404", "enforces")},
+			nil,
+		)
+
+		if got := CheckEdgeKinds(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none: a dangling reference is its own finding", got)
+		}
+	})
+
+	t.Run("an edge that constrains nothing reports nothing", func(t *testing.T) {
+		unconstrained := testKindsConfig()
+		unconstrained.Edges[1].From, unconstrained.Edges[1].To = nil, nil
+		g := testGraph(
+			[]*model.Node{testKindNode("deviation", "dev-0001", "accepted"), testKindNode("deviation", "dev-0002", "accepted")},
+			[]model.Edge{testEdge("dev-0001", "dev-0002", "enforces")},
+			nil,
+		)
+
+		if got := CheckEdgeKinds(g, unconstrained); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a corpus without kinds is unconstrained", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0001", "accepted"), testNode("0002", "accepted")},
+			[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			nil,
+		)
+
+		if got := CheckEdgeKinds(g, config.ADRPreset()); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a reverse edge is filed against the document whose key declared it", func(t *testing.T) {
+		reversed := testKindsConfig()
+		reversed.Edges[1].Direction = config.DirectionReverse
+		g := testGraph(
+			[]*model.Node{testKindNode("clause", "UZ-V-001", "accepted"), testKindNode("deviation", "dev-0001", "accepted")},
+			[]model.Edge{testEdge("dev-0001", "UZ-V-001", "enforces")},
+			nil,
+		)
+
+		// The key lives on the target of a reverse edge, so that is the
+		// document a reader has to open.
+		testAssertSingleFinding(t, CheckEdgeKinds(g, reversed), model.RuleEdgeKindMismatch, model.SeverityError, "UZ-V-001")
+	})
+}

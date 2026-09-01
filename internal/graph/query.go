@@ -221,7 +221,7 @@ func bindingByStatus(g *model.Graph, cfg config.Config) map[model.ID]bool {
 		if superseded[id] {
 			continue
 		}
-		status, _ := canonicalStatus(cfg, n.Status)
+		status, _ := canonicalKindStatus(cfg, n.Kind, n.Status)
 		binding[id] = strings.EqualFold(status, config.StatusAccepted)
 	}
 	return binding

@@ -18,12 +18,12 @@ A finding reads:
 | **Rule** | the rule's own `severity:` | `rules:` defines them; the preset ships two, and a config that writes `rules:` replaces the list |
 | **Reference and history** | `references.dangling`, or fixed | `dangling_reference` is off by default; `immutable_violation` needs `--immutable-since` |
 
-`structural:` accepts exactly these fifteen names: `cycle`, `dangling_ref`, `id_collision`,
+`structural:` accepts exactly these nineteen names: `cycle`, `dangling_ref`, `id_collision`,
 `invalid_frontmatter`, `missing_frontmatter`, `unknown_status`, `derived_conflict`,
 `unstructured_supersedes`, `invalid_ref`, `empty_edge`, `inverse_mismatch`, `cardinality`,
-`edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`. Naming anything else —
-`status_drift` and `superseded_orphan` included, since they are rules — is a configuration error and
-exits 3.
+`edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`, `id_mismatch`, `kind_mismatch`,
+`unknown_field`, `edge_kind_mismatch`. Naming anything else — `status_drift` and
+`superseded_orphan` included, since they are rules — is a configuration error and exits 3.
 
 ## Status is a projection
 
@@ -47,7 +47,9 @@ YAML parser's own message, positioned on the file's own line and column. No fix 
 
 A file whose name matches the managed-document pattern carries no terminated `---` block: `no
 frontmatter block`. A file that does *not* match the pattern is simply not a managed document and is
-skipped in silence. Fix: `add a YAML frontmatter block with title and status`.
+skipped in silence — on a corpus that declares `kinds:`, where the directory is what declares a file
+a document, it is an `id_mismatch` instead. Fix: `add a YAML frontmatter block with title and
+status`.
 
 Raise it with `structural: {missing_frontmatter: error}` once every document is expected to carry
 one.
@@ -56,20 +58,24 @@ one.
 
 Two or more files normalize to the same identifier: `shares its identifier with <paths>`. The
 finding is filed against the first path and names the rest under `related`. Identity is the file's
-digit run, so `0004-a.md` and `0004-b.md` collide. No fix suggestion; `docdag new` refuses to run at
-all while a corpus carries one.
+digit run, so `0004-a.md` and `0004-b.md` collide; on a corpus declaring `kinds:` it is whatever the
+kinds' patterns say, and two documents of *different* kinds that normalize to one identifier
+collide like any other pair. No fix suggestion; `docdag new` refuses to run at all while a corpus
+carries one.
 
 ### `unknown_status` — error, structural
 
 `status_values` is configured, the document's status is not blank, and the value does not fold onto
-the vocabulary: `status %q is outside the vocabulary <values>`. Comparison is case-insensitive, and
-a value like `superseded by 0003` is accepted when a `derived_edges:` pattern claims it. Fix: `use
-one of: <values>`.
+the vocabulary — the vocabulary of the document's own kind, where kinds declare their own:
+`status %q is outside the vocabulary <values>`. Comparison is case-insensitive, and a value like
+`superseded by 0003` is accepted when a `derived_edges:` pattern claims it. Fix: `use one of:
+<values>`.
 
 `withdrawn` is in the preset vocabulary for a proposal that was dropped rather than replaced: it
 binds nothing, and because nothing supersedes it, it raises no `superseded_orphan` warning either.
 
-Unrecognized frontmatter keys are ignored entirely, so another tool's fields raise nothing.
+Unrecognized frontmatter keys are ignored entirely, so another tool's fields raise nothing — unless
+they are in a kind declared `closed: true`, which is `unknown_field` below.
 
 ### `empty_edge` — error, structural
 
@@ -90,6 +96,57 @@ A typed edge, or an inverse-key entry, names an identifier the corpus does not h
 reference %q does not name a document`. This is the identifier-shaped case; a reference that is not
 identifier-shaped is `invalid_ref` instead. Fix: `did you mean 0002, 0003 or 0042?`, naming up to
 three nearest identifiers, and omitted when there is no plausible candidate.
+
+## Kinds
+
+The four checks below exist only for a corpus that declares `kinds:`; see
+[configuration.md](configuration.md). A corpus that declares none is single-kind, and none of them
+can fire.
+
+### `id_mismatch` — error, structural
+
+A file in a kind's directory yields no identifier of that kind: `"README" is not an identifier of
+kind "clause", which reads ^UZ-[A-Z]-\d{3}$`, the pattern named only where the kind declares one.
+The identifier is the frontmatter `id:` where the document writes one and the file name's stem
+otherwise, so this is the finding for a stray file, for a misspelled identifier, and for a document
+of a kind whose pattern carries a slash — which no file name can hold — that writes no `id:` at all.
+The finding names no document, because there is none to name: it is filed on the `id:` key, or on
+the file's first line. The file is left out of the graph, so nothing resolves to it. No fix
+suggestion.
+
+The single-kind reader skips a file whose name it does not recognize, in silence. A kind's directory
+is a declaration instead, so what it holds is reported rather than skipped.
+
+### `kind_mismatch` — error, structural
+
+A document writes a `kind:` its directory disagrees with: `frontmatter kind "conform" disagrees with
+directory kind "clause"`. Filed on the `kind` key. The directory's answer is the one that stands —
+it chose the identity rules the document was read under — so the document is still a clause to every
+rule and every edge constraint. No fix suggestion: which of the two is wrong is not knowable.
+
+### `unknown_field` — error, structural
+
+A kind declared `closed: true` carries a frontmatter key the configuration does not know:
+`frontmatter key "owner" is not declared by the closed kind "clause", declared: date, enforces, id,
+kind, status, supersedes, title`. One finding per unknown key, each on its own key's line, and the
+known keys are listed in alphabetical order. They are `title`, `date`, `id`, `kind`, the status
+field, and every edge `key:` and `inverse:` plus every derived-edge `field:`. A kind that is not
+closed ignores unknown keys, which is what every corpus does by default. No fix suggestion.
+
+### `edge_kind_mismatch` — error, structural
+
+An edge declaring `from:` or `to:` has an endpoint of another kind:
+
+```
+enforces source UZ-V-006 is kind "clause", want one of: conform
+enforces target dev-0001 is kind "deviation", want one of: clause
+```
+
+Filed against the document that declared the edge, on the key it declared it under, with the
+endpoint of the wrong kind under `related`. Only an endpoint the corpus holds is checked: a
+reference naming no document has no kind to be wrong about, and is a `dangling_ref` instead. A
+reference that names a document of the wrong kind still resolves, so this finding says what is
+actually wrong rather than reporting the reference as naming nothing. No fix suggestion.
 
 ## Edge attributes
 
@@ -245,5 +302,13 @@ testdata/fixtures/status-drift/0001-serve-images-from-the-application-server.md:
 That run exits 1. The other directories are named for the finding or the behaviour they exercise —
 `cycle`, `union-cycle`, `union-cycle-shadowed`, `superseded-orphan`, `id-collision`, `dangling`,
 `dangling-reference`, `empty-edge`, `invalid-yaml`, `inverse-mismatch`, `cardinality`, `withdrawn`,
-`any-of`, `list-attrs`, `fan-in`, `depends-impact`, `projections`, `edge-attrs`. The last two carry
-a `docdag.yaml` of their own, so run them with `--config <dir>/docdag.yaml`.
+`any-of`, `list-attrs`, `fan-in`, `depends-impact`, `projections`, `edge-attrs`, `kinds`. The last
+three carry a `docdag.yaml` of their own, so run them with `--config <dir>/docdag.yaml`.
+
+`kinds` is the multi-kind corpus: clauses, conformance tests and deviations in three directories,
+carrying one of each kind finding. Its documents live under the kinds rather than in the fixture
+directory itself, so it is run by `--config` alone:
+
+```console
+$ docdag validate --config testdata/fixtures/kinds/docdag.yaml
+```

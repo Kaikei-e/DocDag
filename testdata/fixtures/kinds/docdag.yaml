@@ -1,0 +1,36 @@
+# A multi-kind corpus: clauses of a standard, the conformance tests that
+# enforce them and the deviations recorded against them. Each kind lives in a
+# directory of its own and carries its own identifier shape, so identity is the
+# kind's answer rather than a digit run. The kind directories are read relative
+# to this file.
+kinds:
+  clause:
+    dir: spec/clauses
+    id: '^UZ-[A-Z]-\d{3}$'
+    status_values: [proposed, trial, accepted, superseded, withdrawn]
+    closed: true
+  conform:
+    dir: spec/conform
+    id: '^conform/[a-z0-9-]+$'
+  deviation:
+    dir: spec/deviations
+    id: '^dev-\d{4}$'
+    closed: true
+
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+    from: [clause]
+    to: [clause]
+  - name: enforces
+    key: enforces
+    direction: forward
+    from: [conform]
+    to: [clause]
+  - name: deviates-from
+    key: deviates-from
+    direction: forward
+    from: [deviation]
+    to: [clause]

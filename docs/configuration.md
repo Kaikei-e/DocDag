@@ -100,6 +100,123 @@ rules:
     message: "is retired, nothing supersedes it, and it carries no explained tag"
 ```
 
+## Kinds
+
+A corpus that declares no `kinds:` is single-kind: `dir`, `id_width` and `status_values` describe
+that one kind, and identity is the digit run in a file name — which is every corpus DocDag managed
+before kinds existed, the `adr` preset included. `kinds:` says instead that several sorts of
+document share one corpus, each in a directory of its own and each with its own idea of an
+identifier:
+
+```yaml
+kinds:
+  clause:
+    dir: spec/clauses                 # relative to this file
+    id: '^UZ-[A-Z]-\d{3}$'            # what an identifier of this kind looks like
+    status_values: [proposed, trial, accepted, superseded, withdrawn]
+    closed: true                      # frontmatter keys nobody declared are findings
+  conform:
+    dir: spec/conform
+    id: '^conform/[a-z0-9-]+$'        # carries a slash, so no file name can hold it
+  deviation:
+    dir: spec/deviations
+    id: '^dev-\d{4}$'
+    closed: true
+```
+
+Every kind needs a `dir`, no two kinds may name the same one, and the directories are read relative
+to the configuration file that declares them rather than to the process's working directory: a
+corpus is described from where it lives. Writing `dir:` or `id_width:` beside `kinds:` — or passing
+`--dir` — is a configuration error (exit 3), because the kinds carry both. Discovery does not run:
+the kinds say where the documents are.
+
+### Identity
+
+`id:` is a Go regular expression matched against the whole identifier, whether or not it is written
+anchored, so `see UZ-V-001` never names a document. A document's identifier comes from:
+
+1. the frontmatter `id:` key, when it writes one, and
+2. otherwise the file name without its `.md`.
+
+Either way the token has to satisfy the kind's pattern, and the token *is* the identifier: a
+declared pattern is the canonical spelling, so nothing is padded, truncated or lowercased. A pattern
+carrying a slash — `^conform/[a-z0-9-]+$` — is one no file name can hold, so documents of that kind
+have to write `id:` in their frontmatter. A file that yields no identifier at all is the
+`id_mismatch` finding of [checks.md](checks.md): unlike the single-kind reader, which skips a file
+whose name does not match the pattern, a kind's directory is what declares a file one of its
+documents, so a stray `README.md` in there is reported rather than passed over.
+
+A kind that declares no `id:` keeps the digit-run rules, padded to `id_width`, so `339`, `ADR-339`
+and `000339` still name one document there. Inside a multi-kind corpus those rules are held to the
+same whole-reference shape the single-kind corpus holds them to — otherwise a kind declaring no
+pattern would quietly claim every reference the other kinds rejected.
+
+Wikilinks are unwrapped before any of this, so `id: "[[UZ-V-001]]"` and `enforces: ["[[UZ-V-001]]"]`
+name UZ-V-001 whatever the kind.
+
+### Which kind a document is
+
+The directory decides: a document in `spec/clauses` is a `clause`. A document may also write
+`kind: clause` in its frontmatter, and one that writes a kind its directory disagrees with is the
+`kind_mismatch` finding. The directory's answer is the one that stands — it chose the identity rules
+the document was read under — and it is readable from rules and projections as the attribute `kind`:
+
+```yaml
+rules:
+  - name: orphan_test
+    severity: error
+    when:
+      attr: { kind: { eq: conform } }
+      not_outbound: enforces
+    message: "enforces no clause"
+```
+
+### Closed kinds
+
+`closed: true` makes the kind's frontmatter a closed set: every key the configuration does not know
+is an `unknown_field` finding, one per key, on the key's own line. The known keys are `title`,
+`date`, `id`, `kind`, the status field, and every `key:` and `inverse:` an edge declares plus every
+`field:` a derived edge reads — so renaming a key in the configuration widens the set with it.
+Kinds are open by default, which is what every corpus had before: unrecognized keys are ignored, and
+another tool's fields raise nothing.
+
+### Status vocabularies
+
+A kind may carry a `status_values` of its own; one that carries none answers to the top-level
+vocabulary. `unknown_status` is reported against the vocabulary of the document's own kind, so
+clauses can be `trial` while deviations keep the preset's words.
+
+### Constraining an edge by kind
+
+`from:` and `to:` hold an edge's endpoints to a set of kinds, as the graph holds the edge — so a
+`direction: reverse` edge's `from:` is the kind of the document its key names, not of the one that
+wrote the key down:
+
+```yaml
+edges:
+  - name: enforces
+    key: enforces
+    direction: forward
+    from: [conform]
+    to: [clause]
+```
+
+An endpoint of another kind is the `edge_kind_mismatch` finding, filed against the document that
+declared the edge. Only endpoints the corpus holds are checked: a reference naming no document has
+no kind to be wrong about, and is a `dangling_ref` of its own. Naming a kind nobody declares, or
+writing `from:`/`to:` on a corpus without kinds, is a configuration error.
+
+The kinds an edge points at also resolve its references first, so where two kinds' patterns accept
+the same string the edge's own `to:` decides which document it means. The other kinds still follow:
+a reference to a document of the wrong kind resolves and is reported as the mismatch it is, rather
+than as a reference to nothing.
+
+### What a multi-kind corpus does not do yet
+
+`docdag new` refuses one — which kind to create, under which identity rules and from which template,
+has no default answer — and so does `validate --immutable-since`, which reads one directory under
+one identity rule. Per-kind templates arrive with the `spec` preset.
+
 ## Edge attributes
 
 An edge may declare attributes its entries carry. An edge that declares none — every edge of the
@@ -175,12 +292,12 @@ attribute.
 ## List replacement
 
 The `edges:` and `rules:` lists above show where the new keys go; writing one of them — or
-`derived_edges:` or `projections:` — replaces the preset's list rather than adding to it, and
-writing it as an explicit empty list (`derived_edges: []`) clears the preset's without putting
-anything in its place. Writing `edges:` also drops the inherited projections that read an edge type
-the new list does not declare, and the `binding:` that named one of them: a projection over a
-vocabulary the corpus replaced away cannot be evaluated. `binding:` is a scalar, so writing it
-replaces the preset's and leaving it out keeps it.
+`derived_edges:`, `projections:` or the `kinds:` map — replaces the preset's rather than adding to
+it, and writing it as an explicit empty list (`derived_edges: []`, `kinds: {}`) clears the preset's
+without putting anything in its place. Writing `edges:` also drops the inherited projections that
+read an edge type the new list does not declare, and the `binding:` that named one of them: a
+projection over a vocabulary the corpus replaced away cannot be evaluated. `binding:` is a scalar,
+so writing it replaces the preset's and leaving it out keeps it.
 
 ## The rule vocabulary
 

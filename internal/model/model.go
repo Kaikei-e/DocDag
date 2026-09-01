@@ -71,17 +71,24 @@ const (
 	RuleEdgeAttrUnknown        = "edge_attr_unknown"
 	RuleEdgeAttrMissing        = "edge_attr_missing"
 	RuleEdgeAttrInvalid        = "edge_attr_invalid"
+	RuleIDMismatch             = "id_mismatch"
+	RuleKindMismatch           = "kind_mismatch"
+	RuleUnknownField           = "unknown_field"
+	RuleEdgeKindMismatch       = "edge_kind_mismatch"
 	RuleImmutableViolation     = "immutable_violation"
 )
 
 // Node is one managed document. Line and KeyLines are the frontmatter
 // positions the parser recorded, so a finding can point at the key it is about.
+// Kind names the document kind the corpus declares it under, and is empty on a
+// single-kind corpus, which is every corpus that declares no kinds at all.
 type Node struct {
 	ID       ID             `json:"id"`
 	Path     string         `json:"path"`
 	Title    string         `json:"title"`
 	Status   string         `json:"status"`
 	Date     string         `json:"date"`
+	Kind     string         `json:"kind,omitempty"`
 	Attrs    map[string]any `json:"-"`
 	Line     int            `json:"-"`
 	KeyLines map[string]int `json:"-"`

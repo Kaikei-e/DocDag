@@ -129,7 +129,10 @@ func loadGraph(cmd *cobra.Command) (*model.Graph, config.Config, error) {
 	if err != nil {
 		return nil, config.Config{}, err
 	}
-	docs, err := parse.Dir(cfg.Dir, cfg)
+	// A multi-kind corpus lives in one directory per kind, so the documents are
+	// read kind by kind and merged; a single-kind one reads the one directory
+	// it always did.
+	docs, err := parse.Documents(cfg)
 	if err != nil {
 		return nil, cfg, ioErr(err)
 	}

@@ -31,7 +31,7 @@ type Report struct {
 func FindingsText(w io.Writer, findings []model.Finding, summary model.Summary) error {
 	out := &errWriter{w: w}
 	for _, f := range findings {
-		out.printf("%s%s %s %s: %s\n", locationPrefix(f.Location), strings.ToUpper(string(f.Severity)), f.Rule, f.ID, f.Detail)
+		out.printf("%s%s %s%s: %s\n", locationPrefix(f.Location), strings.ToUpper(string(f.Severity)), f.Rule, subject(f.ID), f.Detail)
 		if f.Fix != "" {
 			out.printf("  fix: %s\n", f.Fix)
 		}
@@ -41,6 +41,27 @@ func FindingsText(w io.Writer, findings []model.Finding, summary model.Summary) 
 		return fmt.Errorf("write findings: %w", out.err)
 	}
 	return nil
+}
+
+// subject renders the identifier a finding is filed against, as the space and
+// name that follow the rule. A finding about a file that yields no identifier
+// at all has none to name, and an empty one would leave a gap the reader has to
+// wonder about.
+func subject(id model.ID) string {
+	if id == "" {
+		return ""
+	}
+	return " " + id.String()
+}
+
+// subjectDetail is what an annotation says: the identifier the finding is
+// filed against and its detail, or the detail alone where there is no
+// identifier to name.
+func subjectDetail(f model.Finding) string {
+	if f.ID == "" {
+		return f.Detail
+	}
+	return f.ID.String() + ": " + f.Detail
 }
 
 // locationPrefix renders "<path>:<line>: ", dropping whichever part is unknown
@@ -93,7 +114,7 @@ func FindingsGitHub(w io.Writer, findings []model.Finding, summary model.Summary
 			properties = append(properties, fmt.Sprintf("col=%d", f.Location.Column))
 		}
 		properties = append(properties, "title="+escapeProperty(f.Rule))
-		out.printf("::%s %s::%s\n", level, strings.Join(properties, ","), escapeData(f.ID.String()+": "+f.Detail))
+		out.printf("::%s %s::%s\n", level, strings.Join(properties, ","), escapeData(subjectDetail(f)))
 	}
 	writeSummary(out, summary)
 	if out.err != nil {
@@ -170,7 +191,7 @@ func FindingsRDJSON(w io.Writer, findings []model.Finding, summary model.Summary
 	}
 	for _, f := range findings {
 		d := rdjsonDiagnostic{
-			Message:  fmt.Sprintf("%s %s: %s", f.Rule, f.ID, f.Detail),
+			Message:  f.Rule + subject(f.ID) + ": " + f.Detail,
 			Location: rdjsonLocationOf(f.Location),
 			Severity: rdjsonSeverity(f.Severity),
 			Code:     rdjsonCode{Value: f.Rule},

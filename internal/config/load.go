@@ -131,6 +131,12 @@ func Merge(base, override Config) Config {
 	if len(override.StatusValues) > 0 {
 		merged.StatusValues = slices.Clone(override.StatusValues)
 	}
+	// The kinds are a vocabulary, not a set of defaults to extend: a corpus
+	// that writes kinds: describes every kind it has, the way writing edges:
+	// describes every edge it has.
+	if override.Kinds != nil {
+		merged.Kinds = maps.Clone(override.Kinds)
+	}
 	if override.Edges != nil {
 		merged.Edges = slices.Clone(override.Edges)
 	}
@@ -290,8 +296,11 @@ func Resolve(opts Options) (Config, error) {
 	if root == "" {
 		root = "."
 	}
-	file, err := loadOptional(root, opts.ConfigPath)
+	file, from, err := loadOptional(root, opts.ConfigPath)
 	if err != nil {
+		return Config{}, err
+	}
+	if err := validateWrittenKinds(file); err != nil {
 		return Config{}, err
 	}
 	base, err := Preset(file.Preset)
@@ -305,6 +314,13 @@ func Resolve(opts Options) (Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
+	if cfg.Multikind() {
+		// A kind's directory is written beside the kinds that declare it, so it
+		// is read relative to the file that wrote it down rather than to the
+		// process's directory: a corpus is described from where it lives.
+		cfg.Kinds = rootedKinds(cfg.Kinds, kindRoot(root, from))
+		return cfg, nil
+	}
 	if cfg.Dir == "" {
 		dir, err := Discover(root, cfg.Normalizer())
 		if err != nil {
@@ -315,15 +331,56 @@ func Resolve(opts Options) (Config, error) {
 	return cfg, nil
 }
 
+// validateWrittenKinds rejects a configuration file that declares kinds and
+// also writes a top-level id_width. Only the file can be asked this: the preset
+// supplies the width every digit-run kind still pads to, so the merged
+// configuration cannot tell an inherited width from a written one, while the
+// file that writes both is describing one identity model twice.
+func validateWrittenKinds(file Config) error {
+	if file.Multikind() && file.IDWidth != 0 {
+		return fmt.Errorf("id_width %d describes nothing beside kinds, which declare their own id patterns: %w",
+			file.IDWidth, model.ErrInvalidConfig)
+	}
+	return nil
+}
+
+// kindRoot is the directory kind directories are resolved against: the one
+// holding the configuration file that declared them, or the root when no file
+// did.
+func kindRoot(root, from string) string {
+	if from == "" {
+		return root
+	}
+	return filepath.Dir(from)
+}
+
+// rootedKinds resolves each kind's directory against root, leaving an absolute
+// one alone, so every caller can open a kind's directory without knowing where
+// the configuration came from.
+func rootedKinds(kinds map[string]KindSpec, root string) map[string]KindSpec {
+	rooted := make(map[string]KindSpec, len(kinds))
+	for name, spec := range kinds {
+		dir := filepath.FromSlash(spec.Dir)
+		if !filepath.IsAbs(dir) {
+			dir = filepath.Join(root, dir)
+		}
+		spec.Dir = dir
+		rooted[name] = spec
+	}
+	return rooted
+}
+
 // loadOptional reads the named configuration file, or the one at the root when
-// none was named. A root without a configuration file is not an error.
-func loadOptional(root, path string) (Config, error) {
+// none was named, and reports the path it read. A root without a configuration
+// file is not an error, and reports no path.
+func loadOptional(root, path string) (Config, string, error) {
 	if path == "" {
 		candidate := filepath.Join(root, DefaultConfigFile)
 		if _, err := os.Stat(candidate); err != nil {
-			return Config{}, nil
+			return Config{}, "", nil
 		}
 		path = candidate
 	}
-	return Load(path)
+	cfg, err := Load(path)
+	return cfg, path, err
 }

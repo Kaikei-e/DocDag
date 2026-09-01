@@ -1020,3 +1020,77 @@ func TestValidateRejectsAnEdgeAttributeDeclarationItCannotAnswer(t *testing.T) {
 		})
 	}
 }
+
+// kindsConfig is the multi-kind corpus's configuration file. Its kind
+// directories are read relative to it, so the fixture is driven by --config
+// alone: there is no single documents directory for --dir to name.
+func kindsConfig(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(fixture(t, "kinds"), "docdag.yaml")
+}
+
+func TestValidateAMultiKindCorpus(t *testing.T) {
+	got := run(t, "validate", "--config", kindsConfig(t))
+
+	assertExit(t, got, 1)
+	assertLines(t, "findings", findingLines(got.stdout), []string{
+		`README.md:1: ERROR id_mismatch: "README" is not an identifier of kind "clause", which reads ^UZ-[A-Z]-\d{3}$`,
+		`UZ-V-004.md:5: ERROR unknown_field UZ-V-004: frontmatter key "owner" is not declared by the closed kind "clause", declared: date, deviates-from, enforces, id, kind, status, supersedes, title`,
+		`UZ-V-005.md:3: ERROR kind_mismatch UZ-V-005: frontmatter kind "conform" disagrees with directory kind "clause"`,
+		`UZ-V-006.md:5: ERROR edge_kind_mismatch UZ-V-006: enforces source UZ-V-006 is kind "clause", want one of: conform`,
+		`missing-id.md:1: ERROR id_mismatch: "missing-id" is not an identifier of kind "conform", which reads ^conform/[a-z0-9-]+$`,
+		`wrong-target.md:6: ERROR edge_kind_mismatch conform/wrong-target: enforces target dev-0001 is kind "deviation", want one of: clause`,
+	})
+}
+
+func TestValidateTouchingReachesEveryKindDirectory(t *testing.T) {
+	kinds := fixture(t, "kinds")
+
+	got := run(t, "validate", "--config", kindsConfig(t), "--touching", filepath.Join(kinds, "spec", "conform"))
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"missing-id.md:1: ERROR id_mismatch:",
+		"wrong-target.md:6: ERROR edge_kind_mismatch conform/wrong-target:",
+	})
+	if !strings.Contains(got.stderr, "(4 findings hidden)") {
+		t.Errorf("stderr = %q, want the findings of the other kinds counted as hidden", got.stderr)
+	}
+}
+
+func TestValidateReportsAMultiKindCorpusAsJSON(t *testing.T) {
+	got := run(t, "validate", "--format", "json", "--config", kindsConfig(t))
+
+	assertExit(t, got, 1)
+	report := decodeJSON[render.Report](t, got.stdout)
+	if report.Summary.Documents != 9 {
+		t.Errorf("documents = %d, want the nine the three kinds hold", report.Summary.Documents)
+	}
+	rules := map[string]bool{}
+	for _, f := range report.Findings {
+		rules[f.Rule] = true
+	}
+	for _, rule := range []string{model.RuleIDMismatch, model.RuleKindMismatch, model.RuleUnknownField, model.RuleEdgeKindMismatch} {
+		if !rules[rule] {
+			t.Errorf("findings = %+v, want a %s among them", report.Findings, rule)
+		}
+	}
+}
+
+func TestValidateRefusesTheHistoryCheckOnAMultiKindCorpus(t *testing.T) {
+	got := run(t, "validate", "--config", kindsConfig(t), "--immutable-since", "HEAD")
+
+	assertExit(t, got, 3)
+	if !strings.Contains(got.stderr, "multi-kind") {
+		t.Errorf("stderr = %q, want it to say the history check does not read a multi-kind corpus", got.stderr)
+	}
+}
+
+func TestValidateRejectsADirectoryBesideKinds(t *testing.T) {
+	got := run(t, "validate", "--config", kindsConfig(t), "--dir", fixture(t, "ok-basic"))
+
+	assertExit(t, got, 3)
+	if !strings.Contains(got.stderr, "kinds") {
+		t.Errorf("stderr = %q, want it to say the kinds carry the directories", got.stderr)
+	}
+}

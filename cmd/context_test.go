@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -172,4 +173,20 @@ func TestContextFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestContextReadsAMultiKindCorpus(t *testing.T) {
+	got := run(t, "context", "UZ-V-001", "--config", filepath.Join(fixture(t, "kinds"), "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	// One brief over three kinds: the clause, the conformance test that
+	// enforces it and the deviation recorded against it.
+	assertPrefixes(t, "context", lines(got.stdout), []string{
+		"ref",
+		"  UZ-V-001  Every claim carries evidence  [accepted]  ",
+		"ancestors",
+		"  UZ-V-006  Thresholds are declared before the run  [accepted]  ",
+		"  conform/uz-v-001  Check that every claim carries evidence  [accepted]  ",
+		"  dev-0001  The importer reports counts without inputs  [accepted]  ",
+	})
 }

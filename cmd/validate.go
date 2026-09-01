@@ -99,6 +99,12 @@ func immutableFindings(cmd *cobra.Command, cfg config.Config) ([]model.Finding, 
 	if rev == "" {
 		return nil, nil
 	}
+	// The history check reads one documents directory under one identity rule.
+	// A multi-kind corpus has neither, and answering over the wrong directory
+	// would report an append-only violation nobody committed.
+	if cfg.Multikind() {
+		return nil, ioErr(fmt.Errorf("--%s does not read a multi-kind corpus yet: %w", flagImmutableSince, model.ErrInvalidConfig))
+	}
 	repo, err := vcs.Open(cfg.Dir)
 	if err != nil {
 		return nil, ioErr(fmt.Errorf("--%s: %w", flagImmutableSince, err))

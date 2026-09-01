@@ -12,6 +12,17 @@ import (
 	"github.com/Kaikei-e/DocDag/internal/model"
 )
 
+// testKinds is the multi-kind vocabulary the kind tests are written against:
+// one kind whose identifiers a file name can carry, one whose identifiers carry
+// a slash and therefore cannot, and one keeping a status vocabulary of its own.
+func testKinds() map[string]KindSpec {
+	return map[string]KindSpec{
+		"clause":  {Dir: "spec/clauses", ID: `^UZ-[A-Z]-\d{3}$`, StatusValues: []string{"trial", "accepted"}, Closed: true},
+		"conform": {Dir: "spec/conform", ID: `^conform/[a-z0-9-]+$`},
+		"pm":      {Dir: "spec/pm"},
+	}
+}
+
 func testEq(v string) AttrCondition  { return AttrCondition{Eq: &v} }
 func testNot(v string) AttrCondition { return AttrCondition{Not: &v} }
 func strptr(v string) *string        { return &v }
@@ -442,6 +453,89 @@ func TestConfigValidate(t *testing.T) {
 				c.Rules[0].Severity = model.SeverityWarn
 				c.Rules[1].When.Attr = map[string]AttrCondition{"status": testNot(StatusAccepted)}
 			},
+		},
+		{
+			name:   "a corpus of several kinds",
+			mutate: func(c *Config) { c.Kinds = testKinds() },
+		},
+		{
+			name: "a kind without an id pattern keeps the digit-run rules",
+			mutate: func(c *Config) {
+				c.Kinds = map[string]KindSpec{"note": {Dir: "notes"}}
+			},
+		},
+		{
+			name: "a kind without a directory",
+			mutate: func(c *Config) {
+				c.Kinds = map[string]KindSpec{"clause": {ID: `^UZ-[A-Z]-\d{3}$`}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "two kinds sharing a directory",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Kinds["deviation"] = KindSpec{Dir: "spec/clauses", ID: `^dev-\d{4}$`}
+			},
+			wantErr: true,
+		},
+		{
+			name: "two kinds whose directories differ only in spelling",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Kinds["deviation"] = KindSpec{Dir: "spec/./clauses/", ID: `^dev-\d{4}$`}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a kind whose id pattern does not compile",
+			mutate: func(c *Config) {
+				c.Kinds = map[string]KindSpec{"clause": {Dir: "spec/clauses", ID: "^UZ-([A-Z]$"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a kind without a name",
+			mutate: func(c *Config) {
+				c.Kinds = map[string]KindSpec{"": {Dir: "spec/clauses"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a top-level directory beside the kinds",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Dir = "docs/adr"
+			},
+			wantErr: true,
+		},
+		{
+			name: "an edge constrained to declared kinds",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Edges[0].From, c.Edges[0].To = []string{"clause"}, []string{"clause"}
+			},
+		},
+		{
+			name: "an edge whose from names an undeclared kind",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Edges[0].From = []string{"principle"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "an edge whose to names an undeclared kind",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Edges[0].To = []string{"principle"}
+			},
+			wantErr: true,
+		},
+		{
+			name:    "an edge constrained by kind on a corpus without kinds",
+			mutate:  func(c *Config) { c.Edges[0].To = []string{"clause"} },
+			wantErr: true,
 		},
 	}
 
@@ -1168,6 +1262,86 @@ func TestEdgeSpecAttrs(t *testing.T) {
 	t.Run("a declaration without a type reads a string", func(t *testing.T) {
 		if got := spec.Attrs["model"].ValueType(); got != AttrTypeString {
 			t.Fatalf("ValueType = %q, want %q", got, AttrTypeString)
+		}
+	})
+}
+
+func TestConfigKinds(t *testing.T) {
+	cfg := ADRPreset()
+	cfg.Kinds = testKinds()
+
+	t.Run("a configuration without kinds is single-kind", func(t *testing.T) {
+		if ADRPreset().Multikind() {
+			t.Fatal("Multikind = true for the preset, want the single-kind corpus it has always been")
+		}
+	})
+
+	t.Run("the kinds are reported in sorted order", func(t *testing.T) {
+		if got := cfg.KindNames(); !slices.Equal(got, []string{"clause", "conform", "pm"}) {
+			t.Fatalf("KindNames = %v, want them sorted", got)
+		}
+	})
+
+	t.Run("a declared kind is found by name", func(t *testing.T) {
+		spec, ok := cfg.Kind("conform")
+
+		if !ok || spec.Dir != "spec/conform" {
+			t.Fatalf("Kind(conform) = %+v, %v, want the declared spec", spec, ok)
+		}
+	})
+
+	t.Run("a kind nobody declared is not found", func(t *testing.T) {
+		if spec, ok := cfg.Kind("principle"); ok {
+			t.Fatalf("Kind(principle) = %+v, want none", spec)
+		}
+	})
+
+	t.Run("a kind keeps its own status vocabulary", func(t *testing.T) {
+		if got := cfg.KindStatusValues("clause"); !slices.Equal(got, []string{"trial", "accepted"}) {
+			t.Fatalf("KindStatusValues(clause) = %v, want the kind's own vocabulary", got)
+		}
+	})
+
+	t.Run("a kind without one inherits the top-level vocabulary", func(t *testing.T) {
+		if got := cfg.KindStatusValues("conform"); !slices.Equal(got, cfg.StatusValues) {
+			t.Fatalf("KindStatusValues(conform) = %v, want the top-level %v", got, cfg.StatusValues)
+		}
+	})
+
+	t.Run("a kind nobody declared answers to the top-level vocabulary", func(t *testing.T) {
+		if got := cfg.KindStatusValues("principle"); !slices.Equal(got, cfg.StatusValues) {
+			t.Fatalf("KindStatusValues(principle) = %v, want the top-level %v", got, cfg.StatusValues)
+		}
+	})
+}
+
+func TestConfigKnownFrontmatterKeys(t *testing.T) {
+	t.Run("the preset knows its own vocabulary", func(t *testing.T) {
+		want := []string{"date", "depends-on", "id", "kind", "status", "supersedes", "title"}
+
+		if got := ADRPreset().KnownFrontmatterKeys(); !slices.Equal(got, want) {
+			t.Fatalf("KnownFrontmatterKeys = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a renamed status field is the key that is known", func(t *testing.T) {
+		// The merge retargets the derived edges onto the renamed field, so a
+		// corpus that renames status carries the new key everywhere.
+		cfg := Merge(ADRPreset(), Config{StatusField: "state"})
+
+		got := cfg.KnownFrontmatterKeys()
+
+		if slices.Contains(got, "status") || !slices.Contains(got, "state") {
+			t.Fatalf("KnownFrontmatterKeys = %v, want the renamed field rather than status", got)
+		}
+	})
+
+	t.Run("an inverse key is known", func(t *testing.T) {
+		cfg := ADRPreset()
+		cfg.Edges[0].Inverse = "superseded_by"
+
+		if got := cfg.KnownFrontmatterKeys(); !slices.Contains(got, "superseded_by") {
+			t.Fatalf("KnownFrontmatterKeys = %v, want it to carry the inverse key", got)
 		}
 	})
 }

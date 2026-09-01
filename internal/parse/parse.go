@@ -28,10 +28,19 @@ const markdownExt = ".md"
 // Document is one Markdown file after parsing and before graph construction.
 // FrontmatterLine, BodyLine and KeyLines are 1-based file lines, zero when
 // unknown, so a finding can name the exact key or body line it is about.
+//
+// Kind is the kind whose directory the file was read from, empty on a
+// single-kind corpus. Identity is the token the identifier was read from: the
+// file name under the single-kind rules, and under a kind the frontmatter id
+// where the document writes one and the name's stem where it does not. A
+// finding quotes it when the token yields no identifier at all, which is the
+// one case where a document exists with an empty ID.
 type Document struct {
 	Path            string
 	Name            string
 	ID              model.ID
+	Kind            string
+	Identity        string
 	Frontmatter     map[string]any
 	Body            string
 	HasFrontmatter  bool
@@ -188,19 +197,58 @@ func recordKeyLine(lines map[string]int, value *ast.MappingValueNode) {
 	}
 }
 
-// File parses one Markdown file. A frontmatter decode failure is recorded on
-// the returned document rather than returned, so later checks still run.
+// File parses one Markdown file under the single-kind identity rules: the file
+// name carries the identity. A frontmatter decode failure is recorded on the
+// returned document rather than returned, so later checks still run.
 func File(path string, cfg config.Config) (*Document, error) {
+	doc, err := readDocument(path)
+	if err != nil {
+		return nil, err
+	}
+	norm := cfg.Normalizer()
+	doc.MatchesPattern = norm.MatchesFilename(doc.Name)
+	doc.Identity = doc.Name
+	if id, ok := norm.Normalize(doc.Name); ok {
+		doc.ID = id
+	}
+	return doc, nil
+}
+
+// KindFile parses one Markdown file as a document of the named kind: the
+// frontmatter id key carries the identity where the document writes one, and
+// the file name's stem otherwise. A file that yields neither is a document
+// without an identity, which CheckDocuments reports rather than skips.
+func KindFile(path string, cfg config.Config, kind string) (*Document, error) {
+	doc, err := readDocument(path)
+	if err != nil {
+		return nil, err
+	}
+	doc.Kind = kind
+	// A kind names a directory of its own, so membership of that directory is
+	// what makes a file one of its documents. There is no file-name pattern to
+	// fall short of, and a file that yields no identity is reported rather than
+	// passed over in silence.
+	doc.MatchesPattern = true
+	norm := cfg.KindNormalizer(kind)
+	doc.Identity = strings.TrimSuffix(doc.Name, markdownExt)
+	if written, ok := Attr(doc.Frontmatter, config.KeyID); ok {
+		doc.Identity = strings.TrimSpace(written)
+	}
+	if id, ok := norm.Normalize(doc.Identity); ok {
+		doc.ID = id
+	}
+	return doc, nil
+}
+
+// readDocument reads one Markdown file into a document: the frontmatter split
+// from the body, decoded, and located. It settles everything but identity,
+// which is the one thing the kinds disagree about.
+func readDocument(path string) (*Document, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read document %s: %w", path, err)
 	}
-	norm := cfg.Normalizer()
-	name := filepath.Base(path)
-	doc := &Document{Path: path, Name: name, MatchesPattern: norm.MatchesFilename(name)}
-	if id, ok := norm.Normalize(name); ok {
-		doc.ID = id
-	}
+	doc := &Document{Path: path, Name: filepath.Base(path)}
 
 	frontmatter, body, ok := SplitFrontmatter(src)
 	doc.Body = string(body)
@@ -253,16 +301,13 @@ func LocalPath(base, path string) string {
 // filename pattern. The name carries the identity, so a file named anything
 // else is not a managed document, whatever its frontmatter says.
 func Dir(dir string, cfg config.Config) ([]*Document, error) {
-	entries, err := os.ReadDir(dir)
+	entries, err := markdownEntries(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read documents directory %s: %w", dir, err)
+		return nil, err
 	}
 	docs := make([]*Document, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != markdownExt {
-			continue
-		}
-		doc, err := File(filepath.Join(dir, entry.Name()), cfg)
+	for _, name := range entries {
+		doc, err := File(filepath.Join(dir, name), cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -272,6 +317,69 @@ func Dir(dir string, cfg config.Config) ([]*Document, error) {
 		docs = append(docs, doc)
 	}
 	return docs, nil
+}
+
+// KindDir parses every Markdown file directly in one kind's directory. Unlike
+// Dir it skips nothing: the directory is what declares a file a document of
+// this kind, so a file that yields no identity is a finding rather than another
+// tool's file.
+func KindDir(dir string, cfg config.Config, kind string) ([]*Document, error) {
+	entries, err := markdownEntries(dir)
+	if err != nil {
+		return nil, err
+	}
+	docs := make([]*Document, 0, len(entries))
+	for _, name := range entries {
+		doc, err := KindFile(filepath.Join(dir, name), cfg, kind)
+		if err != nil {
+			return nil, err
+		}
+		docs = append(docs, doc)
+	}
+	return docs, nil
+}
+
+// Kinds parses every declared kind's directory. The kinds are read in sorted
+// name order and each directory in file-name order, so the corpus is assembled
+// the same way on every run and an identifier collision names the same first
+// document each time.
+func Kinds(cfg config.Config) ([]*Document, error) {
+	docs := []*Document{}
+	for _, name := range cfg.KindNames() {
+		kindDocs, err := KindDir(cfg.Kinds[name].Dir, cfg, name)
+		if err != nil {
+			return nil, err
+		}
+		docs = append(docs, kindDocs...)
+	}
+	return docs, nil
+}
+
+// Documents parses the corpus a configuration describes: every kind's
+// directory, or the single documents directory of a corpus that declares no
+// kinds.
+func Documents(cfg config.Config) ([]*Document, error) {
+	if cfg.Multikind() {
+		return Kinds(cfg)
+	}
+	return Dir(cfg.Dir, cfg)
+}
+
+// markdownEntries lists the Markdown files directly in dir, in the order
+// os.ReadDir returns them, which is by file name.
+func markdownEntries(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read documents directory %s: %w", dir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != markdownExt {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	return names, nil
 }
 
 // Attr reads a scalar frontmatter value as a string.

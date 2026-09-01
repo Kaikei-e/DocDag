@@ -60,6 +60,12 @@ func runNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	// Which kind to create, under which identity rules and from which template,
+	// is a question a multi-kind corpus has no default answer to, and guessing
+	// one would write a document into the wrong directory.
+	if cfg.Multikind() {
+		return domainErr("new requires --kind on a multi-kind corpus; per-kind templates arrive with the spec preset")
+	}
 	root, err := os.Getwd()
 	if err != nil {
 		return ioErr(fmt.Errorf("working directory: %w", err))

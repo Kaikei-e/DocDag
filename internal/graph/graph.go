@@ -15,8 +15,9 @@ import (
 
 // Frontmatter keys the engine recognizes beyond the configured status field.
 const (
-	attrTitle = "title"
-	attrDate  = "date"
+	attrTitle = config.KeyTitle
+	attrDate  = config.KeyDate
+	attrKind  = config.KeyKind
 )
 
 type edgeKey struct {
@@ -39,9 +40,19 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 	g := model.NewGraph()
 	normalizer := cfg.Normalizer()
 	findings := CheckDocuments(docs, cfg)
+	docs = identified(docs)
 
 	for _, doc := range docs {
 		g.Nodes[doc.ID] = buildNode(doc, cfg)
+	}
+
+	// The kinds an edge may point at resolve its references first, so two kinds
+	// whose patterns overlap never make an edge ambiguous. One normalizer per
+	// edge type is enough: which kinds an edge reaches is a property of the
+	// configuration, not of the document that wrote the reference down.
+	targets := make(map[string]config.IDNormalizer, len(cfg.Edges))
+	for _, spec := range cfg.Edges {
+		targets[spec.Name] = cfg.EdgeNormalizer(spec)
 	}
 
 	records := make(map[edgeKey]edgeRecord)
@@ -70,11 +81,11 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 				// itself a finding.
 				attrs, attrFindings := edgeAttrs(cfg, doc, spec, entry)
 				findings = append(findings, attrFindings...)
-				if !config.IDShaped(entry.Ref) {
+				if !cfg.IDShaped(entry.Ref) {
 					findings = append(findings, invalidRef(cfg, doc, spec.Key, t, entry.Ref))
 					continue
 				}
-				target, ok := normalizer.Normalize(entry.Ref)
+				target, ok := targets[spec.Name].Normalize(entry.Ref)
 				if !ok {
 					findings = append(findings, unresolvableRef(cfg, doc, spec.Key, t, entry.Ref))
 					continue
@@ -129,10 +140,25 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 	return g
 }
 
+// identified returns the documents that carry an identity. A document without
+// one is reported by CheckDocuments and left out of the graph: it has no key to
+// be stored under, and storing it under the empty identifier would let a
+// reference to nothing resolve.
+func identified(docs []*parse.Document) []*parse.Document {
+	out := make([]*parse.Document, 0, len(docs))
+	for _, doc := range docs {
+		if doc.ID != "" {
+			out = append(out, doc)
+		}
+	}
+	return out
+}
+
 func buildNode(doc *parse.Document, cfg config.Config) *model.Node {
 	n := &model.Node{
 		ID:       doc.ID,
 		Path:     doc.Path,
+		Kind:     doc.Kind,
 		Attrs:    make(map[string]any, len(doc.Frontmatter)),
 		Line:     doc.FrontmatterLine,
 		KeyLines: doc.KeyLines,
@@ -142,13 +168,20 @@ func buildNode(doc *parse.Document, cfg config.Config) *model.Node {
 	}
 	n.Title, _ = parse.Attr(doc.Frontmatter, attrTitle)
 	n.Date, _ = parse.Attr(doc.Frontmatter, attrDate)
+	// A document's kind is the directory's answer, not the frontmatter's: the
+	// directory chose the identity rules the document was read under, and a
+	// frontmatter key that disagrees is the kind_mismatch finding rather than a
+	// second opinion rules could read.
+	if doc.Kind != "" {
+		n.Attrs[attrKind] = doc.Kind
+	}
 
 	field := statusField(cfg)
 	raw, ok := parse.Attr(doc.Frontmatter, field)
 	if !ok {
 		return n
 	}
-	status, _ := canonicalStatus(cfg, raw)
+	status, _ := canonicalKindStatus(cfg, doc.Kind, raw)
 	n.Status = status
 	// Rules read the attribute and the checks read the field, so a projected
 	// MADR "superseded by 0003" status has to land on both.
@@ -384,24 +417,26 @@ func matchesType(t model.EdgeType, types []model.EdgeType) bool {
 	return len(types) == 0 || slices.Contains(types, t)
 }
 
-func statusField(cfg config.Config) string {
-	if cfg.StatusField == "" {
-		return config.DefaultStatusField
-	}
-	return cfg.StatusField
+func statusField(cfg config.Config) string { return cfg.EffectiveStatus() }
+
+// canonicalStatus collapses a status onto the configured vocabulary, under the
+// top-level vocabulary a single-kind corpus has.
+func canonicalStatus(cfg config.Config, raw string) (string, bool) {
+	return canonicalKindStatus(cfg, "", raw)
 }
 
-// canonicalStatus collapses a status onto the configured vocabulary: a MADR
-// "superseded by 0003" string becomes "superseded". Only a value a configured
-// derived-edge pattern claims may collapse, so prose that merely opens with a
-// vocabulary word stays unknown. A value the vocabulary does not cover comes
-// back unchanged and unknown.
-func canonicalStatus(cfg config.Config, raw string) (string, bool) {
+// canonicalKindStatus collapses a status onto the vocabulary its kind answers
+// to: a MADR "superseded by 0003" string becomes "superseded". Only a value a
+// configured derived-edge pattern claims may collapse, so prose that merely
+// opens with a vocabulary word stays unknown. A value the vocabulary does not
+// cover comes back unchanged and unknown.
+func canonicalKindStatus(cfg config.Config, kind, raw string) (string, bool) {
 	value := strings.TrimSpace(raw)
 	if value == "" {
 		return "", false
 	}
-	for _, known := range cfg.StatusValues {
+	vocabulary := cfg.KindStatusValues(kind)
+	for _, known := range vocabulary {
 		if strings.EqualFold(value, known) {
 			return value, true
 		}
@@ -409,7 +444,7 @@ func canonicalStatus(cfg config.Config, raw string) (string, bool) {
 	if !derivesEdge(cfg, value) {
 		return value, false
 	}
-	for _, known := range cfg.StatusValues {
+	for _, known := range vocabulary {
 		if len(value) <= len(known) || !strings.EqualFold(value[:len(known)], known) {
 			continue
 		}

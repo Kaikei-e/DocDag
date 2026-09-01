@@ -719,3 +719,155 @@ func TestBuildLocatesAnUnresolvableReference(t *testing.T) {
 		t.Errorf("location = %+v, want %+v", f.Location, want)
 	}
 }
+
+func TestBuildAcrossKinds(t *testing.T) {
+	cfg := testKindsConfig()
+
+	t.Run("a node carries its kind, on the node and as an attribute", func(t *testing.T) {
+		docs := []*parse.Document{testKindDoc("clause", "UZ-V-001", map[string]any{"status": "accepted"})}
+
+		g := Build(docs, cfg)
+
+		n, ok := g.Node("UZ-V-001")
+		if !ok {
+			t.Fatalf("node UZ-V-001 is missing: %v", g.Nodes)
+		}
+		if n.Kind != "clause" {
+			t.Errorf("kind = %q, want clause", n.Kind)
+		}
+		if got, ok := n.Attr(config.KeyKind); !ok || got != "clause" {
+			t.Errorf("attr kind = %q (ok=%v), want clause", got, ok)
+		}
+	})
+
+	t.Run("the directory's kind wins over a frontmatter key that disagrees", func(t *testing.T) {
+		// The disagreement is the kind_mismatch finding; what rules read has to
+		// be the kind the document was actually parsed as.
+		docs := []*parse.Document{testKindDoc("clause", "UZ-V-001", map[string]any{"kind": "conform", "status": "accepted"})}
+
+		g := Build(docs, cfg)
+
+		if got, _ := g.Nodes["UZ-V-001"].Attr(config.KeyKind); got != "clause" {
+			t.Fatalf("attr kind = %q, want the directory's answer", got)
+		}
+	})
+
+	t.Run("a single-kind corpus leaves a written kind alone", func(t *testing.T) {
+		docs := []*parse.Document{testDoc("0001", map[string]any{"kind": "decision", "status": "accepted"}, "")}
+
+		g := Build(docs, config.ADRPreset())
+
+		n := g.Nodes["0001"]
+		if n.Kind != "" {
+			t.Errorf("kind = %q, want none on a single-kind corpus", n.Kind)
+		}
+		if got, _ := n.Attr(config.KeyKind); got != "decision" {
+			t.Errorf("attr kind = %q, want the frontmatter value untouched", got)
+		}
+	})
+
+	t.Run("a file without an identity is no node at all", func(t *testing.T) {
+		stray := testKindDoc("clause", "", nil)
+		stray.Identity = "README"
+
+		g := Build([]*parse.Document{stray}, cfg)
+
+		if len(g.Nodes) != 0 {
+			t.Fatalf("nodes = %v, want none: the file yielded no identifier", g.Nodes)
+		}
+		if len(testFindingsFor(g.Findings, model.RuleIDMismatch)) != 1 {
+			t.Fatalf("findings = %+v, want the id_mismatch", g.Findings)
+		}
+	})
+
+	t.Run("an edge resolves a reference of another kind", func(t *testing.T) {
+		docs := []*parse.Document{
+			testKindDoc("clause", "UZ-V-001", map[string]any{"status": "accepted"}),
+			testKindDoc("conform", "conform/check", map[string]any{"status": "accepted", "enforces": []any{"UZ-V-001"}}),
+		}
+
+		g := Build(docs, cfg)
+
+		want := []model.Edge{testEdge("conform/check", "UZ-V-001", "enforces")}
+		if !slices.EqualFunc(g.Edges, want, func(a, b model.Edge) bool { return a.Equal(b) }) {
+			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
+		}
+	})
+
+	t.Run("a reference no kind accepts is not an identifier", func(t *testing.T) {
+		docs := []*parse.Document{
+			testKindDoc("conform", "conform/check", map[string]any{"status": "accepted", "enforces": []any{"see UZ-V-001"}}),
+		}
+
+		g := Build(docs, cfg)
+
+		testAssertSingleFinding(t, g.Findings, model.RuleInvalidRef, model.SeverityError, "conform/check")
+	})
+
+	t.Run("a reference of the wrong kind still resolves, and is a kind mismatch", func(t *testing.T) {
+		// Reporting it as "not an identifier" would hide what is actually
+		// wrong: the reference names a document, of a kind the edge cannot
+		// reach.
+		docs := []*parse.Document{
+			testKindDoc("deviation", "dev-0001", map[string]any{"status": "accepted"}),
+			testKindDoc("conform", "conform/check", map[string]any{"status": "accepted", "enforces": []any{"dev-0001"}}),
+		}
+
+		g := Build(docs, cfg)
+		findings := Validate(g, cfg)
+
+		if len(g.Edges) != 1 {
+			t.Fatalf("edges = %+v, want the edge to have resolved", g.Edges)
+		}
+		testAssertSingleFinding(t, findings, model.RuleEdgeKindMismatch, model.SeverityError, "conform/check")
+	})
+
+	t.Run("a kind keeps its own status vocabulary", func(t *testing.T) {
+		vocabulary := testKindsConfig()
+		vocabulary.Kinds["clause"] = config.KindSpec{Dir: "spec/clauses", ID: `^UZ-[A-Z]-\d{3}$`, StatusValues: []string{"trial", "accepted"}}
+		docs := []*parse.Document{
+			testKindDoc("clause", "UZ-V-001", map[string]any{"status": "proposed"}),
+			testKindDoc("deviation", "dev-0001", map[string]any{"status": "proposed"}),
+		}
+
+		findings := Validate(Build(docs, vocabulary), vocabulary)
+
+		// The clause vocabulary does not carry proposed; the deviation kind
+		// declares none and inherits the top-level one, which does.
+		f := testAssertSingleFinding(t, findings, model.RuleUnknownStatus, model.SeverityError, "UZ-V-001")
+		if !strings.Contains(f.Detail, "trial, accepted") {
+			t.Errorf("detail = %q, want it to name the kind's own vocabulary", f.Detail)
+		}
+	})
+}
+
+func TestKindIsReadableByRulesAndProjections(t *testing.T) {
+	cfg := testKindsConfig()
+	cfg.Projections = []config.ProjectionSpec{
+		testProjection("is_clause", config.Condition{Attr: map[string]config.AttrCondition{config.KeyKind: testAttrEq("clause")}}),
+	}
+	cfg.Rules = []config.Rule{
+		{
+			Name:     "orphan_test",
+			Severity: model.SeverityWarn,
+			When: config.Condition{
+				Attr:        map[string]config.AttrCondition{config.KeyKind: testAttrEq("conform")},
+				NotOutbound: "enforces",
+			},
+			Message: "enforces no clause",
+		},
+	}
+	docs := []*parse.Document{
+		testKindDoc("clause", "UZ-V-001", map[string]any{"status": "accepted"}),
+		testKindDoc("conform", "conform/check", map[string]any{"status": "accepted"}),
+	}
+	g := Build(docs, cfg)
+
+	t.Run("a projection reads the kind", func(t *testing.T) {
+		testAssertIDs(t, "is_clause", EvalProjections(g, cfg).Set("is_clause"), testIDs("UZ-V-001"))
+	})
+
+	t.Run("a rule reads the kind", func(t *testing.T) {
+		testAssertSingleFinding(t, EvalRules(g, cfg), "orphan_test", model.SeverityWarn, "conform/check")
+	})
+}
