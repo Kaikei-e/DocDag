@@ -39,6 +39,8 @@ func suggestion(f model.Finding, g *model.Graph, cfg config.Config) string {
 			supersedesKey(cfg), f.ID, statusField(cfg), config.StatusWithdrawn)
 	case model.RuleUnstructuredSupersedes:
 		return declareEdge(g, cfg, f.ID)
+	case model.RuleStaleTarget:
+		return leafSuggestion(g, cfg, f)
 	case model.RuleUnknownStatus:
 		if len(cfg.StatusValues) == 0 {
 			return ""

@@ -18,12 +18,13 @@ A finding reads:
 | **Rule** | the rule's own `severity:` | `rules:` defines them; the preset ships two, and a config that writes `rules:` replaces the list |
 | **Reference and history** | `references.dangling`, or fixed | `dangling_reference` is off by default; `immutable_violation` needs `--immutable-since` |
 
-`structural:` accepts exactly these twenty names: `cycle`, `dangling_ref`, `id_collision`,
+`structural:` accepts exactly these twenty-two names: `cycle`, `dangling_ref`, `id_collision`,
 `invalid_frontmatter`, `missing_frontmatter`, `unknown_status`, `derived_conflict`,
 `unstructured_supersedes`, `invalid_ref`, `empty_edge`, `inverse_mismatch`, `cardinality`,
 `edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`, `id_mismatch`, `kind_mismatch`,
-`unknown_field`, `edge_kind_mismatch`, `deprecated_field`. Naming anything else — `status_drift`
-and `superseded_orphan` included, since they are rules — is a configuration error and exits 3.
+`unknown_field`, `edge_kind_mismatch`, `deprecated_field`, `stale_target`, `path_mismatch`. Naming
+anything else — `status_drift` and `superseded_orphan` included, since they are rules — is a
+configuration error and exits 3.
 
 ## Status is a projection
 
@@ -267,6 +268,64 @@ superseded by 0003` raises — a suggestion, not a failure. The graph is the sam
 moving the string to a `supersedes:` key clears the warning. Fix: `declare supersedes: 0002 in
 0003`.
 
+### `stale_target` — error, structural
+
+An edge whose spec declares `target:` points at a document that does not satisfy it; see
+[configuration.md](configuration.md#target-conditions). An edge that declares no `target:` can
+never raise it, so a corpus enables the check by configuring it and hears nothing otherwise. The
+severity is fixed at error, like `cardinality`.
+
+```
+enforces targets UZ-V-001, which UZ-V-001a supersedes
+depends-on targets 0001, which 0002 supersedes
+amends targets 0006, which does not satisfy the edge's target condition
+```
+
+The first two are a `leaf_of:` failure: it names every document that replaced the target, and the
+edge name reads as the configuration declared it rather than inflected for one document or several.
+Every other condition reports the third form — what a target has to look like is whatever the corpus
+declared, and there is no shorter way to say it. The target's own location is under `related`, next
+to the replacements where there are any.
+
+The finding is filed against the document that *declared* the edge, on the key it declared it under
+— the derived field's line where the edge came from a `derived_edges:` pattern, since a target
+condition reaches derived edges too. A reference naming no document raises `dangling_ref` alone:
+there is no target to hold a condition against.
+
+Fix: `did you mean UZ-V-004?`, and `did you mean one of: 0004, 0005?` where the lineage branched.
+Only a `leaf_of:` target carries one — it says the target was replaced, and `resolve` walks the
+lineage to the replacement. **The check is local and only the suggestion is transitive**: a lineage
+that loops has no leaf to name, so the finding stands with no fix beside it. Any other condition is
+a statement about the target document, and which document satisfies it instead is not a question
+the graph answers.
+
+A condition written on an edge spec sees the target's own local condition and nothing further:
+nesting `via` or another `target` inside it is a configuration error, so the depth stays fixed at
+two — one edge, then a condition about what is at the end of it. That is the bar every future
+addition to the vocabulary is reviewed against as well: a word is added only if conditions stay
+inside the bisimulation-invariant fragment, which is what keeps a check a question about a
+document's neighbourhood rather than a query language with an evaluator to reason about.
+
+### `path_mismatch` — error, structural
+
+A document from which the `path:` of a `path_constraints:` entry reaches something its `equals:` or
+`subset_of:` does not; see [configuration.md](configuration.md#path-constraints). Like
+`stale_target`, it fires only where a configuration declares one, and its severity is fixed:
+
+```
+amend_targets_current: amends -> ^supersedes reaches 0002, want none
+amend_scope_consistent: amends -> depends-on reaches 0006, which depends-on does not
+```
+
+The detail names the constraint, the path as it was written — `^` and all — and the documents in
+P(d) − Q(d); those documents are also under `related`. The finding sits on the key declaring the
+path's **first** step, since that is the only step the document itself wrote down; where it declares
+none — which a reversed first step never does — it falls back on the status field and then on the
+frontmatter's opening line.
+
+No fix suggestion. Two paths disagree and DocDag does not guess which of them is the wrong one —
+the same policy as `derived_conflict`.
+
 ### `status_drift` — error, preset rule
 
 The document has an inbound `supersedes` edge and a status other than `superseded`: `has inbound
@@ -349,9 +408,18 @@ testdata/fixtures/status-drift/0001-serve-images-from-the-application-server.md:
 That run exits 1. The other directories are named for the finding or the behaviour they exercise —
 `cycle`, `union-cycle`, `union-cycle-shadowed`, `superseded-orphan`, `id-collision`, `dangling`,
 `dangling-reference`, `empty-edge`, `invalid-yaml`, `inverse-mismatch`, `cardinality`, `withdrawn`,
-`any-of`, `list-attrs`, `fan-in`, `depends-impact`, `projections`, `edge-attrs`, `kinds`,
-`spec-vault`. The last four carry a `docdag.yaml` of their own, so run them with
-`--config <dir>/docdag.yaml`.
+`any-of`, `list-attrs`, `fan-in`, `depends-impact`, `projections`, `edge-attrs`, `target`,
+`path-constraints`, `kinds`, `spec-vault`. The last six carry a `docdag.yaml` of their own, so run
+them with `--config <dir>/docdag.yaml`.
+
+`target` is the corpus whose edges declare what they may point at: a `depends-on` left on a
+replaced decision and an `amends` on a deprecated one, one `stale_target` each. `path-constraints`
+states the same sort of invariant over two composed edges instead, and carries one violation of
+each comparison:
+
+```console
+$ docdag validate --dir testdata/fixtures/path-constraints --config testdata/fixtures/path-constraints/docdag.yaml
+```
 
 `kinds` is the multi-kind corpus: clauses, conformance tests and deviations in three directories,
 carrying one of each kind finding. Its documents live under the kinds rather than in the fixture
@@ -361,9 +429,10 @@ directory itself, so it is run by `--config` alone:
 $ docdag validate --config testdata/fixtures/kinds/docdag.yaml
 ```
 
-`spec-vault` is a small corpus under the `spec` preset — thirteen documents across the seven kinds,
-configured by `preset: spec` and nothing else. Nothing structural is wrong with it; every finding it
-carries comes from a preset rule:
+`spec-vault` is a small corpus under the `spec` preset — fourteen documents across the seven kinds,
+configured by `preset: spec` and nothing else. Four of its five findings come from a preset rule;
+the fifth is a conformance test still enforcing the clause its successor replaced, which is the
+`stale_target` the preset's `target:` conditions are there for:
 
 ```console
 $ docdag validate --config testdata/fixtures/spec-vault/docdag.yaml

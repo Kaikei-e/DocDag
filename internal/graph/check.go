@@ -648,6 +648,8 @@ func Check(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
 	findings = append(findings, CheckInverse(g, cfg)...)
 	findings = append(findings, CheckCardinality(g, cfg)...)
 	findings = append(findings, CheckEdgeKinds(g, cfg)...)
+	findings = append(findings, CheckTargets(g, cfg)...)
+	findings = append(findings, CheckPathConstraints(g, cfg)...)
 	findings = append(findings, CheckStatusVocabulary(g, cfg)...)
 	findings = append(findings, CheckDerived(g, cfg)...)
 	findings = append(findings, CheckDeprecatedFields(g, cfg, asOf)...)

@@ -299,6 +299,10 @@ func SpecPreset() Config {
 				Direction: DirectionForward,
 				From:      []string{KindConform},
 				To:        []string{KindClause},
+				// A test that enforces a retired clause keeps passing while the
+				// clause that replaced it goes unenforced: the suite is green and
+				// the standard is dead. The target has to be the current leaf.
+				Target: &TargetCondition{LeafOf: EdgeSupersedes.String()},
 			},
 			{
 				Name:      EdgeDeviatesFrom.String(),
@@ -308,6 +312,17 @@ func SpecPreset() Config {
 				To:        []string{KindClause},
 				Attrs: map[string]EdgeAttrSpec{
 					AttrExpires: {Required: true, Type: AttrTypeDate},
+				},
+				// A departure is only a departure from something in force, so the
+				// target is binding: accepted and superseded by nothing. That is
+				// written out rather than deferred to the binding projection,
+				// which reads effective_must and would make every deviation from
+				// an unenforced clause a finding.
+				Target: &TargetCondition{
+					Condition: Condition{
+						NotInbound: EdgeSupersedes.String(),
+						Attr:       accepted(),
+					},
 				},
 			},
 			{
@@ -341,6 +356,9 @@ func SpecPreset() Config {
 					AttrAgreement: {Required: true, Type: AttrTypeNumber},
 					AttrModel:     {Required: true, Type: AttrTypeString},
 				},
+				// A measurement of a replaced clause reads as the current
+				// agreement rate of a clause nobody is bound by.
+				Target: &TargetCondition{LeafOf: EdgeSupersedes.String()},
 			},
 		},
 		Projections: []ProjectionSpec{

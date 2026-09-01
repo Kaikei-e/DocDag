@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1041,18 +1042,120 @@ func specVaultConfig(t *testing.T) string {
 	return filepath.Join(fixture(t, "spec-vault"), "docdag.yaml")
 }
 
+func TestValidateTargetConditions(t *testing.T) {
+	dir := fixture(t, "target")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertLines(t, "findings", findingLines(got.stdout), []string{
+		"0003-expire-sessions-after-a-day.md:4: ERROR stale_target 0003: depends-on targets 0001, which 0002 supersedes",
+		"0005-redact-session-identifiers-from-logs.md:4: ERROR stale_target 0005: amends targets 0006, which does not satisfy the edge's target condition",
+	})
+	// Only the leaf_of failure has a lineage to walk, so only it carries a fix.
+	fixes := []string{}
+	for _, line := range lines(got.stdout) {
+		if strings.HasPrefix(strings.TrimSpace(line), "fix:") {
+			fixes = append(fixes, strings.TrimSpace(line))
+		}
+	}
+	assertLines(t, "fixes", fixes, []string{"fix: did you mean 0002?"})
+}
+
+func TestValidatePathConstraintsCorpus(t *testing.T) {
+	dir := fixture(t, "path-constraints")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertLines(t, "findings", findingLines(got.stdout), []string{
+		"0003-retry-failed-jobs-three-times.md:4: ERROR path_mismatch 0003: amend_targets_current: amends -> ^supersedes reaches 0002, want none",
+		"0004-move-poison-jobs-to-a-dead-letter-queue.md:4: ERROR path_mismatch 0004: amend_scope_consistent: amends -> depends-on reaches 0006, which depends-on does not",
+	})
+	if strings.Contains(got.stdout, "fix:") {
+		t.Errorf("stdout = %q, want no fix: which of the two paths is wrong is not DocDag's guess", got.stdout)
+	}
+}
+
+func TestValidateRejectsATargetOrPathItCannotAnswer(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+		want   string
+	}{
+		{
+			name: "a via nested inside a target",
+			config: "edges:\n  - name: supersedes\n    key: supersedes\n    acyclic: true\n    direction: forward\n" +
+				"    target:\n      via: {edge: supersedes, attr: {status: {eq: accepted}}}\n",
+			want: "second hop",
+		},
+		{
+			name: "a leaf_of naming an undeclared edge",
+			config: "edges:\n  - name: supersedes\n    key: supersedes\n    acyclic: true\n    direction: forward\n" +
+				"    target: {leaf_of: relates-to}\n",
+			want: "leaf_of",
+		},
+		{
+			name:   "a path of three steps",
+			config: "path_constraints:\n  - name: too_long\n    path: [supersedes, supersedes, supersedes]\n    equals: none\n",
+			want:   "want 1 or 2",
+		},
+		{
+			name:   "a reversed step naming an undeclared edge",
+			config: "path_constraints:\n  - name: unknown_step\n    path: [^relates-to]\n    equals: none\n",
+			want:   "undeclared edge type",
+		},
+		{
+			name:   "a set the vocabulary does not write",
+			config: "path_constraints:\n  - name: everything\n    path: [supersedes]\n    equals: all\n",
+			want:   "equals",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeDocs(t, map[string]string{
+				"docdag.yaml":                 tt.config,
+				"docs/adr/0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n",
+			})
+			t.Chdir(dir)
+
+			got := run(t, "validate")
+
+			assertExit(t, got, 3)
+			if !strings.Contains(got.stderr, tt.want) {
+				t.Errorf("stderr = %q, want it to name %q", got.stderr, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidateACorpusUnderTheSpecPreset(t *testing.T) {
 	got := run(t, "validate", "--config", specVaultConfig(t))
 
 	assertExit(t, got, 1)
-	// Every finding comes from a preset rule: nothing structural is wrong with
-	// the corpus, and what the rules report is a standard hardening into dogma.
+	// Four of the five findings come from a preset rule — a standard hardening
+	// into dogma. The fifth is the one structural thing wrong with the corpus: a
+	// conformance test left pointing at the clause UZ-V-004 replaced.
 	assertLines(t, "findings", findingLines(got.stdout), []string{
 		"UZ-V-002.md:4: ERROR orphan_must UZ-V-002: is MUST and accepted but nothing enforces it",
 		"UZ-V-003.md:5: ERROR stale_premise UZ-V-003: is accepted but a premise is retired",
 		"report-states-its-model.md:3: ERROR orphan_test conform/report-states-its-model: enforces no clause",
+		"uz-v-005.md:5: ERROR stale_target conform/uz-v-005: enforces targets UZ-V-005, which UZ-V-004 supersedes",
 		"UZ-V-004.md:3: WARN no_counterexample UZ-V-004: is accepted without a counterexample",
 	})
+}
+
+// TestValidateSuggestsTheLeafOfAStaleTarget drives the one transitive part of
+// the target check through the CLI: the check itself is local, and the walk to
+// the leaf of the lineage happens only to write the fix line.
+func TestValidateSuggestsTheLeafOfAStaleTarget(t *testing.T) {
+	got := run(t, "validate", "--config", specVaultConfig(t))
+
+	assertExit(t, got, 1)
+	want := "  fix: did you mean UZ-V-004?"
+	if !slices.Contains(lines(got.stdout), want) {
+		t.Errorf("stdout = %q, want a line %q", got.stdout, want)
+	}
 }
 
 func TestValidateReportsTheSpecPresetRevision(t *testing.T) {
@@ -1063,8 +1166,8 @@ func TestValidateReportsTheSpecPresetRevision(t *testing.T) {
 	if report.PresetVersion != config.SpecPresetVersion {
 		t.Errorf("preset_version = %d, want %d", report.PresetVersion, config.SpecPresetVersion)
 	}
-	if report.Summary.Documents != 13 {
-		t.Errorf("documents = %d, want the thirteen the seven kinds hold", report.Summary.Documents)
+	if report.Summary.Documents != 14 {
+		t.Errorf("documents = %d, want the fourteen the seven kinds hold", report.Summary.Documents)
 	}
 }
 

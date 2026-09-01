@@ -160,6 +160,97 @@ type EdgeSpec struct {
 	// declares none takes plain references only, which is what every edge took
 	// before attributes existed.
 	Attrs map[string]EdgeAttrSpec `yaml:"attrs,omitempty"`
+	// Target is the condition the document at the edge's head has to satisfy.
+	// An edge that declares none constrains nothing about what it points at,
+	// which is what every edge did before target conditions existed.
+	Target *TargetCondition `yaml:"target,omitempty"`
+}
+
+// TargetCondition is what an edge requires of the document it points at: the
+// rule vocabulary's Condition, evaluated against that document, plus one sugar
+// word. `leaf_of: <edge>` is `not_inbound: <edge>` under a name that says what
+// it is for — the target has to be the current leaf of that lineage — and the
+// checker remembers which of the two was written, because only the sugar has a
+// lineage to walk for a fix suggestion.
+//
+// Nesting `via` or `via_inbound` inside it is a configuration error. The
+// condition is already one hop from the document that declared the edge, so a
+// clause about the target's own neighbours would be two, and the modal depth
+// the vocabulary stays inside is fixed at two: an edge, then a local condition.
+type TargetCondition struct {
+	Condition `yaml:",inline"`
+	LeafOf    string `yaml:"leaf_of,omitempty"`
+}
+
+// Empty reports whether a target condition constrains nothing, which is what a
+// `target: {}` nobody finished writing looks like.
+func (t TargetCondition) Empty() bool {
+	return t.LeafOf == "" && t.Condition.Empty()
+}
+
+// PathConstraint declares that the documents one path of edges reaches from a
+// document are among the ones a second path reaches — the degenerate case of a
+// commuting square, where one of the two sides may be the empty set. Exactly
+// one of Equals and SubsetOf is written.
+type PathConstraint struct {
+	Name string `yaml:"name"`
+	// Path is the walk the constraint is about: edge names in the order they
+	// are crossed, each optionally prefixed with PathReverse to walk it
+	// backwards.
+	Path []string `yaml:"path"`
+	// Equals names the set the path must reach exactly. PathEqualsNone, the
+	// empty set, is the only set the vocabulary writes: naming a second path
+	// here is what subset_of is for.
+	Equals string `yaml:"equals,omitempty"`
+	// SubsetOf is the comparison walk, written the way Path is.
+	SubsetOf []string `yaml:"subset_of,omitempty"`
+}
+
+// The path vocabulary: the one set `equals` accepts, the prefix that turns a
+// step around, and the longest path the checker walks. Two is not an
+// implementation limit but the decision itself — a longer path is a regular
+// path expression, whose implication problem is undecidable, and DocDag
+// already answers transitive questions with resolve.
+const (
+	PathEqualsNone = "none"
+	PathReverse    = "^"
+	MaxPathSteps   = 2
+)
+
+// PathStep is one step of a path: the edge type it crosses and whether it is
+// crossed backwards.
+type PathStep struct {
+	Edge    string
+	Inbound bool
+}
+
+// String returns the step as a configuration writes it, so a message names
+// what the reader has to look for in the file.
+func (s PathStep) String() string {
+	if s.Inbound {
+		return PathReverse + s.Edge
+	}
+	return s.Edge
+}
+
+// PathSteps reads a written path into steps. A `^` prefix means the step is
+// walked backwards; everything else is an edge name, which validation holds to
+// the declared vocabulary.
+func PathSteps(elements []string) []PathStep {
+	steps := make([]PathStep, 0, len(elements))
+	for _, element := range elements {
+		if name, reversed := strings.CutPrefix(element, PathReverse); reversed {
+			steps = append(steps, PathStep{Edge: name, Inbound: true})
+			continue
+		}
+		steps = append(steps, PathStep{Edge: element})
+	}
+	return steps
+}
+
+// PathString renders a written path the way a finding names it.
+func PathString(elements []string) string {
+	return strings.Join(elements, " -> ")
 }
 
 // EdgeRefKey is the key an attributed edge entry names its target under:
@@ -546,6 +637,10 @@ type Config struct {
 	DerivedEdges []DerivedEdgeSpec    `yaml:"derived_edges,omitempty"`
 	Rules        []Rule               `yaml:"rules,omitempty"`
 	Projections  []ProjectionSpec     `yaml:"projections,omitempty"`
+	// PathConstraints declares the invariants over two composed edges that an
+	// edge's own target condition cannot state. Neither preset declares any, so
+	// a corpus pays for them only where it writes one down.
+	PathConstraints []PathConstraint `yaml:"path_constraints,omitempty"`
 	// Binding names the projection that defines the set of documents in force.
 	// It is a preset's answer to "what is current", not a hard-coded one.
 	Binding      string         `yaml:"binding,omitempty"`
@@ -609,6 +704,11 @@ var structuralSeverities = map[string]model.Severity{
 	model.RuleKindMismatch:           model.SeverityError,
 	model.RuleUnknownField:           model.SeverityError,
 	model.RuleEdgeKindMismatch:       model.SeverityError,
+	// Both fire only where a configuration declares what they read — a target
+	// condition, a path constraint — so a corpus that declares neither never
+	// sees them, and one that does asked for the invariant to hold.
+	model.RuleStaleTarget:  model.SeverityError,
+	model.RulePathMismatch: model.SeverityError,
 	// A deprecation warns while the field is still tolerated. Past its sunset
 	// the check speaks at error whatever is written here: the day is the
 	// corpus's own deadline, and structural: raises the form before it.
@@ -826,6 +926,9 @@ func (c Config) Validate() error {
 	if err := c.validateProjections(); err != nil {
 		return err
 	}
+	if err := c.validatePathConstraints(); err != nil {
+		return err
+	}
 	if err := c.validateFilename(); err != nil {
 		return err
 	}
@@ -937,6 +1040,98 @@ func (c Config) validateEdgeKinds(spec EdgeSpec) error {
 	return nil
 }
 
+// validateEdgeTarget holds an edge's target condition to the depth the
+// vocabulary fixes. The condition is evaluated one hop away, on the document
+// the edge points at, so it may say anything a rule says about a document —
+// attributes, degrees, the combinators — and nothing about that document's own
+// neighbours: `via` there would be a second hop, and an unbounded modal depth
+// is exactly what the fixed vocabulary buys freedom from.
+func (c Config) validateEdgeTarget(spec EdgeSpec) error {
+	if spec.Target == nil {
+		return nil
+	}
+	subject := fmt.Sprintf("edge %q target", spec.Name)
+	if spec.Target.Empty() {
+		return fmt.Errorf("%s: constrains nothing: %w", subject, model.ErrInvalidConfig)
+	}
+	if leaf := spec.Target.LeafOf; leaf != "" {
+		if _, ok := c.Edge(model.EdgeType(leaf)); !ok {
+			return fmt.Errorf("%s: leaf_of names undeclared edge type %q, declare it under edges: %w",
+				subject, leaf, model.ErrInvalidConfig)
+		}
+	}
+	for _, cond := range spec.Target.Conditions() {
+		if clauses := cond.ViaClauses(); len(clauses) > 0 {
+			return fmt.Errorf("%s: %s reaches a second hop, which a target condition may not: it sees the target's own attributes and edges: %w",
+				subject, clauses[0].Key(), model.ErrInvalidConfig)
+		}
+		if err := c.validateCondition(subject, cond); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validatePathConstraints holds the declared path constraints to the fragment
+// the checker walks: named, distinct, comparing against exactly one of the two
+// right-hand sides, and over paths of one or two declared edges. A longer path,
+// a repetition or a pattern is a configuration error rather than a feature —
+// see the comment on MaxPathSteps.
+//
+// A constraint that D1 could state as an edge's own `target:` is not rejected
+// here: it holds the same way, and ADR-0004's `lint` is where preferring the
+// shorter spelling belongs, as a warning about style rather than an error
+// about meaning.
+func (c Config) validatePathConstraints() error {
+	declared := make(map[string]bool, len(c.PathConstraints))
+	for _, constraint := range c.PathConstraints {
+		switch {
+		case constraint.Name == "":
+			return fmt.Errorf("path constraint without a name: %w", model.ErrInvalidConfig)
+		case declared[constraint.Name]:
+			return fmt.Errorf("path constraint %q is declared twice: %w", constraint.Name, model.ErrInvalidConfig)
+		}
+		declared[constraint.Name] = true
+		subject := fmt.Sprintf("path constraint %q", constraint.Name)
+		switch {
+		case constraint.Equals != "" && constraint.SubsetOf != nil:
+			return fmt.Errorf("%s: equals and subset_of are alternatives, write one: %w", subject, model.ErrInvalidConfig)
+		case constraint.Equals == "" && constraint.SubsetOf == nil:
+			return fmt.Errorf("%s: needs equals or subset_of: %w", subject, model.ErrInvalidConfig)
+		case constraint.Equals != "" && constraint.Equals != PathEqualsNone:
+			return fmt.Errorf("%s: equals %q names no set, want %s or a subset_of path: %w",
+				subject, constraint.Equals, PathEqualsNone, model.ErrInvalidConfig)
+		}
+		if err := c.validatePath(subject, "path", constraint.Path); err != nil {
+			return err
+		}
+		if constraint.SubsetOf == nil {
+			continue
+		}
+		if err := c.validatePath(subject, "subset_of", constraint.SubsetOf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c Config) validatePath(subject, key string, elements []string) error {
+	if len(elements) < 1 || len(elements) > MaxPathSteps {
+		return fmt.Errorf("%s: %s walks %d edges, want 1 or %d: %w",
+			subject, key, len(elements), MaxPathSteps, model.ErrInvalidConfig)
+	}
+	for _, step := range PathSteps(elements) {
+		if step.Edge == "" {
+			return fmt.Errorf("%s: %s step %q names no edge type: %w", subject, key, step, model.ErrInvalidConfig)
+		}
+		if _, ok := c.Edge(model.EdgeType(step.Edge)); !ok {
+			return fmt.Errorf("%s: %s names undeclared edge type %q, declare it under edges or prefix %s to walk a declared one backwards: %w",
+				subject, key, step.Edge, PathReverse, model.ErrInvalidConfig)
+		}
+	}
+	return nil
+}
+
 func (c Config) validateEdges() error {
 	declared := make(map[string]bool, len(c.Edges))
 	keys := make(map[string]bool, len(c.Edges))
@@ -959,6 +1154,9 @@ func (c Config) validateEdges() error {
 			return err
 		}
 		if err := c.validateEdgeKinds(spec); err != nil {
+			return err
+		}
+		if err := c.validateEdgeTarget(spec); err != nil {
 			return err
 		}
 		declared[spec.Name] = true

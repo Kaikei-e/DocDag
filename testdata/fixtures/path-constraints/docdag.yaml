@@ -1,0 +1,23 @@
+# A corpus that states two invariants over two edges composed rather than one.
+# An amendment has to name a decision nothing has replaced, and it may not pull
+# in a dependency the amending decision does not carry itself.
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+  - name: depends-on
+    key: depends-on
+    acyclic: true
+    direction: forward
+  - name: amends
+    key: amends
+    direction: forward
+
+path_constraints:
+  - name: amend_targets_current
+    path: [amends, ^supersedes]   # d --amends--> x, and y --supersedes--> x
+    equals: none                  # no y may have replaced x
+  - name: amend_scope_consistent
+    path: [amends, depends-on]
+    subset_of: [depends-on]       # what the amended decision depends on, this one depends on too

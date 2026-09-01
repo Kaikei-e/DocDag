@@ -1538,3 +1538,237 @@ func TestConfigFields(t *testing.T) {
 		}
 	})
 }
+
+// testTarget declares a target condition on the preset's depends-on edge,
+// which is the edge every target test is written against.
+func testTarget(cfg *Config, target *TargetCondition) {
+	cfg.Edges[1].Target = target
+}
+
+func TestValidateEdgeTargets(t *testing.T) {
+	tests := []struct {
+		name    string
+		target  *TargetCondition
+		wantErr bool
+	}{
+		{name: "no target at all constrains nothing"},
+		{name: "the leaf of a declared lineage", target: &TargetCondition{LeafOf: "supersedes"}},
+		{
+			name:   "a local condition on the target",
+			target: &TargetCondition{Condition: Condition{NotInbound: "supersedes", Attr: map[string]AttrCondition{"status": testEq(StatusAccepted)}}},
+		},
+		{
+			name:   "a degree window on the target",
+			target: &TargetCondition{Condition: Condition{Outbound: EdgeCondition{Edge: "depends-on", Min: testInt(1), Max: testInt(3)}}},
+		},
+		{
+			name:   "the combinators, which nest",
+			target: &TargetCondition{Condition: Condition{AnyOf: []Condition{{NotInbound: "supersedes"}, {Not: &Condition{Inbound: EdgeCondition{Edge: "depends-on"}}}}}},
+		},
+		{
+			name:   "a projection read as a virtual attribute",
+			target: &TargetCondition{Condition: Condition{Attr: map[string]AttrCondition{ProjectionAcceptedUnsuperseded: testEq("true")}}},
+		},
+		{
+			name:    "a leaf_of naming an undeclared edge",
+			target:  &TargetCondition{LeafOf: "relates-to"},
+			wantErr: true,
+		},
+		{
+			name:    "a target that constrains nothing",
+			target:  &TargetCondition{},
+			wantErr: true,
+		},
+		{
+			name:    "a one-hop clause, which would be a second hop",
+			target:  &TargetCondition{Condition: Condition{Via: &ViaCondition{Edge: "supersedes", Attr: map[string]AttrCondition{"status": testEq(StatusAccepted)}}}},
+			wantErr: true,
+		},
+		{
+			name:    "an inbound one-hop clause, for the same reason",
+			target:  &TargetCondition{Condition: Condition{ViaInbound: &ViaCondition{Edge: "supersedes", Attr: map[string]AttrCondition{"status": testEq(StatusAccepted)}}}},
+			wantErr: true,
+		},
+		{
+			name:    "a one-hop clause nested inside an alternative",
+			target:  &TargetCondition{Condition: Condition{AnyOf: []Condition{{Via: &ViaCondition{Edge: "supersedes"}}}}},
+			wantErr: true,
+		},
+		{
+			name:    "an undeclared edge in the condition itself",
+			target:  &TargetCondition{Condition: Condition{NotInbound: "relates-to"}},
+			wantErr: true,
+		},
+		{
+			name:    "an attribute clause with no operand",
+			target:  &TargetCondition{Condition: Condition{Attr: map[string]AttrCondition{"status": {}}}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			testTarget(&cfg, tt.target)
+
+			err := cfg.Validate()
+
+			if tt.wantErr {
+				if !errors.Is(err, model.ErrInvalidConfig) {
+					t.Fatalf("Validate = %v, want it to wrap model.ErrInvalidConfig", err)
+				}
+				if !strings.Contains(err.Error(), `edge "depends-on" target`) {
+					t.Errorf("Validate = %v, want it to name the edge and the key it was written under", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate = %v, want no error", err)
+			}
+		})
+	}
+}
+
+func TestValidatePathConstraints(t *testing.T) {
+	tests := []struct {
+		name        string
+		constraints []PathConstraint
+		wantErr     bool
+	}{
+		{name: "a corpus declaring none"},
+		{
+			name:        "a two-step path that must reach nothing",
+			constraints: []PathConstraint{{Name: "amend_targets_current", Path: []string{"depends-on", "^supersedes"}, Equals: PathEqualsNone}},
+		},
+		{
+			name:        "a one-step path compared against another",
+			constraints: []PathConstraint{{Name: "scope", Path: []string{"supersedes"}, SubsetOf: []string{"depends-on"}}},
+		},
+		{
+			name: "two constraints over one corpus",
+			constraints: []PathConstraint{
+				{Name: "first", Path: []string{"supersedes"}, Equals: PathEqualsNone},
+				{Name: "second", Path: []string{"depends-on", "supersedes"}, SubsetOf: []string{"depends-on"}},
+			},
+		},
+		{
+			name:        "a constraint without a name",
+			constraints: []PathConstraint{{Path: []string{"supersedes"}, Equals: PathEqualsNone}},
+			wantErr:     true,
+		},
+		{
+			name: "one name declared twice",
+			constraints: []PathConstraint{
+				{Name: "scope", Path: []string{"supersedes"}, Equals: PathEqualsNone},
+				{Name: "scope", Path: []string{"depends-on"}, Equals: PathEqualsNone},
+			},
+			wantErr: true,
+		},
+		{
+			name:        "a path of no steps",
+			constraints: []PathConstraint{{Name: "scope", Equals: PathEqualsNone}},
+			wantErr:     true,
+		},
+		{
+			name:        "a path of three steps",
+			constraints: []PathConstraint{{Name: "scope", Path: []string{"supersedes", "supersedes", "supersedes"}, Equals: PathEqualsNone}},
+			wantErr:     true,
+		},
+		{
+			name:        "a comparison path of three steps",
+			constraints: []PathConstraint{{Name: "scope", Path: []string{"supersedes"}, SubsetOf: []string{"depends-on", "depends-on", "depends-on"}}},
+			wantErr:     true,
+		},
+		{
+			name:        "a step naming an undeclared edge",
+			constraints: []PathConstraint{{Name: "scope", Path: []string{"relates-to"}, Equals: PathEqualsNone}},
+			wantErr:     true,
+		},
+		{
+			name:        "a reversed step naming an undeclared edge",
+			constraints: []PathConstraint{{Name: "scope", Path: []string{"^relates-to"}, Equals: PathEqualsNone}},
+			wantErr:     true,
+		},
+		{
+			name:        "a repetition, which is not an edge name",
+			constraints: []PathConstraint{{Name: "scope", Path: []string{"supersedes+"}, Equals: PathEqualsNone}},
+			wantErr:     true,
+		},
+		{
+			name:        "a step that is nothing but the reverse prefix",
+			constraints: []PathConstraint{{Name: "scope", Path: []string{PathReverse}, Equals: PathEqualsNone}},
+			wantErr:     true,
+		},
+		{
+			name:        "a set the vocabulary does not write",
+			constraints: []PathConstraint{{Name: "scope", Path: []string{"supersedes"}, Equals: "all"}},
+			wantErr:     true,
+		},
+		{
+			name:        "both comparisons at once",
+			constraints: []PathConstraint{{Name: "scope", Path: []string{"supersedes"}, Equals: PathEqualsNone, SubsetOf: []string{"depends-on"}}},
+			wantErr:     true,
+		},
+		{
+			name:        "neither comparison",
+			constraints: []PathConstraint{{Name: "scope", Path: []string{"supersedes"}}},
+			wantErr:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.PathConstraints = tt.constraints
+
+			err := cfg.Validate()
+
+			if tt.wantErr {
+				if !errors.Is(err, model.ErrInvalidConfig) {
+					t.Fatalf("Validate = %v, want it to wrap model.ErrInvalidConfig", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate = %v, want no error", err)
+			}
+		})
+	}
+}
+
+func TestPathSteps(t *testing.T) {
+	got := PathSteps([]string{"amends", "^supersedes"})
+
+	want := []PathStep{{Edge: "amends"}, {Edge: "supersedes", Inbound: true}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("PathSteps = %+v, want %+v", got, want)
+	}
+	// A step renders as the configuration wrote it, so a finding names what the
+	// reader has to look for in the file.
+	if rendered := PathString([]string{got[0].String(), got[1].String()}); rendered != "amends -> ^supersedes" {
+		t.Fatalf("PathString = %q, want the written path", rendered)
+	}
+	if steps := PathSteps(nil); len(steps) != 0 {
+		t.Fatalf("PathSteps(nil) = %+v, want no steps", steps)
+	}
+}
+
+func TestTargetConditionEmpty(t *testing.T) {
+	tests := []struct {
+		name   string
+		target TargetCondition
+		want   bool
+	}{
+		{name: "a target nobody finished writing", target: TargetCondition{}, want: true},
+		{name: "the sugar alone", target: TargetCondition{LeafOf: "supersedes"}},
+		{name: "a condition alone", target: TargetCondition{Condition: Condition{NotInbound: "supersedes"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.target.Empty(); got != tt.want {
+				t.Fatalf("Empty = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

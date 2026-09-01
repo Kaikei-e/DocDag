@@ -1140,3 +1140,100 @@ func TestResolveKinds(t *testing.T) {
 		}
 	})
 }
+
+func TestLoadEdgeTargets(t *testing.T) {
+	file := `edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+  - name: depends-on
+    key: depends-on
+    acyclic: true
+    direction: forward
+    target: {leaf_of: supersedes}
+  - name: amends
+    key: amends
+    direction: forward
+    target:
+      attr: {status: {eq: accepted}}
+      not_inbound: supersedes
+`
+	root := testTree(t, map[string]string{"docdag.yaml": file})
+
+	got, err := Load(filepath.Join(root, "docdag.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// The sugar and the condition share one mapping, so a target reads as the
+	// rule vocabulary with one more word rather than as a shape of its own.
+	want := []*TargetCondition{
+		nil,
+		{LeafOf: "supersedes"},
+		{Condition: Condition{NotInbound: "supersedes", Attr: map[string]AttrCondition{"status": testEq(StatusAccepted)}}},
+	}
+	for i, spec := range got.Edges {
+		if !reflect.DeepEqual(spec.Target, want[i]) {
+			t.Errorf("edge %q target = %+v, want %+v", spec.Name, spec.Target, want[i])
+		}
+	}
+	if err := Merge(ADRPreset(), got).Validate(); err != nil {
+		t.Fatalf("Validate = %v, want the merged configuration to be valid", err)
+	}
+}
+
+func TestLoadPathConstraints(t *testing.T) {
+	file := `path_constraints:
+  - name: amend_targets_current
+    path: [depends-on, ^supersedes]
+    equals: none
+  - name: amend_scope_consistent
+    path: [depends-on, depends-on]
+    subset_of: [depends-on]
+`
+	root := testTree(t, map[string]string{"docdag.yaml": file})
+
+	got, err := Load(filepath.Join(root, "docdag.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	want := []PathConstraint{
+		{Name: "amend_targets_current", Path: []string{"depends-on", "^supersedes"}, Equals: PathEqualsNone},
+		{Name: "amend_scope_consistent", Path: []string{"depends-on", "depends-on"}, SubsetOf: []string{"depends-on"}},
+	}
+	if !reflect.DeepEqual(got.PathConstraints, want) {
+		t.Fatalf("path_constraints = %+v, want %+v", got.PathConstraints, want)
+	}
+	if err := Merge(ADRPreset(), got).Validate(); err != nil {
+		t.Fatalf("Validate = %v, want the merged configuration to be valid", err)
+	}
+}
+
+func TestMergePathConstraints(t *testing.T) {
+	base := ADRPreset()
+	base.PathConstraints = []PathConstraint{{Name: "inherited", Path: []string{"supersedes"}, Equals: PathEqualsNone}}
+
+	t.Run("a written list replaces the base wholesale", func(t *testing.T) {
+		override := Config{PathConstraints: []PathConstraint{{Name: "own", Path: []string{"depends-on"}, Equals: PathEqualsNone}}}
+
+		got := Merge(base, override)
+
+		if !reflect.DeepEqual(got.PathConstraints, override.PathConstraints) {
+			t.Fatalf("path_constraints = %+v, want exactly the override %+v", got.PathConstraints, override.PathConstraints)
+		}
+	})
+
+	t.Run("an empty list clears the base", func(t *testing.T) {
+		if got := Merge(base, Config{PathConstraints: []PathConstraint{}}); len(got.PathConstraints) != 0 {
+			t.Fatalf("path_constraints = %+v, want the explicit empty list to clear them", got.PathConstraints)
+		}
+	})
+
+	t.Run("an unwritten list keeps the base", func(t *testing.T) {
+		if got := Merge(base, Config{IDWidth: 6}); !reflect.DeepEqual(got.PathConstraints, base.PathConstraints) {
+			t.Fatalf("path_constraints = %+v, want the base %+v", got.PathConstraints, base.PathConstraints)
+		}
+	})
+}

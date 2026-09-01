@@ -495,6 +495,7 @@ edges:
     direction: forward
     from: [conform]
     to: [clause]
+    target: {leaf_of: supersedes}     # sugar for not_inbound: supersedes
   - name: deviates-from
     key: deviates-from
     direction: forward
@@ -502,6 +503,9 @@ edges:
     to: [clause]
     attrs:
       expires: {required: true, type: date}
+    target:
+      attr: {status: {eq: accepted}}
+      not_inbound: supersedes         # = binding: a departure departs from something in force
   - name: premise
     key: premise
     direction: forward
@@ -525,6 +529,7 @@ edges:
     attrs:
       agreement: {required: true, type: number}
       model: {required: true, type: string}
+    target: {leaf_of: supersedes}
 
 projections:
   - name: enforced

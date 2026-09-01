@@ -76,6 +76,8 @@ const (
 	RuleUnknownField           = "unknown_field"
 	RuleEdgeKindMismatch       = "edge_kind_mismatch"
 	RuleDeprecatedField        = "deprecated_field"
+	RuleStaleTarget            = "stale_target"
+	RulePathMismatch           = "path_mismatch"
 	RuleImmutableViolation     = "immutable_violation"
 	RuleOrphanMust             = "orphan_must"
 	RuleOrphanTest             = "orphan_test"

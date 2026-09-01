@@ -295,6 +295,110 @@ lets a document state a reason where it has one. Adding `required: true` makes e
 an `edge_attr_missing` error, which is the migration: rewrite the entries, then require the
 attribute.
 
+## Target conditions
+
+An edge may also declare what it requires of the document it points at. `target:` is the same
+`when` vocabulary a rule writes, evaluated against that document:
+
+```yaml
+edges:
+  - name: enforces
+    key: enforces
+    direction: forward
+    from: [conform]
+    to: [clause]
+    target:
+      leaf_of: supersedes        # sugar for not_inbound: supersedes
+  - name: deviates-from
+    key: deviates-from
+    direction: forward
+    from: [deviation]
+    to: [clause]
+    target:
+      attr: {status: {eq: accepted}}
+      not_inbound: supersedes    # the two together are what "binding" means
+```
+
+`leaf_of: <edge>` *is* `not_inbound: <edge>`, written so the intent survives: the target has to be
+the current leaf of that lineage rather than a clause something replaced. The name is kept rather
+than desugared away because only that spelling earns a fix suggestion — see
+[`stale_target`](checks.md#stale_target--error-structural).
+
+The target of an edge is its head, whichever end of it the frontmatter named: on a
+`direction: reverse` edge the key names the *source*, so the document the relation points at is the
+one that wrote the key down. That is the same endpoint `to:` constrains, so `to:` and `target:`
+speak about one document rather than two. Derived edges carry the condition too — a MADR
+`status: superseded by 0003` is checked exactly as a written `supersedes:` is — and an entry naming
+no document raises `dangling_ref` alone: there is no target to hold a condition against.
+
+Projections are readable inside a target condition, like anywhere else attributes are read:
+`attr: {effective_must: {eq: "true"}}` asks that the target be binding under whatever the corpus
+means by binding.
+
+What a target condition may **not** carry is `via` or `via_inbound`. The condition is already one
+hop from the document that declared the edge, so a clause about the *target's* neighbours would be
+two, and the depth the vocabulary stays inside is fixed at two: an edge, then a local condition.
+Writing one, naming an undeclared edge under `leaf_of:`, or writing a `target:` that constrains
+nothing is a configuration error (exit 3).
+
+### Recommending it for the `adr` preset
+
+The `adr` preset declares no target condition, deliberately: existing vaults carry `depends-on`
+edges to superseded decisions, and a default error would stop their CI on documents nobody touched.
+A corpus that wants the invariant re-declares the edges itself — writing `edges:` replaces the
+preset's list, so name every edge the corpus keeps:
+
+```yaml
+edges:
+  - {name: supersedes, key: supersedes, acyclic: true, direction: forward}
+  - {name: depends-on, key: depends-on, acyclic: true, direction: forward, target: {leaf_of: supersedes}}
+```
+
+Adopt it in stages: run `docdag validate --format json` first and watch the `stale_target` count —
+`jq '[.findings[] | select(.rule == "stale_target")] | length'` — while the configuration still
+declares no target, clear the violations the count names, and only then write the `target:` in. The
+finding is a fixed error, so the last step is the one that can fail a build.
+
+## Path constraints
+
+`path_constraints:` states what an edge's own `target:` cannot: an invariant over two edges
+composed. Each constraint walks a path from every document and compares what it reaches against
+either nothing or a second path:
+
+```yaml
+path_constraints:
+  - name: amend_targets_current
+    path: [amends, ^supersedes]    # d --amends--> x, and y --supersedes--> x
+    equals: none                   # no such y may exist: what d amends is the current leaf
+  - name: deviation_scope_consistent
+    path: [deviates-from, premise]
+    subset_of: [premise]           # the premises of the clause departed from are the record's own
+```
+
+For each document *d*, the `path` reaches a set P(d) — every step composed over every document the
+step before it reached — and the right-hand side names Q(d): `equals: none` is the empty set, and
+`subset_of:` is a second path walked the same way. P(d) ⊆ Q(d) has to hold; a document it does not
+hold for is the [`path_mismatch`](checks.md#path_mismatch--error-structural) finding, listing
+P(d) − Q(d).
+
+A path element is a declared edge name, optionally prefixed with `^` to walk that edge backwards:
+`supersedes` steps from a document to the ones it supersedes, and `^supersedes` to the ones that
+supersede it. Both paths are **one or two steps
+long** — zero or three is a configuration error (exit 3), and so is a wildcard, a regular
+expression or a repetition, since none of them is an edge name. Two is the decision rather than a
+limit of the implementation: a longer path is a regular path expression, whose implication problem
+is undecidable, and transitive reach is what `resolve` already answers. Exactly one of `equals:`
+and `subset_of:` is written, `none` is the only set `equals:` accepts, and names must be present and
+distinct.
+
+Only the typed layer is walked — structured and derived edges, never the reference layer — and only
+documents the corpus holds are reached, so a reference naming none is a `dangling_ref` alone rather
+than a second finding here.
+
+An invariant that an edge's `target:` can state should be written there instead: it is declared in
+one place, reads locally, and carries a fix suggestion. `path_constraints:` is for what `target:`
+cannot reach.
+
 ## preset_version and fields
 
 `preset_version:` is the revision of the configuration a corpus is written against. It is a plain
@@ -384,6 +488,13 @@ one neighbour across the named edge type satisfies every attribute clause they c
 condition is attributes only — no edge clause, and no `via` inside a `via` — so a condition stays a
 question about a document and its immediate neighbourhood. Transitive reach is what `resolve` is
 for.
+
+The same vocabulary is what an edge spec's [`target:`](#target-conditions) writes, and there it sees
+only the target's own local condition: nesting `via` or another `target` inside it is not allowed,
+so the modal depth stays fixed at two — one edge, then a condition. That is the bar any future
+addition to the vocabulary is reviewed against: a word stays only if it keeps conditions inside the
+bisimulation-invariant fragment, which is what makes a rule a question about a document's
+neighbourhood rather than a query language.
 
 ```yaml
 rules:
@@ -512,6 +623,7 @@ edges:
     direction: forward
     from: [conform]
     to: [clause]
+    target: {leaf_of: supersedes}     # sugar for not_inbound: supersedes
   - name: deviates-from
     key: deviates-from
     direction: forward
@@ -519,6 +631,9 @@ edges:
     to: [clause]
     attrs:
       expires: {required: true, type: date}
+    target:
+      attr: {status: {eq: accepted}}
+      not_inbound: supersedes         # = binding: a departure departs from something in force
   - name: premise
     key: premise
     direction: forward
@@ -542,6 +657,7 @@ edges:
     attrs:
       agreement: {required: true, type: number}
       model: {required: true, type: string}
+    target: {leaf_of: supersedes}
 
 projections:
   - name: enforced

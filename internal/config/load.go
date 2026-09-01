@@ -158,6 +158,9 @@ func Merge(base, override Config) Config {
 	if override.Projections != nil {
 		merged.Projections = slices.Clone(override.Projections)
 	}
+	if override.PathConstraints != nil {
+		merged.PathConstraints = slices.Clone(override.PathConstraints)
+	}
 	if override.Binding != "" {
 		merged.Binding = override.Binding
 	}

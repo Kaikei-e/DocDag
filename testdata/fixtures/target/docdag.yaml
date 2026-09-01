@@ -1,0 +1,21 @@
+# A corpus whose edges say what they may point at. depends-on has to name the
+# current leaf of a supersedes lineage, and amends has to name an accepted
+# decision — so a reference that resolves is still wrong when the document it
+# resolves to has been replaced or retired.
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+  - name: depends-on
+    key: depends-on
+    acyclic: true
+    direction: forward
+    target:
+      leaf_of: supersedes        # sugar for not_inbound: supersedes
+  - name: amends
+    key: amends
+    direction: forward
+    target:
+      attr:
+        status: { eq: accepted }
