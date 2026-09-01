@@ -142,8 +142,11 @@ $ claude
 ```
 
 The hook reads what was edited: a Markdown file inside the documents directory is validated, and
-`docdag.yaml` itself is linted — `docdag lint` at layer 1, which reads no documents and costs
-milliseconds — so a rule that contradicts itself is reported in the same turn it was written.
+`docdag.yaml` itself is linted — `docdag lint --config <the file that was edited>` at layer 1, which
+reads no documents and costs milliseconds — so a rule that contradicts itself is reported in the same
+turn it was written. The edited file is named explicitly, so a nested configuration is linted rather
+than the project root's. An edit that leaves it unreadable at all says so on stderr instead of
+passing quietly.
 
 The hook needs `docdag` and `jq` on `PATH` and does nothing without them. Allow the commands once
 with `"permissions": {"allow": ["Bash(docdag *)"]}` in `.claude/settings.json`:

@@ -76,9 +76,10 @@ The condition vocabulary grew and stayed closed. `inbound` and `outbound` read a
 `{edge: deviates-from, min: 5}` — as well as an edge name, and `via` and `via_inbound` reach exactly
 one hop to test a neighbour's attributes, with no `via` inside a `via`, so a condition stays a
 question about a document and its immediate neighbourhood. An edge spec's `target:` writes the same
-vocabulary against the document the edge points at, with `leaf_of: <edge>` as the spelling of
-`not_inbound:` that keeps the intent and earns a fix naming the lineage's current leaf; a violation
-is `stale_target`, the check staying local while only the suggestion is transitive.
+vocabulary against the document the edge points at, with `leaf_of: <edge>` asking for the lineage's
+current leaf — `not_inbound:` where no period is declared, and the day's reading where one is — and
+earning a fix that names that leaf; a violation is `stale_target`, the check staying local while
+only the suggestion is transitive.
 `path_constraints:` states what a target condition cannot — an invariant over two composed edges,
 `equals: none` or `subset_of:` a second path — and reports `path_mismatch` naming the documents one
 path reaches and the other does not, without guessing which of the two is the wrong one. Both paths
@@ -145,6 +146,11 @@ on every pull request is a warning nobody reads. A finding is located on the lin
 the rule was written on, or at the virtual path `<preset:adr>` or `<preset:spec>` where there is no
 file to open, and both shipped presets lint clean, which a test holds them to.
 
+`.pre-commit-hooks.yaml` ships a `docdag-lint` hook beside `docdag-validate`, so an edit to
+`docdag.yaml` is answered about by the command that answers about configurations, and the plugin's
+`PostToolUse` hook lints the file that was edited by name rather than whatever discovery finds from
+the project root.
+
 ### Periods, and an answer that names its day
 
 `period:` names the two frontmatter keys a kind's documents write the days they are in force
@@ -157,9 +163,10 @@ of date literals. An end nobody wrote is derived from the earliest day an accept
 on and never written back into the frontmatter; a successor that is withdrawn stops deriving one, so
 the predecessor's period opens up again with nothing rewritten but the successor's own status. Once
 a document has left force its statements lose their weight — its edges stop counting for the degree
-thresholds, the one-hop clauses and the recorded exceptions — with the `supersedes` lineage exempt,
-being what the ends are derived from, and `path_constraints` exempt, a statement about the shape of
-the corpus not being a claim about what holds today. `period_invalid`, `period_conflict` and
+thresholds, the one-hop clauses, the recorded exceptions and the `target:` conditions — with the
+`supersedes` lineage exempt from the index, being what the ends are derived from, and
+`path_constraints` exempt, a statement about the shape of the corpus not being a claim about what
+holds today. `period_invalid`, `period_conflict` and
 `expired_deviation` are the three findings a period turns on.
 
 `--as-of YYYY-MM-DD` names the day any read-only command answers for, `$DOCDAG_AS_OF` names it for a
@@ -185,6 +192,9 @@ proposed, and the predecessor binds until it takes over" is finally sayable.
   document of another kind that does hold such an edge is an `edge_kind_mismatch`, which says the
   actual mistake. An edge that names no kinds, and every corpus without `kinds:`, is bounded over
   the whole corpus exactly as before.
+- A declared kind whose directory does not exist is a kind holding no documents rather than an
+  exit 3. `preset: spec` names eight directories, and a vault adopting it with one line has not
+  written into all of them yet; every other failure to read a directory still stops the run.
 
 ### Migrating from 0.2.0
 
@@ -235,7 +245,7 @@ proposed, and the predecessor binds until it takes over" is finally sayable.
   reported, apart from the headers above. Pin the action or
   `go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.3.0`.
 
-11 commits, 249 files, +26,910 / −519. Test suite 315 → 534 test functions. No new dependencies.
+12 commits, 250 files, +27,185 / −529. Test suite 315 → 539 test functions. No new dependencies.
 
 ## [0.2.0] - 2026-08-27
 

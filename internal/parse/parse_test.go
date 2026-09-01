@@ -1251,12 +1251,35 @@ func TestKinds(t *testing.T) {
 		}
 	})
 
-	t.Run("a kind directory that does not exist is an error", func(t *testing.T) {
+	// A preset declares the whole vocabulary a corpus may grow into, and a vault
+	// adopts it before it has written its first premise. The declared kind is an
+	// empty one until the directory appears, and the kinds beside it are read.
+	t.Run("a kind directory that does not exist is a kind with no documents", func(t *testing.T) {
 		missing := testKindsConfig(root)
 		missing.Kinds["premise"] = config.KindSpec{Dir: filepath.Join(root, "premises")}
 
-		if _, err := Kinds(missing); !errors.Is(err, fs.ErrNotExist) {
-			t.Fatalf("Kinds = %v, want it to report the missing directory", err)
+		docs, err := Kinds(missing)
+		if err != nil {
+			t.Fatalf("Kinds: %v, want the missing directory read as an empty kind", err)
+		}
+		wantIDs := []string{"UZ-V-001", "UZ-V-002", "conform/check", "0007"}
+		if got := testIDs(docs); !slices.Equal(got, wantIDs) {
+			t.Fatalf("ids = %v, want the documents the other kinds hold %v", got, wantIDs)
+		}
+	})
+
+	// Every other failure is a fact about the machine rather than about the
+	// corpus, so it still stops the run.
+	t.Run("a kind directory that is a file is still an error", func(t *testing.T) {
+		path := filepath.Join(root, "premises.md")
+		if err := os.WriteFile(path, []byte("not a directory\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+		broken := testKindsConfig(root)
+		broken.Kinds["premise"] = config.KindSpec{Dir: path}
+
+		if _, err := Kinds(broken); err == nil {
+			t.Fatal("Kinds = nil, want the unreadable directory reported")
 		}
 	})
 

@@ -34,7 +34,7 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 | `docdag query --binding [--as-of <day>] [--at <rev>] [--fields <list>]` | every document binding on the day asked about, with its `modality` beside it where the configuration declares one | exit 2 if combined with `--ancestors`, `--descendants`, `--edge` or `--include-refs` |
 | `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all] [--as-of <day>] [--at <rev>]` | the document, what it resolves to and its neighbourhood, each quoting one section | exit 1 unknown reference, exit 2 unknown edge type |
 | `docdag export [--format mermaid\|dot\|json] [--include-refs] [--connected] [--edge <type>]... [--at <rev>] [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 2 on an unknown edge type, exit 3 if the output file cannot be written |
-| `docdag stats [--fields] [--as-of <day>] [--at <rev>]` | document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree, and — where the configuration declares them — the modality distribution, the clauses per topic and the suppressed-conflict count; with `--fields`, the frontmatter fields instead | exit 3 without `--fields` if the configuration declares no `supersedes` edge |
+| `docdag stats [--fields] [--as-of <day>] [--at <rev>]` | the day the counts are about where some kind declares a `period:`, then document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree, and — where the configuration declares them — the modality distribution, the clauses per topic and the suppressed-conflict count; with `--fields`, the frontmatter fields instead | exit 3 without `--fields` if the configuration declares no `supersedes` edge |
 | `docdag new <title> [--kind <name>] [--id <ref>] [--supersedes <ref>]... [--depends-on <ref>]... [--dry-run]` | the path of the created document, or the plan under `--dry-run` | exit 1 on an unknown reference, a claimed identifier or a `--kind` the corpus cannot answer, exit 3 on a write error |
 | `docdag new --fixture <rule> [--fixtures <dir>]` | the files of the rule's generated `ruleid/` and `ok/` fixture, one path per line | exit 1 if no such rule is configured or it can never fire, exit 3 on a write error |
 
@@ -66,6 +66,18 @@ fact about the standard, where a missing row reads as a corpus that was not aske
 nobody speaks to. They are what topic granularity is watched with — a subject carrying dozens of
 clauses says too little to compare them under — and they are absent entirely from a corpus that
 declares neither, so `--format json` for an `adr` corpus is what it was.
+
+A corpus where some kind declares a [`period:`](configuration.md#periods-and-as-of) gains one more
+row, first of all of them, because every count below it is a count *on a day*:
+
+```
+as of                                   2026-09-01
+documents                               26
+binding                                 8
+```
+
+A corpus that declares no period has no day worth printing, so the row is absent there and the
+report is exactly what it was. `--format json` carries `as_of` either way.
 
 `docdag stats --fields` answers about frontmatter rather than degrees: one row per field, with the
 documents that write it, the day one of those documents last changed, and whether `fields:` retired
@@ -218,6 +230,7 @@ validation report:
   "kind": "lint",
   "schema_version": 1,
   "preset_version": 1,
+  "as_of": "2026-09-01",
   "findings": [
     {
       "severity": "warn",
@@ -313,13 +326,15 @@ testdata/fixtures/dangling/0002-ship-logs-to-a-central-collector.md:4: ERROR dan
 
 `--format json` writes one object, versioned so a consumer can tell a shape change from a content
 change. `preset_version` is the revision of the configuration the corpus was checked under, left out
-where it names none; `location` is the primary position and `related` names the other files a
-finding involves — the peers of a collision, the rest of a cycle:
+where it names none; `as_of` is the day the run answered for and is always there; `location` is the
+primary position and `related` names the other files a finding involves — the peers of a collision,
+the rest of a cycle:
 
 ```json
 {
   "schema_version": 2,
   "preset_version": 1,
+  "as_of": "2026-09-01",
   "findings": [
     {
       "severity": "error",
@@ -386,5 +401,6 @@ $ docdag validate --format json --at v1.2.0 --as-of 2026-06-01 | head -5
 ```
 
 The text reports carry the day only where some kind declares a `period:` — on the `OK:` line, or on
-a closing `as of <day>` line where the corpus failed. A corpus that answers the same on every day
-has no day worth printing, so an `adr` corpus's text output is exactly what it was.
+a closing `as of <day>` line where the corpus failed; `stats` writes it as a row of its own, `as of
+<day>`, above the counts it qualifies. A corpus that answers the same on every day has no day worth
+printing, so an `adr` corpus's text output is exactly what it was.

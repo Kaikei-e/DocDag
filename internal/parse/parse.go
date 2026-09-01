@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -343,10 +344,22 @@ func KindDir(dir string, cfg config.Config, kind string) ([]*Document, error) {
 // name order and each directory in file-name order, so the corpus is assembled
 // the same way on every run and an identifier collision names the same first
 // document each time.
+//
+// A directory that is not there is a kind with no documents in it, not a
+// failure. A preset declares the whole vocabulary a corpus may grow into —
+// `preset: spec` names eight directories — and a vault adopts it before it has
+// written its first post-mortem or its first deviation. Refusing to read
+// anything until all eight exist would make the one-line adoption the
+// documentation promises impossible. Every other error still propagates: an
+// unreadable directory is a fact about the machine, not about the corpus.
 func Kinds(cfg config.Config) ([]*Document, error) {
 	docs := []*Document{}
 	for _, name := range cfg.KindNames() {
-		kindDocs, err := KindDir(cfg.Kinds[name].Dir, cfg, name)
+		dir := cfg.Kinds[name].Dir
+		if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		kindDocs, err := KindDir(dir, cfg, name)
 		if err != nil {
 			return nil, err
 		}

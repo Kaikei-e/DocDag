@@ -274,7 +274,7 @@ const SpecPresetVersion = 2
 // SpecPreset returns the built-in normative-clause configuration: eight kinds
 // of document, the edges between them declared on the side that generates
 // them, the projections that derive what is in force and at what strength, and
-// the seven rules that report a standard hardening into dogma or drifting out
+// the ten rules that report a standard hardening into dogma or drifting out
 // of interoperability.
 //
 // It declares no top-level status_values, and each kind that answers to a
@@ -445,15 +445,23 @@ func SpecPreset() Config {
 				// clauses it departs from.
 				//
 				// A departure is only a departure from something in force, so the
-				// target is binding: accepted and superseded by nothing. That is
+				// target is binding: accepted and not replaced yet. That is
 				// written out rather than deferred to the binding projection,
 				// which reads effective_must and would make every deviation from
 				// an unenforced clause a finding.
+				//
+				// "Not replaced yet" is `leaf_of`, not `not_inbound`, because
+				// the two answer differently once a clause has a lifetime:
+				// not_inbound counts a successor nobody has accepted, or one
+				// whose period has not begun, and would report the departure
+				// stale on the very day pending_successor says the clause is
+				// still binding — two findings of one run contradicting each
+				// other. leaf_of reads the day, so the clause stops being a
+				// legitimate thing to depart from exactly when a successor
+				// takes over. The spelling earns a fix suggestion besides.
 				Target: &TargetCondition{
-					Condition: Condition{
-						NotInbound: EdgeSupersedes.String(),
-						Attr:       accepted(),
-					},
+					Condition: Condition{Attr: accepted()},
+					LeafOf:    EdgeSupersedes.String(),
 				},
 			},
 			{

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -539,6 +540,35 @@ func TestSpecPreset(t *testing.T) {
 		}
 	})
 
+	t.Run("both targets say the current leaf the way that reads the day", func(t *testing.T) {
+		// ADR-0005 gave a clause a lifetime, and not_inbound cannot see one: it
+		// counts a successor nobody has accepted and one whose period has not
+		// begun, so a departure from a clause a trial revision names would be
+		// reported stale on the same run pending_successor calls it binding.
+		// leaf_of reads the day, so both edges ask the same question the
+		// standard asks.
+		for _, edge := range []model.EdgeType{EdgeEnforces, EdgeDeviatesFrom} {
+			spec, _ := cfg.Edge(edge)
+			target := spec.Target
+			if target == nil {
+				t.Errorf("%s declares no target, want the current leaf of the lineage", edge)
+				continue
+			}
+			if target.LeafOf != EdgeSupersedes.String() {
+				t.Errorf("%s target leaf_of = %q, want %q", edge, target.LeafOf, EdgeSupersedes)
+			}
+			if target.NotInbound != "" {
+				t.Errorf("%s target not_inbound = %q, want none: it cannot read a period", edge, target.NotInbound)
+			}
+		}
+		// The departure asks one thing more than the conformance test does: a
+		// clause nobody accepted is not something to depart from either.
+		deviates, _ := cfg.Edge(EdgeDeviatesFrom)
+		if got := testDeref(t, "deviates-from target status", deviates.Target.Attr[DefaultStatusField].Eq); got != StatusAccepted {
+			t.Errorf("%s target status = %q, want %q", EdgeDeviatesFrom, got, StatusAccepted)
+		}
+	})
+
 	t.Run("ten rules over the whole standard", func(t *testing.T) {
 		want := []struct {
 			name     string
@@ -633,254 +663,70 @@ func TestSpecPreset(t *testing.T) {
 	})
 }
 
-// specPresetYAML is the `spec` preset as docs/configuration.md prints it, block
-// for block. The documentation is a copy of a Go value, so it is pinned here
-// rather than trusted: a preset the file describes differently is a preset
-// nobody can adopt by reading about it.
-const specPresetYAML = `preset: spec
-preset_version: 2
-status_field: status
+// specPresetMarker is the sentence docs/configuration.md introduces the whole
+// preset with. The block that follows it is the one the pin below reads:
+// naming the prose rather than a line number keeps the pin pointing at the
+// right block while the file around it is edited.
+const specPresetMarker = "The file below is that preset in full:"
 
-kinds:
-  clause:
-    dir: spec/clauses
-    id: '^UZ-[A-Z]-\d{3}$'
-    status_values: [proposed, trial, accepted, superseded, withdrawn]
-    closed: true
-    fields:
-      modality:                 # the strength the clause claims, and it has to claim one
-        one_of: [MUST, MUST_NOT, SHOULD, SHOULD_NOT, MAY]
-        required: true
-      in_force_from: {}         # declared so stats --fields counts them; the period reads them
-      in_force_until: {}
-    period: {from: in_force_from, until: in_force_until}
-  conform:
-    dir: spec/conform
-    id: '^conform/[a-z0-9-]+$'
-    fields:
-      test: {}                  # path to the executable test body
-  deviation:
-    dir: spec/deviations
-    id: '^dev-\d{4}$'
-    status_values: [proposed, accepted, resolved, withdrawn]
-    closed: true
-    fields:
-      expires: {}               # the day the departure stops being recorded
-    period: {from: date, until: expires}
-  measure:
-    dir: spec/measures
-    id: '^interp/UZ-[A-Z]-\d{3}@\d{4}-\d{2}-\d{2}$'
-  premise:
-    dir: spec/premises
-    id: '^premise/[a-z0-9/-]+$'
-    status_values: [proposed, accepted, retired, superseded]
-    fields:
-      retired_on: {}            # the day the world stopped making it true
-    period: {from: date, until: retired_on}
-  principle:
-    dir: spec/principles
-    id: '^principle/[a-z0-9/-]+$'
-    status_values: [proposed, accepted, superseded, withdrawn]
-  pm:
-    dir: spec/pm
-    id: '^pm-\d{4}$'
-    status_values: [draft, published]
-  topic:
-    dir: spec/topics
-    id: '^topic/[a-z0-9/-]+$'
+// documentedSpecPreset returns the fenced YAML the documentation prints the
+// `spec` preset as, read out of the file itself. Reading the file is the whole
+// point: a copy kept beside the test drifts from the documentation silently,
+// and it is the documentation a person adopts the preset by reading.
+func documentedSpecPreset(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join("..", "..", "docs", "configuration.md")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	_, after, found := strings.Cut(string(content), specPresetMarker)
+	if !found {
+		t.Fatalf("%s no longer says %q, so the documented preset cannot be located", path, specPresetMarker)
+	}
+	_, block, found := strings.Cut(after, "```yaml\n")
+	if !found {
+		t.Fatalf("%s: no YAML block follows %q", path, specPresetMarker)
+	}
+	block, _, found = strings.Cut(block, "\n```")
+	if !found {
+		t.Fatalf("%s: the YAML block following %q is never closed", path, specPresetMarker)
+	}
+	return block + "\n"
+}
 
-edges:
-  - name: supersedes
-    key: supersedes
-    acyclic: true
-    direction: forward
-    from: [clause, premise]
-    to: [clause, premise]
-    attrs:
-      reason: {required: true, one_of: [recurrence, premise-collapse, conflict, vocabulary]}
-  - name: enforces
-    key: enforces
-    direction: forward
-    from: [conform]
-    to: [clause]
-    target: {leaf_of: supersedes}     # the current leaf: no in-force accepted successor
-  - name: deviates-from
-    key: deviates-from
-    direction: forward
-    from: [deviation]
-    to: [clause]
-    target:
-      attr: {status: {eq: accepted}}
-      not_inbound: supersedes         # = binding: a departure departs from something in force
-  - name: premise
-    key: premise
-    direction: forward
-    from: [clause]
-    to: [premise]
-  - name: rationale
-    key: rationale
-    direction: forward
-    from: [clause]
-    to: [principle]
-  - name: counterexample
-    key: counterexample
-    direction: forward
-    from: [clause, principle]
-    to: [pm]
-  - name: measures
-    key: measures
-    direction: forward
-    from: [measure]
-    to: [clause]
-    attrs:
-      agreement: {required: true, type: number}
-      model: {required: true, type: string}
-    target: {leaf_of: supersedes}
-  - name: about
-    key: about
-    direction: forward
-    from: [clause]
-    to: [topic]
-    min_outbound: 1                   # a clause with no subject is invisible to modality_conflict
-  - name: excepts
-    key: excepts
-    acyclic: true
-    direction: forward
-    from: [clause]
-    to: [clause]
-    attrs:
-      scope: {required: true, type: string}
-  - name: interop
-    key: interop
-    direction: forward
-    from: [clause]
-    to: [clause]
-
-projections:
-  - name: enforced
-    when: {inbound: enforces}
-  - name: has_inforce_successor       # in_force is the engine's, computed from period:
-    when: {via_inbound: {edge: supersedes, attr: {in_force: {eq: "true"}, status: {eq: accepted}}}}
-  - name: effective_must
-    any_of:
-      - when:
-          attr: {modality: {eq: MUST}, status: {eq: accepted}, in_force: {eq: "true"}}
-          inbound: enforces
-          not: {attr: {has_inforce_successor: {eq: "true"}}}
-      - when:
-          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}, in_force: {eq: "true"}}
-          inbound: enforces
-          not: {attr: {has_inforce_successor: {eq: "true"}}}
-  - name: effective_should
-    any_of:
-      - when:
-          attr: {modality: {eq: SHOULD}, status: {eq: accepted}, in_force: {eq: "true"}}
-          not: {attr: {has_inforce_successor: {eq: "true"}}}
-      - when:
-          attr: {modality: {eq: SHOULD_NOT}, status: {eq: accepted}, in_force: {eq: "true"}}
-          not: {attr: {has_inforce_successor: {eq: "true"}}}
-      - when:
-          attr: {modality: {eq: MUST}, status: {eq: accepted}, in_force: {eq: "true"}}
-          not_inbound: enforces           # a condition holds one not: block; this is the other absence
-          not: {attr: {has_inforce_successor: {eq: "true"}}}
-      - when:
-          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}, in_force: {eq: "true"}}
-          not_inbound: enforces
-          not: {attr: {has_inforce_successor: {eq: "true"}}}
-  - name: effective                     # the first two already read the day through the projections
-    any_of:
-      - when: {attr: {effective_must: {eq: "true"}}}
-      - when: {attr: {effective_should: {eq: "true"}}}
-      - when:
-          attr: {modality: {eq: MAY}, status: {eq: accepted}, in_force: {eq: "true"}}
-          not: {attr: {has_inforce_successor: {eq: "true"}}}
-
-binding: effective
-
-rules:
-  - name: orphan_must
-    severity: error
-    when:
-      any_of:
-        - attr: {modality: {eq: MUST}, status: {eq: accepted}}
-        - attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}
-      not_inbound: enforces
-    message: "is MUST or MUST_NOT and accepted but nothing enforces it"
-  - name: orphan_test
-    severity: error
-    when:
-      attr: {kind: {eq: conform}}
-      not_outbound: enforces
-    message: "enforces no clause"
-  - name: stale_premise
-    severity: error
-    when:
-      attr: {status: {eq: accepted}}
-      via: {edge: premise, attr: {in_force: {eq: "false"}}}
-    message: "is accepted but a premise is no longer in force"
-  - name: deviation_pressure
-    severity: warn
-    when:
-      attr: {status: {eq: accepted}}
-      inbound: {edge: deviates-from, min: 5}
-    message: "has 5+ deviations; reconsider the clause"
-  - name: no_counterexample
-    severity: warn
-    when:
-      attr: {kind: {eq: clause}, status: {eq: accepted}}
-      not_outbound: counterexample
-    message: "is accepted without a counterexample"
-  - name: may_without_interop
-    severity: warn
-    when:
-      attr: {modality: {eq: MAY}, status: {eq: accepted}}
-      not_outbound: interop
-    message: "is MAY but names no MUST clause that guarantees interoperation without it"
-  - name: interop_not_must
-    severity: error
-    when:
-      outbound: interop
-      via: {edge: interop, attr: {modality: {not: MUST}}}
-    message: "interop must point at a MUST clause"
-  - name: status_drift                  # time-dependent, unlike the adr preset's rule of that name
-    severity: error
-    when:
-      attr: {status: {not: superseded}}
-      via_inbound: {edge: supersedes, attr: {status: {eq: accepted}, in_force: {eq: "true"}}}
-    message: "an in-force successor supersedes it but status is not superseded"
-  - name: pending_successor
-    severity: warn
-    when:
-      attr: {status: {eq: accepted}}
-      inbound: supersedes
-      not: {attr: {has_inforce_successor: {eq: "true"}}}
-    message: "a successor is declared but not yet in force; this clause remains binding until then"
-  - name: premature_superseded
-    severity: error
-    when:
-      attr: {status: {eq: superseded}}
-      not: {attr: {has_inforce_successor: {eq: "true"}}}
-    message: "status is superseded but no successor is in force yet"
-`
-
+// TestSpecPresetMatchesTheDocumentedYAML holds docs/configuration.md to the
+// built-in preset. The preset is the source of truth; a file that describes it
+// differently is a preset nobody can adopt by reading about it.
+//
+// The documented configuration is merged over an **empty** Config rather than
+// over SpecPreset(). Merging it over the preset it describes would hide every
+// omission — a file holding nothing but `preset: spec` would pass — and an
+// omission is exactly what this pin exists to catch. Merging it over nothing
+// means the documented block has to carry the whole preset itself.
 func TestSpecPresetMatchesTheDocumentedYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), DefaultConfigFile)
-	if err := os.WriteFile(path, []byte(specPresetYAML), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(documentedSpecPreset(t)), 0o600); err != nil {
 		t.Fatalf("write configuration: %v", err)
 	}
 	file, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	base, err := Preset(file.Preset)
-	if err != nil {
-		t.Fatalf("Preset(%q): %v", file.Preset, err)
-	}
-	got := Merge(base, file)
+	got := Merge(Config{}, file)
 	if err := got.Validate(); err != nil {
 		t.Fatalf("Validate the documented configuration: %v", err)
 	}
-	if !reflect.DeepEqual(got, SpecPreset()) {
-		t.Errorf("the documented spec preset is not the built-in one:\ngot:  %+v\nwant: %+v", got, SpecPreset())
+	want := SpecPreset()
+	// Retargeting a status field an empty base never declared leaves an empty
+	// derived_edges list where the preset holds nil. Both say "this
+	// configuration derives no edges", and every reader of the field ranges
+	// over it, so the comparison is made blind to the difference rather than
+	// the preset bent to fit it.
+	if len(got.DerivedEdges) == 0 && len(want.DerivedEdges) == 0 {
+		got.DerivedEdges, want.DerivedEdges = nil, nil
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("the documented spec preset is not the built-in one:\ngot:  %+v\nwant: %+v", got, want)
 	}
 }

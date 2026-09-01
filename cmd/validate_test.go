@@ -1399,3 +1399,44 @@ func TestValidateReportsADeprecatedField(t *testing.T) {
 		}
 	})
 }
+
+// TestValidateACorpusThatHasNotGrownIntoEveryKind covers the other half of
+// adopting a preset with one line: `preset: spec` names eight directories, and
+// a vault that has written clauses and subjects and nothing else has six of
+// them missing. A missing directory is a kind holding no documents, not a
+// corpus the tool refuses to read.
+func TestValidateACorpusThatHasNotGrownIntoEveryKind(t *testing.T) {
+	const clause = "---\ntitle: Every claim carries evidence\nkind: clause\nmodality: SHOULD\nstatus: accepted\nabout:\n  - topic/evidence\ndate: 2026-01-05\n---\n\n# Every claim carries evidence\n"
+
+	t.Run("the six directories it has not written yet are empty kinds", func(t *testing.T) {
+		root := writeDocs(t, map[string]string{
+			"docdag.yaml": "preset: spec\n",
+			docPath("spec", "clauses", "UZ-V-001.md"): clause,
+			docPath("spec", "topics", "evidence.md"):  "---\ntitle: Evidence\nkind: topic\nid: topic/evidence\n---\n\n# Evidence\n",
+		})
+
+		got := run(t, "validate", "--config", filepath.Join(root, "docdag.yaml"))
+
+		assertExit(t, got, 0)
+		assertLines(t, "findings", findingLines(got.stdout), []string{
+			"UZ-V-001.md:3: WARN no_counterexample UZ-V-001: is accepted without a counterexample",
+		})
+	})
+
+	t.Run("the kinds that are there are still checked", func(t *testing.T) {
+		root := writeDocs(t, map[string]string{
+			"docdag.yaml": "preset: spec\n",
+			docPath("spec", "clauses", "UZ-V-001.md"): clause,
+		})
+
+		got := run(t, "validate", "--config", filepath.Join(root, "docdag.yaml"))
+
+		// Exit 1 is the corpus answering: the subject the clause names is not
+		// there. Exit 3 would be the tool refusing to read the corpus at all.
+		assertExit(t, got, 1)
+		assertLines(t, "findings", findingLines(got.stdout), []string{
+			"UZ-V-001.md:6: ERROR dangling_ref UZ-V-001: about reference \"topic/evidence\" does not name a document",
+			"UZ-V-001.md:3: WARN no_counterexample UZ-V-001: is accepted without a counterexample",
+		})
+	})
+}

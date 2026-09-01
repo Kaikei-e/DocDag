@@ -64,13 +64,19 @@ back without rewriting anything.
 
 **An out-of-force document's statements lose their weight.** Once a document has left force, the
 edges it declares stop counting: for the degree thresholds (`inbound: {edge: deviates-from, min:
-5}`), for the one-hop clauses (`via`, `via_inbound`), and for the recorded exceptions that suppress
-a `modality_conflict`. An expired departure is a record of something that was, not a claim about
-what is, and a standard that kept counting them would report pressure nobody is applying. Two things
-are deliberately exempt: the `supersedes` lineage, which is what the ends are *derived from* — a
-successor that is not in force yet is exactly what `pending_successor` reports — and
-`path_constraints`, which are statements about the shape of the corpus rather than about what holds
-today. A corpus without periods loses nothing, because there every document is in force.
+5}`), for the one-hop clauses (`via`, `via_inbound`), for the recorded exceptions that suppress a
+`modality_conflict`, and for the [`target:`](configuration.md#target-conditions) an edge spec puts
+on what it points at. An expired departure is a record of something that was, not a claim about what
+is, and a standard that kept counting them would report pressure nobody is applying — or, for the
+target checks, would let one expired deviation forbid its clause from ever being superseded, so that
+append-first history became a ratchet. Two things are deliberately exempt: the `supersedes` lineage,
+which is what the ends are *derived from* — a successor that is not in force yet is exactly what
+`pending_successor` reports — and `path_constraints`, which are statements about the shape of the
+corpus rather than about what holds today. The first exemption is about the derivation, so it does
+not reach the target checks: those read an out-of-force document's declarations under no edge type,
+`supersedes` included. No shipped preset declares a `target:` on `supersedes`, so no shipped
+configuration can tell the two readings apart. A corpus without periods loses nothing, because there
+every document is in force.
 
 ### `period_invalid` — error, structural
 
@@ -397,7 +403,14 @@ to the replacements where there are any.
 The finding is filed against the document that *declared* the edge, on the key it declared it under
 — the derived field's line where the edge came from a `derived_edges:` pattern, since a target
 condition reaches derived edges too. A reference naming no document raises `dangling_ref` alone:
-there is no target to hold a condition against.
+there is no target to hold a condition against. An edge a document that has left force declared
+raises nothing at all: its declarations lost their weight with it, which is what keeps an expired
+deviation from forbidding its clause to ever be superseded.
+
+Where the target's kind declares a `period:`, `leaf_of:` reads the day: a successor nobody has
+accepted, or one whose period has not begun, leaves its predecessor the current leaf, so an edge
+pointing at it is not stale — the predecessor is what a reader is still bound by, which is what
+`pending_successor` says about the same pair.
 
 Fix: `did you mean UZ-V-004?`, and `did you mean one of: 0004, 0005?` where the lineage branched.
 Only a `leaf_of:` target carries one — it says the target was replaced, and `resolve` walks the

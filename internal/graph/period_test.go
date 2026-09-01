@@ -603,3 +603,114 @@ func testRuleNamed(t *testing.T, cfg config.Config, name string) config.Rule {
 	t.Fatalf("the configuration declares no rule %q", name)
 	return config.Rule{}
 }
+
+// TestADepartureFromAClauseWithAPendingSuccessor is the contradiction the
+// `spec` preset's deviates-from target used to state in one run: a successor
+// that has not taken over leaves its predecessor binding, which is what
+// pending_successor reports, while a target spelled `not_inbound: supersedes`
+// called every departure from that same predecessor stale. Both cannot be
+// true, and the day is what decides.
+func TestADepartureFromAClauseWithAPendingSuccessor(t *testing.T) {
+	cfg := config.SpecPreset()
+	corpus := func(status, from string) *model.Graph {
+		return Build([]*parse.Document{
+			testTopicDoc(testTopic),
+			testClause("UZ-V-001", config.ModalitySHOULD, []string{testTopic}, nil),
+			testClause("UZ-V-002", config.ModalitySHOULD, []string{testTopic}, map[string]any{
+				config.DefaultStatusField:      status,
+				config.FieldInForceFrom:        from,
+				config.EdgeSupersedes.String(): testSupersedes("UZ-V-001"),
+			}),
+			// A departure with no expiry runs from the day it was recorded and
+			// never ends, so the day under test only moves the successor.
+			testDeviation("dev-0001", "UZ-V-001", "2026-03-01", ""),
+		}, cfg)
+	}
+	pending := func(t *testing.T, g *model.Graph, day string) bool {
+		t.Helper()
+		for _, f := range EvalRules(g, cfg, testDayOf(t, day)) {
+			if f.Rule == model.RulePendingSuccessor && f.ID == "UZ-V-001" {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, tt := range []struct {
+		name, status, from string
+	}{
+		{name: "a successor nobody has accepted", status: config.StatusTrial},
+		{name: "an accepted successor that has not begun", status: config.StatusAccepted, from: "2026-12-01"},
+	} {
+		t.Run(tt.name+" leaves the departure alone", func(t *testing.T) {
+			g := corpus(tt.status, tt.from)
+
+			if got := CheckTargets(g, cfg, testDayOf(t, "2026-09-01")); len(got) != 0 {
+				t.Fatalf("findings = %+v, want none: the clause departed from is still what binds", got)
+			}
+			if !pending(t, g, "2026-09-01") {
+				t.Error("pending_successor did not fire on UZ-V-001, want the change in flight reported")
+			}
+		})
+	}
+
+	t.Run("once the successor is in force the departure is stale", func(t *testing.T) {
+		g := corpus(config.StatusAccepted, "2026-12-01")
+		day := testDayOf(t, "2026-12-01")
+
+		f := testAssertSingleFinding(t, CheckTargets(g, cfg, day), model.RuleStaleTarget, model.SeverityError, "dev-0001")
+
+		if f.Detail != "deviates-from targets UZ-V-001, which UZ-V-002 supersedes" {
+			t.Errorf("detail = %q, want the clause that replaced the one departed from", f.Detail)
+		}
+		// The spelling is what earns the remedy: leaf_of has a lineage to walk.
+		fixed := Suggest([]model.Finding{f}, g, cfg, day)
+		if fixed[0].Fix != "did you mean UZ-V-002?" {
+			t.Errorf("fix = %q, want the clause that took over", fixed[0].Fix)
+		}
+		if pending(t, g, "2026-12-01") {
+			t.Error("pending_successor fired as well, want the two findings never to disagree")
+		}
+	})
+}
+
+// TestATargetIsCheckedOnlyWhileItsDeclarerIsInForce covers the weight rule on
+// the target checks: an expired departure is a record of something that was,
+// and holding a live clause to it would mean no clause any historical
+// deviation ever named could be superseded again — append-first history as a
+// ratchet rather than an archive.
+func TestATargetIsCheckedOnlyWhileItsDeclarerIsInForce(t *testing.T) {
+	cfg := config.SpecPreset()
+	corpus := func(expires string) *model.Graph {
+		return Build([]*parse.Document{
+			testTopicDoc(testTopic),
+			testClause("UZ-V-001", config.ModalitySHOULD, []string{testTopic}, nil),
+			testClause("UZ-V-002", config.ModalitySHOULD, []string{testTopic}, map[string]any{
+				config.EdgeSupersedes.String(): testSupersedes("UZ-V-001"),
+			}),
+			testDeviation("dev-0001", "UZ-V-001", "2026-03-01", expires),
+		}, cfg)
+	}
+
+	t.Run("a departure still running holds its clause to the condition", func(t *testing.T) {
+		got := CheckTargets(corpus("2026-12-01"), cfg, testDayOf(t, "2026-09-01"))
+
+		testAssertSingleFinding(t, got, model.RuleStaleTarget, model.SeverityError, "dev-0001")
+	})
+
+	t.Run("a departure that has expired holds it to nothing", func(t *testing.T) {
+		g := corpus("2026-06-01")
+
+		if got := CheckTargets(g, cfg, testDayOf(t, "2026-09-01")); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none: an expired departure states nothing about what is current", got)
+		}
+		// The whole check runs the same way: superseding a clause an expired
+		// record once departed from must leave nothing behind that a corpus
+		// cannot clear.
+		for _, f := range Check(g, cfg, testDayOf(t, "2026-09-01")) {
+			if f.Rule == model.RuleStaleTarget {
+				t.Errorf("Check reported %+v, want no stale target from a record that has ended", f)
+			}
+		}
+	})
+}

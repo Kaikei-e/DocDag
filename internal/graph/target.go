@@ -27,6 +27,9 @@ func CheckTargets(g *model.Graph, cfg config.Config, asOf time.Time) []model.Fin
 	ctx := newEvalContext(g, cfg, asOf)
 	for _, spec := range specs {
 		for _, e := range g.EdgesOfType(model.EdgeType(spec.Name)) {
+			if !declaredInForce(ctx.periods, e) {
+				continue
+			}
 			f, violated := staleTarget(g, cfg, ctx, spec, e)
 			if violated {
 				findings = append(findings, f)
@@ -35,6 +38,33 @@ func CheckTargets(g *model.Graph, cfg config.Config, asOf time.Time) []model.Fin
 	}
 	SortFindings(findings)
 	return findings
+}
+
+// declaredInForce reports whether the document an edge runs from still carries
+// normative weight on the day the run is about — the same rule the edge index
+// applies (check.go's carriesWeight), applied here to the declarations a target
+// condition reads.
+//
+// A target check needs it for a reason of its own: without it, a departure that
+// expired or was resolved holds its clause hostage forever. Superseding a
+// clause any historical deviation ever pointed at would be a stale_target
+// nobody can clear, because append-first history keeps the record — and a
+// history that cannot be added to without breaking the build is a ratchet
+// rather than an archive.
+//
+// The index exempts the supersedes lineage and this does not, because that
+// exemption is about the index: the ends of a period are derived over that
+// lineage, and dropping it would erase the "successor not in force yet" that
+// pending_successor exists to report. A target check derives nothing from the
+// lineage, so the principle applies to it plainly — an out-of-force document's
+// outbound declarations lose their weight, under whatever edge type they were
+// written. No preset DocDag ships declares a `target:` on supersedes, so the
+// question does not arise for any shipped configuration.
+func declaredInForce(periods Periods, e model.Edge) bool {
+	if !periods.Declared(e.From) {
+		return true
+	}
+	return periods.InForce(e.From)
 }
 
 // targetedEdges returns the edge specs that declare a target condition, in
@@ -182,7 +212,12 @@ func leafSuggestion(g *model.Graph, cfg config.Config, f model.Finding, asOf tim
 		for _, e := range g.EdgesOfType(model.EdgeType(spec.Name)) {
 			// The finding does not carry the edge it was filed for, so the edge
 			// is recognized by the report it produced: recomputing the detail is
-			// exact, where reading identifiers back out of prose is not.
+			// exact, where reading identifiers back out of prose is not. The
+			// edges the check passed over are passed over here too, so the two
+			// walks read one set of declarations.
+			if !declaredInForce(ctx.periods, e) {
+				continue
+			}
 			if declaringDoc(cfg, spec, e) != f.ID || staleTargetDetail(spec, e.To, leafBreakers(g, cfg, ctx, spec, e.To)) != f.Detail {
 				continue
 			}

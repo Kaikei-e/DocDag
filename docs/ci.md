@@ -18,9 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.2.0
+      - uses: Kaikei-e/DocDag@v0.3.0
         with:
-          version: v0.2.0                  # default: latest
+          version: v0.3.0                  # default: latest
           args: validate --format github   # this is the default
           working-directory: .             # this is the default
 ```
@@ -37,7 +37,7 @@ diagnostic rather than passing silently; install with `go install` there instead
 ### Pinning
 
 A tag can be moved, so pin the action by commit SHA when the supply chain matters —
-`uses: Kaikei-e/DocDag@<40-char-sha> # v0.2.0`. This repository pins the actions it uses that way.
+`uses: Kaikei-e/DocDag@<40-char-sha> # v0.3.0`. This repository pins the actions it uses that way.
 
 ### Annotations
 
@@ -46,7 +46,7 @@ annotations, so a corpus with more findings than that needs a second `--format t
 into `$GITHUB_STEP_SUMMARY` to show the rest:
 
 ```yaml
-      - uses: Kaikei-e/DocDag@v0.2.0        # annotations, and the gate
+      - uses: Kaikei-e/DocDag@v0.3.0        # annotations, and the gate
       - if: always()
         shell: bash
         run: docdag validate --format text >> "$GITHUB_STEP_SUMMARY"
@@ -86,7 +86,7 @@ does not have. Ask for the full history and name the branch the change is propos
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Kaikei-e/DocDag@v0.2.0
+      - uses: Kaikei-e/DocDag@v0.3.0
         with:
           args: validate --immutable-since origin/${{ github.base_ref || github.event.repository.default_branch }}
 ```
@@ -115,13 +115,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.2.0
+      - name: Say which day this run asks about
+        shell: bash
+        run: echo "DOCDAG_AS_OF=$(date -I)" >> "$GITHUB_ENV"
+      - uses: Kaikei-e/DocDag@v0.3.0
         with:
-          args: validate --format github --as-of $(date -I)
+          args: validate --format github
 ```
 
-`$DOCDAG_AS_OF` does the same for a whole pipeline where several commands run together. The
-scheduled run is what turns `expired_deviation`, a premise past its `retired_on` and a successor
+The day goes through the environment rather than through `args:`. A `with:` value is a string the
+action hands to `docdag` as written — nothing evaluates a `$(…)` in it, so `--as-of $(date -I)`
+would reach the flag parser as the four words it is and fail with `unknown shorthand flag: 'I'`.
+`$DOCDAG_AS_OF` is read by every command that takes `--as-of`, so one `$GITHUB_ENV` line also names
+the day for a whole pipeline where several commands run together, and the flag still wins wherever a
+step writes one.
+
+The scheduled run is what turns `expired_deviation`, a premise past its `retired_on` and a successor
 that has come into force into findings on the day they happen, rather than on the day somebody
 happens to commit.
 
@@ -159,7 +168,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.2.0
+      - uses: Kaikei-e/DocDag@v0.3.0
 
   lint:                                        # only where the rules changed
     needs: changes
@@ -167,7 +176,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.2.0
+      - uses: Kaikei-e/DocDag@v0.3.0
         with:
           args: lint --all --format github
 ```
@@ -195,7 +204,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Kaikei-e/DocDag@v0.2.0
+      - uses: Kaikei-e/DocDag@v0.3.0
         with:
           args: lint --corpus --since origin/main --format text
 ```
@@ -211,15 +220,18 @@ A [pre-commit](https://pre-commit.com) hook is also shipped:
 ```yaml
 repos:
   - repo: https://github.com/Kaikei-e/DocDag
-    rev: v0.2.0
+    rev: v0.3.0
     hooks:
-      - id: docdag-validate
+      - id: docdag-validate      # any .md or docdag.yaml edit: the invariants
+      - id: docdag-lint          # a docdag.yaml edit: the rules themselves
 ```
+
+Two hooks, because a configuration change and a document change break different things. `docdag-lint`
+runs on a `docdag.yaml` edit alone and answers about the rules — layer 1 only, which reads no
+documents and costs milliseconds; the corpus and fixture layers belong in CI. Install one without the
+other and the other question goes unasked.
 
 Hooks are advisory: `git commit --no-verify` walks straight past them, and a contributor who never
 ran `pre-commit install` never had them. CI is the gate; the hook only shortens the loop.
-
-The shipped hook script validates a document edit and lints a `docdag.yaml` edit — layer 1 only,
-which reads no documents and costs milliseconds.
 
 The plugin ships a `PostToolUse` hook for agents as well — see [agents.md](agents.md).

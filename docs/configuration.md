@@ -131,6 +131,11 @@ corpus is described from where it lives. Writing `dir:` or `id_width:` beside `k
 `--dir` — is a configuration error (exit 3), because the kinds carry both. Discovery does not run:
 the kinds say where the documents are.
 
+A declared directory that is not there yet is a kind holding no documents rather than an error: the
+kinds are the vocabulary a corpus may grow into, and `preset: spec` names eight directories that a
+vault adopting it in one line has not all written into yet. Every other failure to read one still
+exits 3.
+
 ### Identity
 
 `id:` is a Go regular expression matched against the whole identifier, whether or not it is written
@@ -322,12 +327,19 @@ edges:
     to: [clause]
     target:
       attr: {status: {eq: accepted}}
-      not_inbound: supersedes    # the two together are what "binding" means
+      leaf_of: supersedes        # the two together are what "binding" means
 ```
 
-`leaf_of: <edge>` *is* `not_inbound: <edge>`, written so the intent survives: the target has to be
-the current leaf of that lineage rather than a clause something replaced. The name is kept rather
-than desugared away because only that spelling earns a fix suggestion — see
+`leaf_of: <edge>` says the target has to be the current leaf of that lineage rather than a document
+something replaced. On a corpus without periods that is exactly `not_inbound: <edge>`; where the
+target's kind declares a `period:`, the two part company, and `leaf_of` is the one to write.
+"Current leaf" is then read at the day the run is about: a successor nobody has accepted, or one
+whose period has not begun, leaves its predecessor the leaf, because that is the document a reader
+is still bound by — which is the same fact
+[`pending_successor`](checks.md#the-spec-presets-rules) reports. `not_inbound` counts a
+declared successor whatever its status or its dates, so writing it where `leaf_of` is meant makes
+one run say a target is stale and still binding at once. The sugar is kept rather than desugared
+away for that reading, and because only that spelling earns a fix suggestion — see
 [`stale_target`](checks.md#stale_target--error-structural).
 
 The target of an edge is its head, whichever end of it the frontmatter named: on a
@@ -703,6 +715,9 @@ and a corpus adopts the whole of it with one line:
 preset: spec
 ```
 
+One line is the whole adoption: the eight directories need not exist yet, and each one appears when
+the corpus has something to put in it.
+
 The file below is that preset in full:
 
 ```yaml
@@ -780,7 +795,7 @@ edges:
     to: [clause]
     target:
       attr: {status: {eq: accepted}}
-      not_inbound: supersedes         # = binding: a departure departs from something in force
+      leaf_of: supersedes             # = binding: a departure departs from something in force
   - name: premise
     key: premise
     direction: forward

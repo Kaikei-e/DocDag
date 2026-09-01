@@ -188,3 +188,93 @@ func TestPluginHookLintsAConfigurationEdit(t *testing.T) {
 		t.Errorf("hook wrote %q, want the lint report", out)
 	}
 }
+
+// TestPluginHookLintsTheConfigurationThatWasEdited pins the invocation rather
+// than the report: a nested docdag.yaml is a different configuration from the
+// project root's, and linting the wrong one reports findings about lines
+// nobody touched.
+func TestPluginHookLintsTheConfigurationThatWasEdited(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the hook is a POSIX shell script")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("the hook reads its payload with jq")
+	}
+	project := t.TempDir()
+	bin := filepath.Join(project, "bin")
+	if err := os.MkdirAll(bin, 0o750); err != nil {
+		t.Fatalf("mkdir %s: %v", bin, err)
+	}
+	nested := filepath.Join(project, "standard", "docdag.yaml")
+	if err := os.MkdirAll(filepath.Dir(nested), 0o750); err != nil {
+		t.Fatalf("mkdir for %s: %v", nested, err)
+	}
+	for _, path := range []string{filepath.Join(project, "docdag.yaml"), nested} {
+		if err := os.WriteFile(path, []byte("preset: adr\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+	// The stub records what it was asked, so the assertion is about the
+	// command line rather than about what lint reports today.
+	args := filepath.Join(project, "args")
+	stub := "#!/bin/sh\ncase \"$1\" in lint) printf '%s\\n' \"$*\" > " + args + "; exit 0 ;; esac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docdag"), []byte(stub), 0o750); err != nil {
+		t.Fatalf("write the stub: %v", err)
+	}
+
+	cmd := exec.Command("sh", filepath.Join(repoRoot(t), "scripts", "docdag-validate.sh"))
+	cmd.Stdin = strings.NewReader(`{"tool_name":"Edit","tool_input":{"file_path":"` + nested + `"}}`)
+	cmd.Dir = project
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("hook: %v (output %q)", err, out)
+	}
+
+	recorded, err := os.ReadFile(args)
+	if err != nil {
+		t.Fatalf("read the recorded arguments: %v", err)
+	}
+	if want := "lint --config " + nested; strings.TrimSpace(string(recorded)) != want {
+		t.Errorf("docdag ran %q, want %q: the edited file is the configuration to lint", strings.TrimSpace(string(recorded)), want)
+	}
+}
+
+// TestPluginHookReportsAConfigurationItCannotRead covers the exit code the
+// lint branch used to swallow: an edit that leaves docdag.yaml invalid exits 3
+// with nothing to say, and silence there hides the break the edit caused.
+func TestPluginHookReportsAConfigurationItCannotRead(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the hook is a POSIX shell script")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("the hook reads its payload with jq")
+	}
+	project := t.TempDir()
+	bin := filepath.Join(project, "bin")
+	if err := os.MkdirAll(bin, 0o750); err != nil {
+		t.Fatalf("mkdir %s: %v", bin, err)
+	}
+	stub := "#!/bin/sh\ncase \"$1\" in lint) exit 3 ;; esac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docdag"), []byte(stub), 0o750); err != nil {
+		t.Fatalf("write the stub: %v", err)
+	}
+	config := filepath.Join(project, "docdag.yaml")
+	if err := os.WriteFile(config, []byte("edges: 3\n"), 0o600); err != nil {
+		t.Fatalf("write the configuration: %v", err)
+	}
+
+	cmd := exec.Command("sh", filepath.Join(repoRoot(t), "scripts", "docdag-validate.sh"))
+	cmd.Stdin = strings.NewReader(`{"tool_name":"Edit","tool_input":{"file_path":"` + config + `"}}`)
+	cmd.Dir = project
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+
+	// Exit 0: the edit is not blocked on a code the hook cannot read a report
+	// out of, but the reader is told which command to run.
+	if err != nil {
+		t.Fatalf("hook: %v (output %q)", err, out)
+	}
+	if !strings.Contains(string(out), "docdag exited 3") {
+		t.Errorf("hook wrote %q, want it to say the configuration could not be read", out)
+	}
+}
