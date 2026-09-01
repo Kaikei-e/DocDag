@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/goccy/go-yaml"
+
 	"github.com/Kaikei-e/DocDag/internal/model"
 )
 
@@ -133,16 +135,87 @@ func (a AttrCondition) Operands() int {
 	return set
 }
 
+// EdgeCondition is one degree clause: the edge type it reads and how many edges
+// of it the clause wants. It is written either as the edge name alone, which
+// asks for one edge or more, or as a mapping carrying min and max.
+type EdgeCondition struct {
+	Edge string `yaml:"edge,omitempty"`
+	// Min and Max are pointers because absence is not zero: an omitted min asks
+	// for one edge, and an omitted max is unbounded, so a written "max: 0" has
+	// to be distinguishable from a missing one.
+	Min *int `yaml:"min,omitempty"`
+	Max *int `yaml:"max,omitempty"`
+}
+
+// UnmarshalYAML accepts both spellings of an edge clause: the edge name alone,
+// which is sugar for one edge or more, and the mapping form with thresholds.
+func (e *EdgeCondition) UnmarshalYAML(src []byte) error {
+	var name string
+	if err := yaml.Unmarshal(src, &name); err == nil {
+		*e = EdgeCondition{Edge: name}
+		return nil
+	}
+	// The alias sheds the method set, so decoding the mapping form does not
+	// call this unmarshaler again.
+	type mapping EdgeCondition
+	var full mapping
+	if err := yaml.Unmarshal(src, &full); err != nil {
+		return err
+	}
+	*e = EdgeCondition(full)
+	return nil
+}
+
+// set reports whether an edge clause was written at all, which a clause naming
+// no edge type still was: an edge-less threshold is a configuration error, not
+// an absent clause.
+func (e EdgeCondition) set() bool {
+	return e.Edge != "" || e.Min != nil || e.Max != nil
+}
+
+// bounds resolves the degree window a clause asks for: at least atLeast edges,
+// and at most atMost unless atMost is zero, which is unbounded.
+func (e EdgeCondition) bounds() (atLeast, atMost int) {
+	atLeast = 1
+	if e.Min != nil {
+		atLeast = *e.Min
+	}
+	if e.Max != nil {
+		atMost = *e.Max
+	}
+	return atLeast, atMost
+}
+
+// ViaCondition is the one-hop clause: it holds when at least one neighbour
+// across the named edge type satisfies every attribute condition. It carries
+// attributes alone by construction, so the vocabulary reaches exactly one hop
+// and stays inside the bisimulation-invariant fragment the ADR argues for.
+type ViaCondition struct {
+	Edge string                   `yaml:"edge,omitempty"`
+	Attr map[string]AttrCondition `yaml:"attr,omitempty"`
+}
+
 // Condition is the fixed, tiny rule vocabulary. Every populated field is ANDed:
 // AnyOf holds if any member holds, and Not holds if its condition does not.
 type Condition struct {
-	Inbound     string                   `yaml:"inbound,omitempty"`
+	Inbound     EdgeCondition            `yaml:"inbound,omitempty"`
 	NotInbound  string                   `yaml:"not_inbound,omitempty"`
-	Outbound    string                   `yaml:"outbound,omitempty"`
+	Outbound    EdgeCondition            `yaml:"outbound,omitempty"`
 	NotOutbound string                   `yaml:"not_outbound,omitempty"`
+	Via         *ViaCondition            `yaml:"via,omitempty"`
+	ViaInbound  *ViaCondition            `yaml:"via_inbound,omitempty"`
 	Attr        map[string]AttrCondition `yaml:"attr,omitempty"`
 	AnyOf       []Condition              `yaml:"any_of,omitempty"`
 	Not         *Condition               `yaml:"not,omitempty"`
+}
+
+// Empty reports whether a condition constrains nothing, which is how a
+// projection says it wrote down no when block at all.
+func (c Condition) Empty() bool {
+	return !c.Inbound.set() && !c.Outbound.set() &&
+		c.NotInbound == "" && c.NotOutbound == "" &&
+		c.Via == nil && c.ViaInbound == nil &&
+		len(c.Attr) == 0 && c.AnyOf == nil && c.Not == nil
 }
 
 // Conditions returns this condition and every condition nested inside it, so
@@ -159,20 +232,38 @@ func (c Condition) Conditions() []Condition {
 }
 
 // EdgeClause is one edge requirement of a condition: an edge type, the
-// direction it is read in, and whether its absence is what the rule wants.
+// direction it is read in, the degree window it asks for, and whether its
+// absence is what the rule wants.
 type EdgeClause struct {
 	Edge    string
 	Inbound bool
 	Negate  bool
+	// Min is the smallest degree that satisfies the clause and Max the largest,
+	// zero meaning unbounded. A negated clause carries neither: absence is not a
+	// threshold, and the vocabulary has no negated one.
+	Min int
+	Max int
+}
+
+// Holds reports whether a degree satisfies the clause.
+func (c EdgeClause) Holds(degree int) bool {
+	if c.Negate {
+		return degree == 0
+	}
+	return degree >= c.Min && (c.Max == 0 || degree <= c.Max)
 }
 
 // EdgeClauses enumerates the populated edge clauses of a condition, so the
-// validator and the matcher never disagree about the vocabulary.
+// validator and the matcher never disagree about the vocabulary. A threshold
+// written without an edge type names nothing to count and is left out; the
+// validator reports it against the condition itself.
 func (c Condition) EdgeClauses() []EdgeClause {
+	inboundMin, inboundMax := c.Inbound.bounds()
+	outboundMin, outboundMax := c.Outbound.bounds()
 	all := []EdgeClause{
-		{Edge: c.Inbound, Inbound: true},
+		{Edge: c.Inbound.Edge, Inbound: true, Min: inboundMin, Max: inboundMax},
 		{Edge: c.NotInbound, Inbound: true, Negate: true},
-		{Edge: c.Outbound},
+		{Edge: c.Outbound.Edge, Min: outboundMin, Max: outboundMax},
 		{Edge: c.NotOutbound, Negate: true},
 	}
 	clauses := make([]EdgeClause, 0, len(all))
@@ -180,6 +271,39 @@ func (c Condition) EdgeClauses() []EdgeClause {
 		if clause.Edge != "" {
 			clauses = append(clauses, clause)
 		}
+	}
+	if len(clauses) == 0 {
+		return nil
+	}
+	return clauses
+}
+
+// ViaClause is one populated one-hop clause: the edge type it crosses, the
+// direction it crosses it in, and what the neighbour has to look like.
+type ViaClause struct {
+	Edge    string
+	Inbound bool
+	Attr    map[string]AttrCondition
+}
+
+// Key names the vocabulary word a one-hop clause was written under.
+func (c ViaClause) Key() string {
+	if c.Inbound {
+		return "via_inbound"
+	}
+	return "via"
+}
+
+// ViaClauses enumerates the populated one-hop clauses of a condition. They are
+// kept apart from the edge clauses because a one-hop clause is not an existence
+// question: the neighbour has to look a particular way.
+func (c Condition) ViaClauses() []ViaClause {
+	clauses := make([]ViaClause, 0, 2)
+	if c.Via != nil {
+		clauses = append(clauses, ViaClause{Edge: c.Via.Edge, Attr: c.Via.Attr})
+	}
+	if c.ViaInbound != nil {
+		clauses = append(clauses, ViaClause{Edge: c.ViaInbound.Edge, Inbound: true, Attr: c.ViaInbound.Attr})
 	}
 	if len(clauses) == 0 {
 		return nil
@@ -195,6 +319,64 @@ type Rule struct {
 	Message  string         `yaml:"message"`
 }
 
+// ProjectionSpec declares one derived boolean attribute. A projection holds
+// where its when block holds, or where any of its alternatives does; exactly
+// one of the two is written. The result is readable as an attribute named after
+// the projection, from rules, from other projections and from a listing.
+type ProjectionSpec struct {
+	Name  string          `yaml:"name"`
+	When  Condition       `yaml:"when,omitempty"`
+	AnyOf []ProjectionAlt `yaml:"any_of,omitempty"`
+}
+
+// ProjectionAlt is one alternative of a projection. It carries a when block of
+// its own rather than a bare condition, so an alternative reads the way the
+// projection it belongs to does.
+type ProjectionAlt struct {
+	When Condition `yaml:"when"`
+}
+
+// Whens returns the conditions a projection holds under: its own when block, or
+// the when block of each alternative.
+func (p ProjectionSpec) Whens() []Condition {
+	if len(p.AnyOf) > 0 {
+		out := make([]Condition, 0, len(p.AnyOf))
+		for _, alt := range p.AnyOf {
+			out = append(out, alt.When)
+		}
+		return out
+	}
+	return []Condition{p.When}
+}
+
+// Conditions returns every condition a projection evaluates, nested ones
+// included, so validation never misses a clause the matcher reaches.
+func (p ProjectionSpec) Conditions() []Condition {
+	all := []Condition{}
+	for _, when := range p.Whens() {
+		all = append(all, when.Conditions()...)
+	}
+	return all
+}
+
+// AttrKeys returns every attribute key a projection reads, sorted, the one-hop
+// clauses included. A key naming another projection is a dependency: it has to
+// be evaluated first.
+func (p ProjectionSpec) AttrKeys() []string {
+	keys := make(map[string]bool)
+	for _, cond := range p.Conditions() {
+		for key := range cond.Attr {
+			keys[key] = true
+		}
+		for _, clause := range cond.ViaClauses() {
+			for key := range clause.Attr {
+				keys[key] = true
+			}
+		}
+	}
+	return slices.Sorted(maps.Keys(keys))
+}
+
 // Config is the effective configuration. A preset is nothing more than a
 // built-in Config value, so every field is expressible in docdag.yaml.
 type Config struct {
@@ -206,10 +388,14 @@ type Config struct {
 	Edges        []EdgeSpec        `yaml:"edges,omitempty"`
 	DerivedEdges []DerivedEdgeSpec `yaml:"derived_edges,omitempty"`
 	Rules        []Rule            `yaml:"rules,omitempty"`
-	Template     string            `yaml:"template,omitempty"`
-	Filename     string            `yaml:"filename,omitempty"`
-	References   ReferencesSpec    `yaml:"references,omitempty"`
-	AcyclicUnion bool              `yaml:"acyclic_union,omitempty"`
+	Projections  []ProjectionSpec  `yaml:"projections,omitempty"`
+	// Binding names the projection that defines the set of documents in force.
+	// It is a preset's answer to "what is current", not a hard-coded one.
+	Binding      string         `yaml:"binding,omitempty"`
+	Template     string         `yaml:"template,omitempty"`
+	Filename     string         `yaml:"filename,omitempty"`
+	References   ReferencesSpec `yaml:"references,omitempty"`
+	AcyclicUnion bool           `yaml:"acyclic_union,omitempty"`
 	// Structural raises the severity of a built-in check. Lowering one is a
 	// configuration error: the checks are the contract, not a preference.
 	Structural map[string]model.Severity `yaml:"structural,omitempty"`
@@ -289,6 +475,36 @@ func (c Config) EdgeTypes() []model.EdgeType {
 	return types
 }
 
+// Projection returns the spec of one declared projection.
+func (c Config) Projection(name string) (ProjectionSpec, bool) {
+	for _, spec := range c.Projections {
+		if spec.Name == name {
+			return spec, true
+		}
+	}
+	return ProjectionSpec{}, false
+}
+
+// ProjectionNames returns every declared projection name in declaration order.
+func (c Config) ProjectionNames() []string {
+	names := make([]string, 0, len(c.Projections))
+	for _, spec := range c.Projections {
+		names = append(names, spec.Name)
+	}
+	return names
+}
+
+// BindingProjection returns the projection that defines the binding set, and
+// whether the configuration resolves one at all. A configuration that declares
+// no projections resolves none, and the caller falls back on the built-in
+// definition rather than reporting every document as current.
+func (c Config) BindingProjection() (ProjectionSpec, bool) {
+	if c.Binding == "" {
+		return ProjectionSpec{}, false
+	}
+	return c.Projection(c.Binding)
+}
+
 // AcyclicEdgeTypes returns the edge types that must stay acyclic.
 func (c Config) AcyclicEdgeTypes() []model.EdgeType {
 	types := make([]model.EdgeType, 0, len(c.Edges))
@@ -310,6 +526,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validateRules(); err != nil {
+		return err
+	}
+	if err := c.validateProjections(); err != nil {
 		return err
 	}
 	if err := c.validateFilename(); err != nil {
@@ -410,8 +629,9 @@ func (c Config) validateRules() error {
 		if rule.Severity != model.SeverityError && rule.Severity != model.SeverityWarn {
 			return fmt.Errorf("rule %q: unknown severity %q: %w", rule.Name, rule.Severity, model.ErrInvalidConfig)
 		}
+		subject := fmt.Sprintf("rule %q", rule.Name)
 		for _, cond := range rule.When.Conditions() {
-			if err := c.validateCondition(rule.Name, cond); err != nil {
+			if err := c.validateCondition(subject, cond); err != nil {
 				return err
 			}
 		}
@@ -419,19 +639,168 @@ func (c Config) validateRules() error {
 	return nil
 }
 
-func (c Config) validateCondition(rule string, cond Condition) error {
-	if cond.AnyOf != nil && len(cond.AnyOf) == 0 {
-		return fmt.Errorf("rule %q: any_of without alternatives: %w", rule, model.ErrInvalidConfig)
-	}
-	for _, clause := range cond.EdgeClauses() {
-		if _, ok := c.Edge(model.EdgeType(clause.Edge)); !ok {
-			return fmt.Errorf("rule %q: undeclared edge type %q, declare it under edges or replace rules: %w", rule, clause.Edge, model.ErrInvalidConfig)
+// validateProjections holds the projections to the shape the evaluator can
+// answer: named, distinct, written one way, over declared edges, and acyclic.
+func (c Config) validateProjections() error {
+	declared := make(map[string]bool, len(c.Projections))
+	for _, spec := range c.Projections {
+		switch {
+		case spec.Name == "":
+			return fmt.Errorf("projection without a name: %w", model.ErrInvalidConfig)
+		case declared[spec.Name]:
+			return fmt.Errorf("projection %q is declared twice: %w", spec.Name, model.ErrInvalidConfig)
+		}
+		declared[spec.Name] = true
+		subject := fmt.Sprintf("projection %q", spec.Name)
+		switch {
+		case !spec.When.Empty() && len(spec.AnyOf) > 0:
+			return fmt.Errorf("%s: when and any_of are alternatives, write one: %w", subject, model.ErrInvalidConfig)
+		case spec.When.Empty() && len(spec.AnyOf) == 0:
+			return fmt.Errorf("%s: needs a when block or any_of alternatives: %w", subject, model.ErrInvalidConfig)
+		}
+		for _, alt := range spec.AnyOf {
+			if alt.When.Empty() {
+				return fmt.Errorf("%s: alternative without a when block: %w", subject, model.ErrInvalidConfig)
+			}
+		}
+		for _, cond := range spec.Conditions() {
+			if err := c.validateCondition(subject, cond); err != nil {
+				return err
+			}
 		}
 	}
-	for _, key := range slices.Sorted(maps.Keys(cond.Attr)) {
-		if cond.Attr[key].Operands() != 1 {
-			return fmt.Errorf("rule %q: attribute %q needs exactly one of eq, not, contains, not_contains and subset_of: %w",
-				rule, key, model.ErrInvalidConfig)
+	if err := c.validateProjectionCycles(); err != nil {
+		return err
+	}
+	// A binding that names nothing is how a configuration without projections
+	// asks for the built-in definition; one that names a projection nobody
+	// declared is a typo the evaluator cannot answer.
+	if len(c.Projections) > 0 && c.Binding != "" && !declared[c.Binding] {
+		return fmt.Errorf("binding %q is not a declared projection: %w", c.Binding, model.ErrInvalidConfig)
+	}
+	return nil
+}
+
+// validateProjectionCycles rejects projections that read each other in a loop.
+// The dependency graph is over the specs, not the documents, so it is as small
+// as the configuration and a plain depth-first walk over it terminates.
+func (c Config) validateProjectionCycles() error {
+	const (
+		white = iota
+		gray
+		black
+	)
+	color := make(map[string]int, len(c.Projections))
+	var path []string
+	var visit func(spec ProjectionSpec) error
+	visit = func(spec ProjectionSpec) error {
+		color[spec.Name] = gray
+		path = append(path, spec.Name)
+		for _, key := range spec.AttrKeys() {
+			next, ok := c.Projection(key)
+			if !ok {
+				continue
+			}
+			switch color[key] {
+			case gray:
+				// The walk may have reached the loop from outside it, so the
+				// message names the loop rather than the way in.
+				loop := path[slices.Index(path, key):]
+				return fmt.Errorf("projection %q: reference cycle %s -> %s: %w",
+					spec.Name, strings.Join(loop, " -> "), key, model.ErrInvalidConfig)
+			case white:
+				if err := visit(next); err != nil {
+					return err
+				}
+			}
+		}
+		path = path[:len(path)-1]
+		color[spec.Name] = black
+		return nil
+	}
+	for _, spec := range c.Projections {
+		if color[spec.Name] != white {
+			continue
+		}
+		if err := visit(spec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c Config) validateCondition(subject string, cond Condition) error {
+	if cond.AnyOf != nil && len(cond.AnyOf) == 0 {
+		return fmt.Errorf("%s: any_of without alternatives: %w", subject, model.ErrInvalidConfig)
+	}
+	if err := c.validateEdgeClauses(subject, cond); err != nil {
+		return err
+	}
+	if err := c.validateViaClauses(subject, cond); err != nil {
+		return err
+	}
+	return validateAttrs(subject, "", cond.Attr)
+}
+
+func (c Config) validateEdgeClauses(subject string, cond Condition) error {
+	for _, clause := range cond.EdgeClauses() {
+		if _, ok := c.Edge(model.EdgeType(clause.Edge)); !ok {
+			return fmt.Errorf("%s: undeclared edge type %q, declare it under edges or replace rules: %w", subject, clause.Edge, model.ErrInvalidConfig)
+		}
+	}
+	for _, written := range []struct {
+		key    string
+		clause EdgeCondition
+	}{{"inbound", cond.Inbound}, {"outbound", cond.Outbound}} {
+		if err := validateEdgeBounds(subject, written.key, written.clause); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateEdgeBounds holds a degree threshold to a window a document can land
+// in: at least one edge, and at most no fewer than it asks for at least.
+func validateEdgeBounds(subject, key string, clause EdgeCondition) error {
+	if !clause.set() {
+		return nil
+	}
+	if clause.Edge == "" {
+		return fmt.Errorf("%s: %s without an edge type: %w", subject, key, model.ErrInvalidConfig)
+	}
+	atLeast, atMost := clause.bounds()
+	switch {
+	case atLeast < 1:
+		return fmt.Errorf("%s: %s min %d is below 1, absence is not_%s: %w", subject, key, atLeast, key, model.ErrInvalidConfig)
+	case clause.Max != nil && atMost < 1:
+		return fmt.Errorf("%s: %s max %d is below 1, absence is not_%s: %w", subject, key, atMost, key, model.ErrInvalidConfig)
+	case atMost > 0 && atLeast > atMost:
+		return fmt.Errorf("%s: %s min %d is above max %d: %w", subject, key, atLeast, atMost, model.ErrInvalidConfig)
+	}
+	return nil
+}
+
+func (c Config) validateViaClauses(subject string, cond Condition) error {
+	for _, clause := range cond.ViaClauses() {
+		if clause.Edge == "" {
+			return fmt.Errorf("%s: %s without an edge type: %w", subject, clause.Key(), model.ErrInvalidConfig)
+		}
+		if _, ok := c.Edge(model.EdgeType(clause.Edge)); !ok {
+			return fmt.Errorf("%s: %s names undeclared edge type %q, declare it under edges or replace rules: %w",
+				subject, clause.Key(), clause.Edge, model.ErrInvalidConfig)
+		}
+		if err := validateAttrs(subject, clause.Key()+" ", clause.Attr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateAttrs(subject, where string, attrs map[string]AttrCondition) error {
+	for _, key := range slices.Sorted(maps.Keys(attrs)) {
+		if attrs[key].Operands() != 1 {
+			return fmt.Errorf("%s: %sattribute %q needs exactly one of eq, not, contains, not_contains and subset_of: %w",
+				subject, where, key, model.ErrInvalidConfig)
 		}
 	}
 	return nil

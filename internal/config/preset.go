@@ -10,6 +10,11 @@ import (
 // (and the hyphenated spellings) and captures the referenced document.
 const DerivedSupersededPattern = `(?i)^superseded[\s-]+by[\s-]+(\S+)`
 
+// ProjectionAcceptedUnsuperseded is the ADR preset's definition of what is in
+// force: accepted, and superseded by nothing. It is a projection rather than
+// code so another preset can hold a different notion of force.
+const ProjectionAcceptedUnsuperseded = "accepted_unsuperseded"
+
 // ADRPreset returns the built-in Architecture Decision Record configuration.
 func ADRPreset() Config {
 	eq := func(v string) AttrCondition { return AttrCondition{Eq: &v} }
@@ -48,12 +53,22 @@ func ADRPreset() Config {
 				Direction: DirectionReverse,
 			},
 		},
+		Projections: []ProjectionSpec{
+			{
+				Name: ProjectionAcceptedUnsuperseded,
+				When: Condition{
+					NotInbound: EdgeSupersedes.String(),
+					Attr:       map[string]AttrCondition{DefaultStatusField: eq(StatusAccepted)},
+				},
+			},
+		},
+		Binding: ProjectionAcceptedUnsuperseded,
 		Rules: []Rule{
 			{
 				Name:     model.RuleStatusDrift,
 				Severity: model.SeverityError,
 				When: Condition{
-					Inbound: EdgeSupersedes.String(),
+					Inbound: EdgeCondition{Edge: EdgeSupersedes.String()},
 					Attr:    map[string]AttrCondition{DefaultStatusField: not(StatusSuperseded)},
 				},
 				Message: "has inbound supersedes but status is not superseded",

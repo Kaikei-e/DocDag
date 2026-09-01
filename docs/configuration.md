@@ -32,6 +32,15 @@ derived_edges:
     edge: supersedes
     direction: reverse         # the referenced document is the edge source
 
+projections:                   # derived boolean attributes, see below
+  - name: accepted_unsuperseded
+    when:
+      not_inbound: supersedes
+      attr:
+        status: { eq: accepted }
+
+binding: accepted_unsuperseded  # the projection `query --binding` answers with
+
 rules:
   - name: status_drift
     severity: error
@@ -94,18 +103,91 @@ rules:
 ## List replacement
 
 The `edges:` and `rules:` lists above show where the new keys go; writing one of them — or
-`derived_edges:` — replaces the preset's list rather than adding to it, and writing it as an
-explicit empty list (`derived_edges: []`) clears the preset's without putting anything in its place.
+`derived_edges:` or `projections:` — replaces the preset's list rather than adding to it, and
+writing it as an explicit empty list (`derived_edges: []`) clears the preset's without putting
+anything in its place. Writing `edges:` also drops the inherited projections that read an edge type
+the new list does not declare, and the `binding:` that named one of them: a projection over a
+vocabulary the corpus replaced away cannot be evaluated. `binding:` is a scalar, so writing it
+replaces the preset's and leaving it out keeps it.
 
 ## The rule vocabulary
 
 A rule's `when` block ANDs its top-level clauses. The vocabulary is fixed and complete: `inbound`,
 `not_inbound`, `outbound`, `not_outbound` — each naming a declared edge type — `attr: {<key>:
 {eq|not: <value>}}` on a scalar, `attr: {<key>: {contains|not_contains: <value>}}` and
-`attr: {<key>: {subset_of: [<value>, …]}}` on a list, and the two combinators `any_of: [<condition>,
-…]` and `not: <condition>`, which nest. A scalar read as a list is a one-element list; comparison is
-case-insensitive; a positive clause needs the attribute to be there and a negative one is satisfied
-by its absence. There is no expression language.
+`attr: {<key>: {subset_of: [<value>, …]}}` on a list, `via` and `via_inbound` on a neighbour, and
+the two combinators `any_of: [<condition>, …]` and `not: <condition>`, which nest. A scalar read as
+a list is a one-element list; comparison is case-insensitive; a positive clause needs the attribute
+to be there and a negative one is satisfied by its absence. There is no expression language: no
+arithmetic, no string operations, no variables.
+
+`inbound` and `outbound` read either as an edge name or as a degree threshold, and the name alone is
+sugar for one edge or more. `via` and `via_inbound` reach exactly one hop: they hold when at least
+one neighbour across the named edge type satisfies every attribute clause they carry. A neighbour
+condition is attributes only — no edge clause, and no `via` inside a `via` — so a condition stays a
+question about a document and its immediate neighbourhood. Transitive reach is what `resolve` is
+for.
+
+```yaml
+rules:
+  - name: deviation_pressure
+    severity: warn
+    when:
+      inbound: { edge: deviates-from, min: 5 }   # at least five inbound edges
+    message: "has five or more deviations; reconsider the decision"
+  - name: contested
+    severity: warn
+    when:
+      outbound: { edge: depends-on, min: 1, max: 3 }   # max is unbounded unless written
+    message: "depends on between one and three decisions"
+  - name: stale_premise
+    severity: error
+    when:
+      attr: { status: { eq: accepted } }
+      via:                                       # via_inbound reads the other direction
+        edge: premise
+        attr: { status: { eq: retired } }
+    message: "is accepted but one of its premises is retired"
+```
+
+A degree threshold counts the edges of that type at the document, including the ones whose other end
+is a reference no document answers — that is a `dangling_ref` finding of its own. A `min` below 1
+and a `max` of 0 are configuration errors: absence is `not_inbound` and `not_outbound`, which is
+where the vocabulary keeps it. A neighbour the corpus does not hold carries no attributes and
+satisfies no `via` clause.
+
+## Projections and binding
+
+A projection is a derived boolean attribute. It is named, it holds where its condition holds, and it
+is readable as an attribute of that name from rules and from other projections, and as a column of
+`query --fields` and `resolve --fields`:
+
+```yaml
+projections:
+  - name: enforced
+    when: { inbound: enforces }
+  - name: effective_should
+    any_of:                                      # holds when any alternative's when holds
+      - when: { attr: { level: { eq: SHOULD } } }
+      - when: { attr: { level: { eq: MUST } }, not_inbound: enforces }
+
+binding: accepted_unsuperseded
+```
+
+A projection writes `when` or `any_of`, one of the two. Its value reads as the string `true` where
+it holds and `false` where it does not, so `attr: {enforced: {eq: "true"}}` and
+`attr: {enforced: {not: "true"}}` both say what they look like. A projection name shadows a
+frontmatter key spelled the same way: the derived value is the configured one, and a document cannot
+take it back by writing the key down.
+
+Projections may read each other, and they are evaluated in dependency order, so the list may be
+written in any order. A reference cycle among them is a configuration error (exit 3), as is a
+duplicate name, a nameless projection and a `binding:` naming a projection nobody declared.
+
+`binding:` names the projection that defines the documents in force — what `query --binding` lists,
+what `stats` counts and what `context` keeps. A configuration that declares no projections at all
+falls back on the built-in definition, accepted and superseded by nothing, which is what the `adr`
+preset's `accepted_unsuperseded` projection writes down.
 
 ## filename and template
 

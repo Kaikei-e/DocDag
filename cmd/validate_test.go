@@ -944,3 +944,33 @@ func TestTheReportFormatsBelongToValidateAlone(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateProjectionsAndTheExtendedVocabulary(t *testing.T) {
+	dir := fixture(t, "projections")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0002-rotate-keys-every-quarter.md:3: WARN heavily_depended_on 0002:",
+		"0002-rotate-keys-every-quarter.md:4: WARN orphan_must 0002:",
+		"0005-use-a-managed-secret-store.md:3: WARN stale_dependency 0005:",
+	})
+}
+
+func TestAProjectionReferenceCycleIsAConfigurationError(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"docdag.yaml": "projections:\n" +
+			"  - name: a\n    when: {attr: {b: {eq: \"true\"}}}\n" +
+			"  - name: b\n    when: {attr: {a: {eq: \"true\"}}}\n",
+		"docs/adr/0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n",
+	})
+	t.Chdir(dir)
+
+	got := run(t, "validate")
+
+	assertExit(t, got, 3)
+	if !strings.Contains(got.stderr, "cycle") {
+		t.Errorf("stderr = %q, want it to name the projection cycle", got.stderr)
+	}
+}

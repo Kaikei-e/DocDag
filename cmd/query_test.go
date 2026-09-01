@@ -275,3 +275,50 @@ func TestQueryUnknownReference(t *testing.T) {
 		t.Errorf("stderr = %q, want it to contain %q", got.stderr, "unknown document")
 	}
 }
+
+func TestQueryBindingFollowsTheConfiguredProjection(t *testing.T) {
+	dir := fixture(t, "projections")
+
+	got := run(t, "query", "--binding", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	assertLines(t, "binding", lines(got.stdout), []string{"0001", "0002", "0004", "0005", "0006", "0008"})
+}
+
+func TestQueryFieldsReadTheConfiguredProjections(t *testing.T) {
+	dir := fixture(t, "projections")
+
+	got := run(t, "query", "--binding", "--fields", "id,enforced,effective_must,settled",
+		"--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	assertLines(t, "binding", lines(got.stdout), []string{
+		"0001\ttrue\ttrue\ttrue",
+		"0002\tfalse\tfalse\tfalse",
+		"0004\tfalse\tfalse\tfalse",
+		"0005\tfalse\tfalse\ttrue",
+		"0006\tfalse\tfalse\ttrue",
+		"0008\tfalse\tfalse\tfalse",
+	})
+}
+
+func TestAProjectionIsOnlyAFieldWhereItIsDeclared(t *testing.T) {
+	dir := fixture(t, "projections")
+
+	t.Run("a declared projection is a column", func(t *testing.T) {
+		got := run(t, "resolve", "0007", "--fields", "id,current",
+			"--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+		assertExit(t, got, 0)
+		assertLines(t, "resolve", lines(got.stdout), []string{"0008\ttrue"})
+	})
+
+	t.Run("the same name under the preset is not", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--fields", "id,current", "--dir", fixture(t, "ok-basic"))
+
+		assertExit(t, got, 2)
+		if !strings.Contains(got.stderr, "unknown field") {
+			t.Errorf("stderr = %q, want an unknown field diagnostic", got.stderr)
+		}
+	})
+}

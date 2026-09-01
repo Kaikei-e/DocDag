@@ -235,7 +235,7 @@ template: templates/decision.md
 			t.Fatalf("rules = %+v, want one", got.Rules)
 		}
 		rule := got.Rules[0]
-		if rule.Name != "state_drift" || rule.Severity != model.SeverityError || rule.When.Inbound != "supersedes" {
+		if rule.Name != "state_drift" || rule.Severity != model.SeverityError || rule.When.Inbound.Edge != "supersedes" {
 			t.Errorf("rule = %+v", rule)
 		}
 		if got := testDeref(t, "rule attr not", rule.When.Attr["state"].Not); got != "replaced" {
@@ -354,7 +354,7 @@ func TestMerge(t *testing.T) {
 			override: Config{Rules: []Rule{{
 				Name:     "accepted_with_dependencies",
 				Severity: model.SeverityWarn,
-				When:     Condition{Outbound: "depends-on"},
+				When:     Condition{Outbound: EdgeCondition{Edge: "depends-on"}},
 				Message:  "an accepted decision still depends on another",
 			}}},
 			check: func(t *testing.T, got Config) {
@@ -617,6 +617,133 @@ func TestMergeKeepsAnExplicitRuleOverrideOnARenamedStatusField(t *testing.T) {
 	if _, ok := got.Rules[0].When.Attr["lifecycle"]; !ok {
 		t.Fatalf("rule attr = %v, want the override's own key untouched", got.Rules[0].When.Attr)
 	}
+}
+
+func TestMergeProjections(t *testing.T) {
+	t.Run("projections replace the preset's rather than merge", func(t *testing.T) {
+		override := Config{
+			Projections: []ProjectionSpec{{Name: "enforced", When: Condition{Inbound: EdgeCondition{Edge: "depends-on"}}}},
+			Binding:     "enforced",
+		}
+
+		got := Merge(ADRPreset(), override)
+
+		if len(got.Projections) != 1 || got.Projections[0].Name != "enforced" {
+			t.Fatalf("projections = %+v, want exactly the override", got.Projections)
+		}
+		if got.Binding != "enforced" {
+			t.Fatalf("binding = %q, want the override", got.Binding)
+		}
+	})
+
+	t.Run("an explicit empty list clears the preset's projections", func(t *testing.T) {
+		got := Merge(ADRPreset(), Config{Projections: []ProjectionSpec{}})
+
+		if len(got.Projections) != 0 {
+			t.Fatalf("projections = %+v, want them cleared", got.Projections)
+		}
+		if _, ok := got.BindingProjection(); ok {
+			t.Fatal("BindingProjection resolved one, want the built-in definition to stand in")
+		}
+	})
+
+	t.Run("a file that mentions neither keeps the preset's", func(t *testing.T) {
+		got := Merge(ADRPreset(), Config{IDWidth: 6})
+
+		spec, ok := got.BindingProjection()
+		if !ok || spec.Name != ProjectionAcceptedUnsuperseded {
+			t.Fatalf("BindingProjection = %+v, %v, want the preset's", spec, ok)
+		}
+	})
+
+	t.Run("a replaced edge vocabulary drops the projections written against it", func(t *testing.T) {
+		override := Config{
+			Edges:        []EdgeSpec{{Name: "replaces", Key: "replaces", Acyclic: true, Direction: DirectionForward}},
+			Rules:        []Rule{},
+			DerivedEdges: []DerivedEdgeSpec{},
+		}
+
+		got := Merge(ADRPreset(), override)
+
+		if len(got.Projections) != 0 {
+			t.Fatalf("projections = %+v, want the ones reading supersedes dropped", got.Projections)
+		}
+		if got.Binding != "" {
+			t.Fatalf("binding = %q, want it cleared with the projection it named", got.Binding)
+		}
+		if err := got.Validate(); err != nil {
+			t.Fatalf("Validate = %v, want no error on a configuration nobody wrote", err)
+		}
+	})
+
+	t.Run("a replaced edge vocabulary that still declares the edge keeps them", func(t *testing.T) {
+		override := Config{Edges: []EdgeSpec{
+			{Name: "supersedes", Key: "supersedes", Acyclic: true, Direction: DirectionForward},
+			{Name: "amends", Key: "amends", Direction: DirectionForward},
+		}}
+
+		got := Merge(ADRPreset(), override)
+
+		if len(got.Projections) != 1 || got.Binding != ProjectionAcceptedUnsuperseded {
+			t.Fatalf("projections = %+v, binding = %q, want the preset's kept", got.Projections, got.Binding)
+		}
+	})
+}
+
+func TestMergeRetargetsProjectionsOntoARenamedStatusField(t *testing.T) {
+	// The binding projection reads the status field. Left on the preset's key
+	// it would hold for no document at all, and every listing would go empty.
+	got := Merge(ADRPreset(), Config{StatusField: "state"})
+
+	spec, ok := got.BindingProjection()
+	if !ok {
+		t.Fatalf("BindingProjection = %+v, want the preset's", got.Projections)
+	}
+	if _, ok := spec.When.Attr["state"]; !ok {
+		t.Fatalf("projection inspects %v, want the configured status field", spec.When.Attr)
+	}
+	if _, ok := spec.When.Attr[DefaultStatusField]; ok {
+		t.Fatalf("projection still inspects %q", DefaultStatusField)
+	}
+	if base := ADRPreset(); base.Projections[0].When.Attr[DefaultStatusField].Eq == nil {
+		t.Error("Merge rewrote the preset it was given rather than a copy")
+	}
+
+	t.Run("alternatives are retargeted too", func(t *testing.T) {
+		base := ADRPreset()
+		base.Projections = []ProjectionSpec{{
+			Name: ProjectionAcceptedUnsuperseded,
+			AnyOf: []ProjectionAlt{
+				{When: Condition{Attr: map[string]AttrCondition{DefaultStatusField: testEq(StatusAccepted)}}},
+			},
+		}}
+
+		merged := Merge(base, Config{StatusField: "state"})
+
+		if _, ok := merged.Projections[0].AnyOf[0].When.Attr["state"]; !ok {
+			t.Fatalf("alternative inspects %v, want the configured status field", merged.Projections[0].AnyOf[0].When.Attr)
+		}
+	})
+
+	t.Run("a file that writes its own projections keeps them untouched", func(t *testing.T) {
+		override := Config{
+			StatusField: "state",
+			Projections: []ProjectionSpec{{
+				Name: "own",
+				When: Condition{Attr: map[string]AttrCondition{"lifecycle": {Eq: ptr("done")}}},
+			}},
+			Binding: "own",
+		}
+
+		merged := Merge(ADRPreset(), override)
+
+		if len(merged.Projections) != 1 {
+			t.Fatalf("projections = %+v, want only the override", merged.Projections)
+		}
+		if _, ok := merged.Projections[0].When.Attr["lifecycle"]; !ok {
+			t.Fatalf("projection attr = %v, want the override's own key untouched", merged.Projections[0].When.Attr)
+		}
+	})
 }
 
 func ptr(v string) *string { return &v }

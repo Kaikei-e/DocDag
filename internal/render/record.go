@@ -22,13 +22,15 @@ const (
 var FieldNames = []string{FieldID, FieldTitle, FieldStatus, FieldPath}
 
 // Record is one document in a listing. Reference marks a hit reached through
-// the reference layer rather than a typed edge.
+// the reference layer rather than a typed edge. Projections carries the derived
+// columns a listing was asked for, and is empty unless one was.
 type Record struct {
-	ID        model.ID `json:"id"`
-	Title     string   `json:"title"`
-	Status    string   `json:"status"`
-	Path      string   `json:"path"`
-	Reference bool     `json:"reference,omitempty"`
+	ID          model.ID          `json:"id"`
+	Title       string            `json:"title"`
+	Status      string            `json:"status"`
+	Path        string            `json:"path"`
+	Reference   bool              `json:"reference,omitempty"`
+	Projections map[string]string `json:"projections,omitempty"`
 }
 
 func (r Record) field(name string) string {
@@ -39,6 +41,11 @@ func (r Record) field(name string) string {
 		return r.Status
 	case FieldPath:
 		return r.Path
+	case FieldID:
+		return r.ID.String()
+	}
+	if value, ok := r.Projections[name]; ok {
+		return value
 	}
 	return r.ID.String()
 }
@@ -69,6 +76,23 @@ func newRecord(g *model.Graph, id model.ID) Record {
 		return Record{ID: id}
 	}
 	return Record{ID: n.ID, Title: n.Title, Status: n.Status, Path: n.Path}
+}
+
+// WithProjections fills the named projection columns into a listing, in place,
+// and returns it. A projection is derived rather than written down, so a record
+// carries it as the text an attribute clause reads it as.
+func WithProjections(records []Record, names []string, projections graph.Projections) []Record {
+	if len(names) == 0 {
+		return records
+	}
+	for i := range records {
+		values := make(map[string]string, len(names))
+		for _, name := range names {
+			values[name] = graph.ProjectionValue(projections.Holds(name, records[i].ID))
+		}
+		records[i].Projections = values
+	}
+	return records
 }
 
 // RecordsText writes one record per line, the named fields separated by tabs.

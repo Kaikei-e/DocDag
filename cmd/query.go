@@ -36,10 +36,6 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	fields, err := recordFields(cmd)
-	if err != nil {
-		return err
-	}
 	flags := cmd.Flags()
 	binding, err := flags.GetBool(flagBinding)
 	if err != nil {
@@ -81,13 +77,17 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	fields, err := recordFields(cmd, cfg)
+	if err != nil {
+		return err
+	}
 	out := cmd.OutOrStdout()
 
 	if binding {
 		if err := requireSupersedes(cfg); err != nil {
 			return err
 		}
-		records := render.Records(g, graph.BindingSet(g, cfg))
+		records := withProjections(g, cfg, render.Records(g, graph.BindingSet(g, cfg)), fields)
 		if format == formatJSON {
 			err = render.RecordsJSON(out, records)
 		} else {
@@ -117,7 +117,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return domainErr("query %s: %v", id, err)
 	}
-	records := render.QueryRecords(g, results)
+	records := withProjections(g, cfg, render.QueryRecords(g, results), fields)
 	if format == formatJSON {
 		err = render.RecordsJSON(out, records)
 	} else {

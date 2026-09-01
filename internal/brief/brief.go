@@ -105,16 +105,23 @@ func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief
 	}
 	b.Ref = ref
 
+	// What is binding is a projection over the whole graph, so it is evaluated
+	// once here rather than per candidate document.
+	binding := make(map[model.ID]bool)
+	for _, current := range graph.BindingSet(g, cfg) {
+		binding[current] = true
+	}
+
 	taken := map[model.ID]bool{id: true}
-	if b.ResolvesTo, err = entries(g, cfg, opts, taken, resolution(g, cfg, id), true); err != nil {
+	if b.ResolvesTo, err = entries(g, opts, taken, binding, resolution(g, cfg, id), true); err != nil {
 		return nil, err
 	}
 	ancestors := within(g, graph.Reverse(g, opts.Types...), id, opts.Depth)
-	if b.Ancestors, err = entries(g, cfg, opts, taken, ancestors, false); err != nil {
+	if b.Ancestors, err = entries(g, opts, taken, binding, ancestors, false); err != nil {
 		return nil, err
 	}
 	descendants := within(g, graph.Adjacency(g, opts.Types...), id, opts.Depth)
-	if b.Descendants, err = entries(g, cfg, opts, taken, descendants, false); err != nil {
+	if b.Descendants, err = entries(g, opts, taken, binding, descendants, false); err != nil {
 		return nil, err
 	}
 
@@ -167,13 +174,13 @@ func within(g *model.Graph, adj map[model.ID][]model.ID, id model.ID, depth int)
 // entries builds the entries of one group, skipping the documents an earlier
 // group already reported. Binding documents alone are kept unless the caller
 // asked for all of them; the resolution is always kept.
-func entries(g *model.Graph, cfg config.Config, opts Options, taken map[model.ID]bool, ids []model.ID, always bool) ([]Entry, error) {
+func entries(g *model.Graph, opts Options, taken, binding map[model.ID]bool, ids []model.ID, always bool) ([]Entry, error) {
 	out := []Entry{}
 	for _, id := range ids {
 		if taken[id] {
 			continue
 		}
-		if !always && !opts.All && !graph.Binding(g, cfg, id) {
+		if !always && !opts.All && !binding[id] {
 			continue
 		}
 		taken[id] = true

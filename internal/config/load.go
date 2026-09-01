@@ -140,6 +140,12 @@ func Merge(base, override Config) Config {
 	if override.Rules != nil {
 		merged.Rules = slices.Clone(override.Rules)
 	}
+	if override.Projections != nil {
+		merged.Projections = slices.Clone(override.Projections)
+	}
+	if override.Binding != "" {
+		merged.Binding = override.Binding
+	}
 	merged.References = mergeReferences(base.References, override.References)
 	if override.AcyclicUnion {
 		merged.AcyclicUnion = true
@@ -147,9 +153,15 @@ func Merge(base, override Config) Config {
 	if len(override.Structural) > 0 {
 		merged.Structural = maps.Clone(override.Structural)
 	}
+	if override.Edges != nil && override.Projections == nil {
+		merged = dropUnsupportedProjections(merged)
+	}
 	if merged.StatusField != base.StatusField {
 		if override.Rules == nil {
 			merged.Rules = retargetRules(base.Rules, base.StatusField, merged.StatusField)
+		}
+		if override.Projections == nil {
+			merged.Projections = retargetProjections(base.Projections, base.StatusField, merged.StatusField)
 		}
 		if override.DerivedEdges == nil {
 			merged.DerivedEdges = retargetDerivedEdges(base.DerivedEdges, base.StatusField, merged.StatusField)
@@ -178,17 +190,84 @@ func mergeReferences(base, override ReferencesSpec) ReferencesSpec {
 func retargetRules(rules []Rule, from, to string) []Rule {
 	out := make([]Rule, 0, len(rules))
 	for _, rule := range rules {
-		cond, ok := rule.When.Attr[from]
-		if ok {
-			attr := make(map[string]AttrCondition, len(rule.When.Attr))
-			maps.Copy(attr, rule.When.Attr)
-			delete(attr, from)
-			attr[to] = cond
-			rule.When.Attr = attr
-		}
+		rule.When.Attr = retargetAttrs(rule.When.Attr, from, to)
 		out = append(out, rule)
 	}
 	return out
+}
+
+// retargetProjections moves the inherited projections onto a renamed status
+// field, for the same reason the rules move: a binding projection still reading
+// the preset's status key would hold everywhere, and every listing would call
+// every document current.
+func retargetProjections(projections []ProjectionSpec, from, to string) []ProjectionSpec {
+	out := make([]ProjectionSpec, 0, len(projections))
+	for _, spec := range projections {
+		spec.When.Attr = retargetAttrs(spec.When.Attr, from, to)
+		if spec.AnyOf != nil {
+			alternatives := make([]ProjectionAlt, 0, len(spec.AnyOf))
+			for _, alt := range spec.AnyOf {
+				alt.When.Attr = retargetAttrs(alt.When.Attr, from, to)
+				alternatives = append(alternatives, alt)
+			}
+			spec.AnyOf = alternatives
+		}
+		out = append(out, spec)
+	}
+	return out
+}
+
+// dropUnsupportedProjections drops the inherited projections that read an edge
+// type the corpus replaced away, and the binding that named one of them. The
+// preset's projections are written against the preset's edges: a corpus that
+// declares an edge vocabulary of its own and no projections is not asking for a
+// projection it has no vocabulary for, and keeping one would fail validation on
+// a configuration nobody wrote. What is binding then falls back on the built-in
+// definition, the same answer the corpus got before it had projections at all.
+func dropUnsupportedProjections(cfg Config) Config {
+	kept := make([]ProjectionSpec, 0, len(cfg.Projections))
+	for _, spec := range cfg.Projections {
+		if !cfg.supports(spec) {
+			if cfg.Binding == spec.Name {
+				cfg.Binding = ""
+			}
+			continue
+		}
+		kept = append(kept, spec)
+	}
+	cfg.Projections = kept
+	return cfg
+}
+
+// supports reports whether every edge type a projection reads is declared.
+func (c Config) supports(spec ProjectionSpec) bool {
+	for _, cond := range spec.Conditions() {
+		for _, clause := range cond.EdgeClauses() {
+			if _, ok := c.Edge(model.EdgeType(clause.Edge)); !ok {
+				return false
+			}
+		}
+		for _, clause := range cond.ViaClauses() {
+			if _, ok := c.Edge(model.EdgeType(clause.Edge)); !ok {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// retargetAttrs moves one attribute clause onto a renamed key, copying the map
+// so the inherited configuration keeps the clause it was written with.
+func retargetAttrs(attrs map[string]AttrCondition, from, to string) map[string]AttrCondition {
+	cond, ok := attrs[from]
+	if !ok {
+		return attrs
+	}
+	moved := make(map[string]AttrCondition, len(attrs))
+	maps.Copy(moved, attrs)
+	delete(moved, from)
+	moved[to] = cond
+	return moved
 }
 
 // retargetDerivedEdges moves the inherited derived edges onto a renamed status

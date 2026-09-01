@@ -83,6 +83,28 @@ func TestADRPreset(t *testing.T) {
 		}
 	})
 
+	t.Run("one projection, and it is what binding names", func(t *testing.T) {
+		if len(cfg.Projections) != 1 {
+			t.Fatalf("projections = %+v, want one", cfg.Projections)
+		}
+		spec := cfg.Projections[0]
+		if spec.Name != ProjectionAcceptedUnsuperseded {
+			t.Errorf("projection name = %q, want %q", spec.Name, ProjectionAcceptedUnsuperseded)
+		}
+		if cfg.Binding != ProjectionAcceptedUnsuperseded {
+			t.Errorf("binding = %q, want %q", cfg.Binding, ProjectionAcceptedUnsuperseded)
+		}
+		if spec.When.NotInbound != EdgeSupersedes.String() {
+			t.Errorf("projection not_inbound = %q, want %q", spec.When.NotInbound, EdgeSupersedes)
+		}
+		if got := testDeref(t, "projection attr eq", spec.When.Attr[cfg.StatusField].Eq); got != StatusAccepted {
+			t.Errorf("projection attr eq = %q, want %q", got, StatusAccepted)
+		}
+		if len(spec.AnyOf) != 0 {
+			t.Errorf("projection any_of = %+v, want none", spec.AnyOf)
+		}
+	})
+
 	t.Run("two default rules", func(t *testing.T) {
 		if len(cfg.Rules) != 2 {
 			t.Fatalf("rules = %+v, want two", cfg.Rules)
@@ -95,8 +117,8 @@ func TestADRPreset(t *testing.T) {
 		if drift.Severity != model.SeverityError {
 			t.Errorf("%s severity = %q, want %q", drift.Name, drift.Severity, model.SeverityError)
 		}
-		if drift.When.Inbound != EdgeSupersedes.String() {
-			t.Errorf("%s inbound = %q, want %q", drift.Name, drift.When.Inbound, EdgeSupersedes)
+		if drift.When.Inbound.Edge != EdgeSupersedes.String() {
+			t.Errorf("%s inbound = %q, want %q", drift.Name, drift.When.Inbound.Edge, EdgeSupersedes)
 		}
 		if got := testDeref(t, "status_drift attr not", drift.When.Attr[cfg.StatusField].Not); got != StatusSuperseded {
 			t.Errorf("%s attr not = %q, want %q", drift.Name, got, StatusSuperseded)

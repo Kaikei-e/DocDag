@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -254,4 +256,45 @@ func testMustNotHang(t *testing.T, within time.Duration, fn func()) {
 
 func testChainID(i int) string {
 	return fmt.Sprintf("n%05d", i)
+}
+
+// testFixturesDir is where the repository keeps its document corpora.
+func testFixturesDir() string {
+	return filepath.Join("..", "..", "testdata", "fixtures")
+}
+
+// testFixtureNames lists every corpus the repository carries, sorted, so a
+// property can be checked against all of them rather than a chosen few.
+func testFixtureNames(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(testFixturesDir())
+	if err != nil {
+		t.Fatalf("read fixtures: %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// testFixtureGraph builds one corpus under the ADR preset, the way the CLI
+// does, so a property is checked against documents a reader can open.
+func testFixtureGraph(t *testing.T, name string) (*model.Graph, config.Config) {
+	t.Helper()
+	cfg := config.ADRPreset()
+	cfg.Dir = filepath.Join(testFixturesDir(), name)
+	docs, err := parse.Dir(cfg.Dir, cfg)
+	if err != nil {
+		t.Fatalf("parse %s: %v", cfg.Dir, err)
+	}
+	return Build(docs, cfg), cfg
+}
+
+// testProjection declares one projection holding under a condition.
+func testProjection(name string, when config.Condition) config.ProjectionSpec {
+	return config.ProjectionSpec{Name: name, When: when}
 }

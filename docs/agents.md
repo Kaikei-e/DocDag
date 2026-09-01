@@ -38,7 +38,8 @@ and `budget`.
 
 `resolve` and `query` take `--fields id,title,status,path` and print those columns, tab
 separated, in the order asked for; the default is `id` alone, so a pipeline reading identifiers is
-unaffected. Under `--format json` these commands answer with an array of objects carrying every
+unaffected. A projection the configuration declares is a column too, printed as `true` or `false` —
+see [configuration.md](configuration.md). Under `--format json` these commands answer with an array of objects carrying every
 field, plus `"reference": true` on a reference-layer hit — where v0.1 answered with an array of
 identifiers.
 

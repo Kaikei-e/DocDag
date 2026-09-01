@@ -2,9 +2,12 @@ package config
 
 import (
 	"errors"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/goccy/go-yaml"
 
 	"github.com/Kaikei-e/DocDag/internal/model"
 )
@@ -12,6 +15,7 @@ import (
 func testEq(v string) AttrCondition  { return AttrCondition{Eq: &v} }
 func testNot(v string) AttrCondition { return AttrCondition{Not: &v} }
 func strptr(v string) *string        { return &v }
+func testInt(v int) *int             { return &v }
 
 func TestConfigEdge(t *testing.T) {
 	cfg := ADRPreset()
@@ -242,7 +246,7 @@ func TestConfigValidate(t *testing.T) {
 		},
 		{
 			name:    "a rule condition naming an undeclared edge type",
-			mutate:  func(c *Config) { c.Rules[0].When.Inbound = "relates-to" },
+			mutate:  func(c *Config) { c.Rules[0].When.Inbound = EdgeCondition{Edge: "relates-to"} },
 			wantErr: true,
 		},
 		{
@@ -301,7 +305,7 @@ func TestConfigValidate(t *testing.T) {
 			name: "a condition with alternatives and a negation",
 			mutate: func(c *Config) {
 				c.Rules[0].When = Condition{
-					AnyOf: []Condition{{Inbound: EdgeSupersedes.String()}, {Attr: map[string]AttrCondition{"status": testEq(StatusRejected)}}},
+					AnyOf: []Condition{{Inbound: EdgeCondition{Edge: EdgeSupersedes.String()}}, {Attr: map[string]AttrCondition{"status": testEq(StatusRejected)}}},
 					Not:   &Condition{Attr: map[string]AttrCondition{"status": testEq(StatusProposed)}},
 				}
 			},
@@ -309,14 +313,14 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "an alternative naming an undeclared edge type",
 			mutate: func(c *Config) {
-				c.Rules[0].When.AnyOf = []Condition{{Inbound: "relates-to"}}
+				c.Rules[0].When.AnyOf = []Condition{{Inbound: EdgeCondition{Edge: "relates-to"}}}
 			},
 			wantErr: true,
 		},
 		{
 			name: "a negation naming an undeclared edge type",
 			mutate: func(c *Config) {
-				c.Rules[0].When.Not = &Condition{Outbound: "relates-to"}
+				c.Rules[0].When.Not = &Condition{Outbound: EdgeCondition{Edge: "relates-to"}}
 			},
 			wantErr: true,
 		},
@@ -374,8 +378,8 @@ func TestConfigValidate(t *testing.T) {
 		{
 			name: "an outbound condition on a declared edge type is valid",
 			mutate: func(c *Config) {
-				c.Rules[0].When.Inbound = ""
-				c.Rules[0].When.Outbound = EdgeDependsOn.String()
+				c.Rules[0].When.Inbound = EdgeCondition{}
+				c.Rules[0].When.Outbound = EdgeCondition{Edge: EdgeDependsOn.String()}
 			},
 		},
 		{
@@ -454,17 +458,31 @@ func TestConditionEdgeClauses(t *testing.T) {
 		{
 			name: "every clause of the vocabulary, in declaration order",
 			cond: Condition{
-				Inbound:     "supersedes",
+				Inbound:     EdgeCondition{Edge: "supersedes"},
 				NotInbound:  "depends-on",
-				Outbound:    "amends",
+				Outbound:    EdgeCondition{Edge: "amends"},
 				NotOutbound: "relates-to",
 			},
 			want: []EdgeClause{
-				{Edge: "supersedes", Inbound: true},
+				{Edge: "supersedes", Inbound: true, Min: 1},
 				{Edge: "depends-on", Inbound: true, Negate: true},
-				{Edge: "amends"},
+				{Edge: "amends", Min: 1},
 				{Edge: "relates-to", Negate: true},
 			},
+		},
+		{
+			name: "a threshold carries the window it asks for",
+			cond: Condition{Inbound: EdgeCondition{Edge: "supersedes", Min: testInt(2), Max: testInt(5)}},
+			want: []EdgeClause{{Edge: "supersedes", Inbound: true, Min: 2, Max: 5}},
+		},
+		{
+			name: "a threshold without a min asks for one edge or more",
+			cond: Condition{Outbound: EdgeCondition{Edge: "amends", Max: testInt(3)}},
+			want: []EdgeClause{{Edge: "amends", Min: 1, Max: 3}},
+		},
+		{
+			name: "a threshold without an edge type names no edge",
+			cond: Condition{Inbound: EdgeCondition{Min: testInt(2)}},
 		},
 		{
 			name: "only the populated clauses come back",
@@ -484,9 +502,9 @@ func TestConditionEdgeClauses(t *testing.T) {
 
 func TestValidateRejectsAnUndeclaredEdgeInEveryClause(t *testing.T) {
 	clauses := map[string]func(edge string) Condition{
-		"inbound":      func(edge string) Condition { return Condition{Inbound: edge} },
+		"inbound":      func(edge string) Condition { return Condition{Inbound: EdgeCondition{Edge: edge}} },
 		"not_inbound":  func(edge string) Condition { return Condition{NotInbound: edge} },
-		"outbound":     func(edge string) Condition { return Condition{Outbound: edge} },
+		"outbound":     func(edge string) Condition { return Condition{Outbound: EdgeCondition{Edge: edge}} },
 		"not_outbound": func(edge string) Condition { return Condition{NotOutbound: edge} },
 	}
 	for name, build := range clauses {
@@ -562,4 +580,440 @@ func TestConfigValidateFilename(t *testing.T) {
 			}
 		})
 	}
+}
+
+// testProjectionConfig is the ADR preset with a second projection layered on,
+// so a mutation can break one projection without emptying the list.
+func testProjectionConfig() Config {
+	cfg := ADRPreset()
+	cfg.Projections = append(slices.Clone(cfg.Projections), ProjectionSpec{
+		Name: "depended_on",
+		When: Condition{Inbound: EdgeCondition{Edge: EdgeDependsOn.String()}},
+	})
+	return cfg
+}
+
+func TestEdgeConditionAcceptsBothForms(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want EdgeCondition
+	}{
+		{
+			name: "the edge name alone",
+			src:  "inbound: supersedes\n",
+			want: EdgeCondition{Edge: "supersedes"},
+		},
+		{
+			name: "a threshold with a minimum",
+			src:  "inbound: {edge: supersedes, min: 5}\n",
+			want: EdgeCondition{Edge: "supersedes", Min: testInt(5)},
+		},
+		{
+			name: "a threshold with both bounds, written as a block",
+			src:  "inbound:\n  edge: supersedes\n  min: 2\n  max: 4\n",
+			want: EdgeCondition{Edge: "supersedes", Min: testInt(2), Max: testInt(4)},
+		},
+		{
+			name: "a threshold with a maximum alone",
+			src:  "inbound: {edge: supersedes, max: 1}\n",
+			want: EdgeCondition{Edge: "supersedes", Max: testInt(1)},
+		},
+		{name: "an absent clause"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got Condition
+
+			if err := yaml.Unmarshal([]byte(tt.src), &got); err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			if !reflect.DeepEqual(got.Inbound, tt.want) {
+				t.Fatalf("inbound = %+v, want %+v", got.Inbound, tt.want)
+			}
+		})
+	}
+
+	t.Run("the string form is sugar for one edge or more", func(t *testing.T) {
+		var sugar, spelled Condition
+		if err := yaml.Unmarshal([]byte("outbound: supersedes\n"), &sugar); err != nil {
+			t.Fatalf("Unmarshal: %v", err)
+		}
+		if err := yaml.Unmarshal([]byte("outbound: {edge: supersedes, min: 1}\n"), &spelled); err != nil {
+			t.Fatalf("Unmarshal: %v", err)
+		}
+		if !slices.Equal(sugar.EdgeClauses(), spelled.EdgeClauses()) {
+			t.Fatalf("clauses = %+v, want %+v", sugar.EdgeClauses(), spelled.EdgeClauses())
+		}
+	})
+
+	t.Run("a clause that is neither a name nor a mapping is a decode error", func(t *testing.T) {
+		var got Condition
+
+		if err := yaml.Unmarshal([]byte("inbound: [supersedes]\n"), &got); err == nil {
+			t.Fatalf("Unmarshal = %+v, want an error", got)
+		}
+	})
+}
+
+func TestConditionOneHopClauses(t *testing.T) {
+	src := "via: {edge: depends-on, attr: {status: {eq: deprecated}}}\n" +
+		"via_inbound: {edge: supersedes, attr: {status: {eq: accepted}}}\n"
+	var cond Condition
+
+	if err := yaml.Unmarshal([]byte(src), &cond); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	clauses := cond.ViaClauses()
+	if len(clauses) != 2 {
+		t.Fatalf("ViaClauses = %+v, want two", clauses)
+	}
+	if clauses[0].Edge != "depends-on" || clauses[0].Inbound || clauses[0].Key() != "via" {
+		t.Errorf("outbound clause = %+v", clauses[0])
+	}
+	if clauses[1].Edge != "supersedes" || !clauses[1].Inbound || clauses[1].Key() != "via_inbound" {
+		t.Errorf("inbound clause = %+v", clauses[1])
+	}
+	if got := testDeref(t, "via attr eq", clauses[0].Attr["status"].Eq); got != StatusDeprecated {
+		t.Errorf("via attr eq = %q, want %q", got, StatusDeprecated)
+	}
+	if len(cond.EdgeClauses()) != 0 {
+		t.Errorf("EdgeClauses = %+v, want none: a one-hop clause is not an existence question", cond.EdgeClauses())
+	}
+}
+
+func TestEdgeClauseHolds(t *testing.T) {
+	tests := []struct {
+		name   string
+		clause EdgeClause
+		degree int
+		want   bool
+	}{
+		{name: "one edge or more, met", clause: EdgeClause{Min: 1}, degree: 1, want: true},
+		{name: "one edge or more, unmet", clause: EdgeClause{Min: 1}},
+		{name: "a minimum met exactly", clause: EdgeClause{Min: 5}, degree: 5, want: true},
+		{name: "a minimum missed by one", clause: EdgeClause{Min: 5}, degree: 4},
+		{name: "a maximum met exactly", clause: EdgeClause{Min: 1, Max: 3}, degree: 3, want: true},
+		{name: "a maximum exceeded by one", clause: EdgeClause{Min: 1, Max: 3}, degree: 4},
+		{name: "an absent maximum is unbounded", clause: EdgeClause{Min: 1}, degree: 99, want: true},
+		{name: "a negated clause wants no edge at all", clause: EdgeClause{Negate: true}, want: true},
+		{name: "a negated clause with an edge", clause: EdgeClause{Negate: true}, degree: 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.clause.Holds(tt.degree); got != tt.want {
+				t.Fatalf("Holds(%d) = %v, want %v", tt.degree, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateTheExtendedConditionVocabulary(t *testing.T) {
+	tests := []struct {
+		name    string
+		when    Condition
+		wantErr bool
+	}{
+		{name: "a threshold on a declared edge", when: Condition{Inbound: EdgeCondition{Edge: "supersedes", Min: testInt(5)}}},
+		{name: "a window on a declared edge", when: Condition{Outbound: EdgeCondition{Edge: "depends-on", Min: testInt(1), Max: testInt(3)}}},
+		{
+			name:    "a threshold on an undeclared edge",
+			when:    Condition{Inbound: EdgeCondition{Edge: "relates-to", Min: testInt(2)}},
+			wantErr: true,
+		},
+		{
+			name:    "a threshold naming no edge at all",
+			when:    Condition{Inbound: EdgeCondition{Min: testInt(2)}},
+			wantErr: true,
+		},
+		{
+			name:    "a minimum below one",
+			when:    Condition{Inbound: EdgeCondition{Edge: "supersedes", Min: testInt(0)}},
+			wantErr: true,
+		},
+		{
+			name:    "a maximum of zero, which is absence written the wrong way",
+			when:    Condition{Inbound: EdgeCondition{Edge: "supersedes", Max: testInt(0)}},
+			wantErr: true,
+		},
+		{
+			name:    "a minimum above the maximum",
+			when:    Condition{Inbound: EdgeCondition{Edge: "supersedes", Min: testInt(3), Max: testInt(2)}},
+			wantErr: true,
+		},
+		{
+			name: "a one-hop clause on a declared edge",
+			when: Condition{Via: &ViaCondition{Edge: "depends-on", Attr: map[string]AttrCondition{"status": testEq(StatusDeprecated)}}},
+		},
+		{
+			name: "an inbound one-hop clause",
+			when: Condition{ViaInbound: &ViaCondition{Edge: "supersedes", Attr: map[string]AttrCondition{"status": testEq(StatusAccepted)}}},
+		},
+		{
+			name:    "a one-hop clause on an undeclared edge",
+			when:    Condition{Via: &ViaCondition{Edge: "relates-to", Attr: map[string]AttrCondition{"status": testEq(StatusAccepted)}}},
+			wantErr: true,
+		},
+		{
+			name:    "a one-hop clause naming no edge",
+			when:    Condition{Via: &ViaCondition{Attr: map[string]AttrCondition{"status": testEq(StatusAccepted)}}},
+			wantErr: true,
+		},
+		{
+			name:    "a one-hop attribute with two operands",
+			when:    Condition{Via: &ViaCondition{Edge: "depends-on", Attr: map[string]AttrCondition{"status": {Eq: strptr("a"), Not: strptr("b")}}}},
+			wantErr: true,
+		},
+		{
+			name:    "a one-hop attribute with no operand",
+			when:    Condition{Via: &ViaCondition{Edge: "depends-on", Attr: map[string]AttrCondition{"status": {}}}},
+			wantErr: true,
+		},
+		{
+			name:    "a threshold nested inside an alternative",
+			when:    Condition{AnyOf: []Condition{{Inbound: EdgeCondition{Edge: "relates-to"}}}},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.Rules = []Rule{{Name: "r", Severity: model.SeverityWarn, When: tt.when, Message: "m"}}
+
+			err := cfg.Validate()
+
+			if tt.wantErr {
+				if !errors.Is(err, model.ErrInvalidConfig) {
+					t.Fatalf("Validate = %v, want it to wrap model.ErrInvalidConfig", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate = %v, want no error", err)
+			}
+		})
+	}
+}
+
+func TestValidateProjections(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr bool
+	}{
+		{name: "the preset's own projection"},
+		{
+			name: "a projection reading another one",
+			mutate: func(c *Config) {
+				c.Projections = append(c.Projections, ProjectionSpec{
+					Name: "settled",
+					When: Condition{Attr: map[string]AttrCondition{ProjectionAcceptedUnsuperseded: testEq("true")}},
+				})
+			},
+		},
+		{
+			name: "a projection with alternatives",
+			mutate: func(c *Config) {
+				c.Projections[0] = ProjectionSpec{
+					Name: ProjectionAcceptedUnsuperseded,
+					AnyOf: []ProjectionAlt{
+						{When: Condition{Attr: map[string]AttrCondition{DefaultStatusField: testEq(StatusAccepted)}}},
+						{When: Condition{NotInbound: EdgeSupersedes.String()}},
+					},
+				}
+			},
+		},
+		{
+			name:    "a projection without a name",
+			mutate:  func(c *Config) { c.Projections[0].Name = "" },
+			wantErr: true,
+		},
+		{
+			name: "two projections with the same name",
+			mutate: func(c *Config) {
+				c.Projections = append(c.Projections, c.Projections[0])
+			},
+			wantErr: true,
+		},
+		{
+			name: "a projection with neither when nor any_of",
+			mutate: func(c *Config) {
+				c.Projections[0] = ProjectionSpec{Name: "empty"}
+				c.Binding = "empty"
+			},
+			wantErr: true,
+		},
+		{
+			name: "a projection with both when and any_of",
+			mutate: func(c *Config) {
+				c.Projections[0].AnyOf = []ProjectionAlt{{When: Condition{NotInbound: EdgeSupersedes.String()}}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "an alternative without a when block",
+			mutate: func(c *Config) {
+				c.Projections[0] = ProjectionSpec{Name: ProjectionAcceptedUnsuperseded, AnyOf: []ProjectionAlt{{}}}
+			},
+			wantErr: true,
+		},
+		{
+			name:    "a projection naming an undeclared edge type",
+			mutate:  func(c *Config) { c.Projections[0].When.Inbound = EdgeCondition{Edge: "relates-to"} },
+			wantErr: true,
+		},
+		{
+			name:    "a projection attribute with no operand",
+			mutate:  func(c *Config) { c.Projections[0].When.Attr = map[string]AttrCondition{"status": {}} },
+			wantErr: true,
+		},
+		{
+			name:    "a binding naming no declared projection",
+			mutate:  func(c *Config) { c.Binding = "in_force" },
+			wantErr: true,
+		},
+		{
+			name: "a binding beside no projections at all, which asks for the built-in definition",
+			mutate: func(c *Config) {
+				c.Projections = []ProjectionSpec{}
+			},
+		},
+		{
+			name: "a rule reading a projection",
+			mutate: func(c *Config) {
+				c.Rules[0].When.Attr = map[string]AttrCondition{ProjectionAcceptedUnsuperseded: testEq("true")}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			if tt.mutate != nil {
+				tt.mutate(&cfg)
+			}
+
+			err := cfg.Validate()
+
+			if tt.wantErr {
+				if !errors.Is(err, model.ErrInvalidConfig) {
+					t.Fatalf("Validate = %v, want it to wrap model.ErrInvalidConfig", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Validate = %v, want no error", err)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsAProjectionReferenceCycle(t *testing.T) {
+	reads := func(name, other string) ProjectionSpec {
+		return ProjectionSpec{Name: name, When: Condition{Attr: map[string]AttrCondition{other: testEq("true")}}}
+	}
+	tests := []struct {
+		name        string
+		projections []ProjectionSpec
+	}{
+		{
+			name:        "a projection reading itself",
+			projections: []ProjectionSpec{reads("a", "a")},
+		},
+		{
+			name:        "two projections reading each other",
+			projections: []ProjectionSpec{reads("a", "b"), reads("b", "a")},
+		},
+		{
+			name:        "a longer loop",
+			projections: []ProjectionSpec{reads("a", "b"), reads("b", "c"), reads("c", "a")},
+		},
+		{
+			name: "a loop closed through a one-hop clause",
+			projections: []ProjectionSpec{
+				reads("a", "b"),
+				{Name: "b", When: Condition{Via: &ViaCondition{Edge: EdgeDependsOn.String(), Attr: map[string]AttrCondition{"a": testEq("true")}}}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			cfg.Projections, cfg.Binding = tt.projections, ""
+
+			err := cfg.Validate()
+
+			if !errors.Is(err, model.ErrInvalidConfig) {
+				t.Fatalf("Validate = %v, want it to wrap model.ErrInvalidConfig", err)
+			}
+			if !strings.Contains(err.Error(), "cycle") {
+				t.Errorf("error = %v, want it to name the cycle", err)
+			}
+		})
+	}
+
+	t.Run("a forward reference in list order is not a cycle", func(t *testing.T) {
+		cfg := ADRPreset()
+		cfg.Projections = []ProjectionSpec{
+			reads("a", "b"),
+			{Name: "b", When: Condition{NotInbound: EdgeSupersedes.String()}},
+		}
+		cfg.Binding = "a"
+
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate = %v, want no error", err)
+		}
+	})
+}
+
+func TestProjectionAccessors(t *testing.T) {
+	cfg := testProjectionConfig()
+
+	t.Run("names come back in declaration order", func(t *testing.T) {
+		want := []string{ProjectionAcceptedUnsuperseded, "depended_on"}
+
+		if got := cfg.ProjectionNames(); !slices.Equal(got, want) {
+			t.Fatalf("ProjectionNames = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("the binding projection is the one binding names", func(t *testing.T) {
+		spec, ok := cfg.BindingProjection()
+
+		if !ok || spec.Name != ProjectionAcceptedUnsuperseded {
+			t.Fatalf("BindingProjection = %+v, %v, want %q", spec, ok, ProjectionAcceptedUnsuperseded)
+		}
+	})
+
+	t.Run("a configuration without projections resolves no binding", func(t *testing.T) {
+		bare := cfg
+		bare.Projections = nil
+
+		if spec, ok := bare.BindingProjection(); ok {
+			t.Fatalf("BindingProjection = %+v, want none", spec)
+		}
+	})
+
+	t.Run("a projection reads its own attribute keys and its neighbours'", func(t *testing.T) {
+		spec := ProjectionSpec{
+			Name: "settled",
+			AnyOf: []ProjectionAlt{
+				{When: Condition{Attr: map[string]AttrCondition{"level": testEq("MUST")}}},
+				{When: Condition{Via: &ViaCondition{Edge: "depends-on", Attr: map[string]AttrCondition{"enforced": testEq("true")}}}},
+			},
+		}
+		want := []string{"enforced", "level"}
+
+		if got := spec.AttrKeys(); !slices.Equal(got, want) {
+			t.Fatalf("AttrKeys = %v, want %v", got, want)
+		}
+		if got := len(spec.Whens()); got != 2 {
+			t.Fatalf("Whens = %d, want 2", got)
+		}
+	})
 }

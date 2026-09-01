@@ -726,6 +726,7 @@ func TestCheck(t *testing.T) {
 
 func TestMatchCondition(t *testing.T) {
 	g := testRulesFixture()
+	cfg := config.ADRPreset()
 
 	tests := []struct {
 		name string
@@ -735,19 +736,19 @@ func TestMatchCondition(t *testing.T) {
 	}{
 		{
 			name: "inbound matches a document with that inbound edge type",
-			cond: config.Condition{Inbound: config.EdgeSupersedes.String()},
+			cond: config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			id:   "0001",
 			want: true,
 		},
 		{
 			name: "inbound does not match a document without one",
-			cond: config.Condition{Inbound: config.EdgeSupersedes.String()},
+			cond: config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			id:   "0002",
 			want: false,
 		},
 		{
 			name: "inbound is edge-type specific",
-			cond: config.Condition{Inbound: config.EdgeSupersedes.String()},
+			cond: config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			id:   "0003",
 			want: false,
 		},
@@ -765,13 +766,13 @@ func TestMatchCondition(t *testing.T) {
 		},
 		{
 			name: "outbound matches a document with that outbound edge type",
-			cond: config.Condition{Outbound: config.EdgeSupersedes.String()},
+			cond: config.Condition{Outbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			id:   "0002",
 			want: true,
 		},
 		{
 			name: "outbound does not match a sink",
-			cond: config.Condition{Outbound: config.EdgeSupersedes.String()},
+			cond: config.Condition{Outbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			id:   "0001",
 			want: false,
 		},
@@ -841,7 +842,7 @@ func TestMatchCondition(t *testing.T) {
 		{
 			name: "edge and attribute clauses are ANDed",
 			cond: config.Condition{
-				Inbound: config.EdgeSupersedes.String(),
+				Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()},
 				Attr:    map[string]config.AttrCondition{"status": testAttrNot(config.StatusSuperseded)},
 			},
 			id:   "0001",
@@ -850,7 +851,7 @@ func TestMatchCondition(t *testing.T) {
 		{
 			name: "a failing clause fails the whole condition",
 			cond: config.Condition{
-				Inbound: config.EdgeSupersedes.String(),
+				Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()},
 				Attr:    map[string]config.AttrCondition{"status": testAttrNot(config.StatusSuperseded)},
 			},
 			id:   "0003",
@@ -872,7 +873,7 @@ func TestMatchCondition(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := MatchCondition(g, tt.cond, model.ID(tt.id)); got != tt.want {
+			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id)); got != tt.want {
 				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
 			}
 		})
@@ -953,9 +954,10 @@ func TestMatchConditionOnListAttributes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			n := testNodeAttrs("0001", config.StatusAccepted, tt.attrs)
 			g := testGraph([]*model.Node{n}, nil, nil)
+			cfg := config.ADRPreset()
 			cond := config.Condition{Attr: map[string]config.AttrCondition{testListAttrsKey: tt.cond}}
 
-			if got := MatchCondition(g, cond, "0001"); got != tt.want {
+			if got := MatchCondition(g, cfg, cond, "0001"); got != tt.want {
 				t.Fatalf("MatchCondition = %v, want %v", got, tt.want)
 			}
 		})
@@ -973,6 +975,7 @@ func TestMatchConditionWithAlternativesAndNegation(t *testing.T) {
 		[]model.Edge{testEdge("0003", "0004", config.EdgeSupersedes)},
 		nil,
 	)
+	cfg := config.ADRPreset()
 	retired := config.Condition{
 		AnyOf: []config.Condition{
 			{Attr: map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusDeprecated)}},
@@ -1002,19 +1005,19 @@ func TestMatchConditionWithAlternativesAndNegation(t *testing.T) {
 		{
 			name: "a top-level clause can veto every alternative",
 			cond: config.Condition{
-				Inbound: config.EdgeSupersedes.String(),
+				Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()},
 				AnyOf:   retired.AnyOf,
 			},
 			id: "0001",
 		},
 		{
 			name: "a negation of an edge clause",
-			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeSupersedes.String()}},
+			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}}},
 			id:   "0004",
 		},
 		{
 			name: "a negation that does not hold leaves the condition alone",
-			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeSupersedes.String()}},
+			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}}},
 			id:   "0003",
 			want: true,
 		},
@@ -1022,7 +1025,7 @@ func TestMatchConditionWithAlternativesAndNegation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := MatchCondition(g, tt.cond, tt.id); got != tt.want {
+			if got := MatchCondition(g, cfg, tt.cond, tt.id); got != tt.want {
 				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
 			}
 		})
@@ -1097,7 +1100,7 @@ func TestEvalRules(t *testing.T) {
 			Name:     "accepted_with_dependencies",
 			Severity: model.SeverityWarn,
 			When: config.Condition{
-				Outbound: config.EdgeDependsOn.String(),
+				Outbound: config.EdgeCondition{Edge: config.EdgeDependsOn.String()},
 				Attr:     map[string]config.AttrCondition{"status": testAttrEq(config.StatusAccepted)},
 			},
 			Message: "an accepted decision still depends on another",
@@ -1423,7 +1426,7 @@ func TestEvalRuleLocatesTheClauseItRead(t *testing.T) {
 		rule := config.Rule{
 			Name:     "superseding",
 			Severity: model.SeverityWarn,
-			When:     config.Condition{Outbound: config.EdgeSupersedes.String()},
+			When:     config.Condition{Outbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			Message:  "supersedes another document",
 		}
 
@@ -1459,3 +1462,193 @@ func TestSortFindingsOrdersByPathThenLine(t *testing.T) {
 
 	testAssertFindings(t, "SortFindings", got, want)
 }
+
+// testDegreeFixture carries a fan-in of depends-on edges, one of them from a
+// document the corpus does not hold.
+func testDegreeFixture() *model.Graph {
+	return testGraph(
+		[]*model.Node{
+			testNode("0001", config.StatusAccepted),
+			testNode("0002", config.StatusAccepted),
+			testNode("0003", config.StatusAccepted),
+			testNode("0004", config.StatusAccepted),
+		},
+		[]model.Edge{
+			testEdge("0002", "0001", config.EdgeDependsOn),
+			testEdge("0003", "0001", config.EdgeDependsOn),
+			testEdge("0004", "0001", config.EdgeDependsOn),
+			testEdge("0002", "0003", config.EdgeDependsOn),
+			testEdge("0099", "0004", config.EdgeDependsOn),
+		},
+		nil,
+	)
+}
+
+func TestMatchConditionOnDegreeThresholds(t *testing.T) {
+	g := testDegreeFixture()
+	cfg := config.ADRPreset()
+	inbound := func(min, max *int) config.Condition {
+		return config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeDependsOn.String(), Min: min, Max: max}}
+	}
+
+	tests := []struct {
+		name string
+		cond config.Condition
+		id   string
+		want bool
+	}{
+		{name: "the string form is one edge or more", cond: config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeDependsOn.String()}}, id: "0001", want: true},
+		{name: "a minimum met exactly", cond: inbound(testGraphInt(3), nil), id: "0001", want: true},
+		{name: "a minimum missed by one", cond: inbound(testGraphInt(4), nil), id: "0001"},
+		{name: "a minimum on a document with one edge", cond: inbound(testGraphInt(1), nil), id: "0003", want: true},
+		{name: "a minimum on a document with none", cond: inbound(testGraphInt(1), nil), id: "0002"},
+		{name: "a maximum met exactly", cond: inbound(nil, testGraphInt(3)), id: "0001", want: true},
+		{name: "a maximum exceeded", cond: inbound(nil, testGraphInt(2)), id: "0001"},
+		{name: "a maximum still needs one edge", cond: inbound(nil, testGraphInt(3)), id: "0002"},
+		{name: "a window met", cond: inbound(testGraphInt(1), testGraphInt(1)), id: "0003", want: true},
+		{name: "a window missed from above", cond: inbound(testGraphInt(1), testGraphInt(2)), id: "0001"},
+		{
+			name: "an edge from a document the corpus does not hold still counts",
+			cond: inbound(testGraphInt(1), nil),
+			id:   "0004",
+			want: true,
+		},
+		{
+			name: "an outbound threshold counts the other direction",
+			cond: config.Condition{Outbound: config.EdgeCondition{Edge: config.EdgeDependsOn.String(), Min: testGraphInt(2)}},
+			id:   "0002",
+			want: true,
+		},
+		{
+			name: "a threshold is edge-type specific",
+			cond: config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String(), Min: testGraphInt(1)}},
+			id:   "0001",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id)); got != tt.want {
+				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+// testViaFixture carries one accepted document depending on a deprecated one,
+// one depending only on a current one, and one depending on a document the
+// corpus does not hold.
+func testViaFixture() *model.Graph {
+	return testGraph(
+		[]*model.Node{
+			testNode("0001", config.StatusAccepted),
+			testNode("0002", config.StatusDeprecated),
+			testNodeAttrs("0003", config.StatusAccepted, map[string]any{"owner": "platform"}),
+			testNode("0004", config.StatusAccepted),
+			testNode("0005", config.StatusAccepted),
+		},
+		[]model.Edge{
+			testEdge("0001", "0002", config.EdgeDependsOn),
+			testEdge("0001", "0003", config.EdgeDependsOn),
+			testEdge("0004", "0003", config.EdgeDependsOn),
+			testEdge("0005", "0099", config.EdgeDependsOn),
+		},
+		nil,
+	)
+}
+
+func TestMatchConditionOnOneHopClauses(t *testing.T) {
+	g := testViaFixture()
+	cfg := config.ADRPreset()
+	via := func(attr map[string]config.AttrCondition) config.Condition {
+		return config.Condition{Via: &config.ViaCondition{Edge: config.EdgeDependsOn.String(), Attr: attr}}
+	}
+	viaInbound := func(attr map[string]config.AttrCondition) config.Condition {
+		return config.Condition{ViaInbound: &config.ViaCondition{Edge: config.EdgeDependsOn.String(), Attr: attr}}
+	}
+	deprecated := map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusDeprecated)}
+	accepted := map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusAccepted)}
+
+	tests := []struct {
+		name string
+		cond config.Condition
+		id   string
+		want bool
+	}{
+		{name: "one neighbour satisfying the clause is enough", cond: via(deprecated), id: "0001", want: true},
+		{name: "no neighbour satisfying the clause", cond: via(deprecated), id: "0004"},
+		{name: "a document with no such edge at all", cond: via(deprecated), id: "0002"},
+		{
+			name: "a neighbour the corpus does not hold is not a witness",
+			cond: via(deprecated),
+			id:   "0005",
+		},
+		{name: "the inbound direction reads the other way", cond: viaInbound(accepted), id: "0003", want: true},
+		{name: "the inbound direction does not read the outbound edges", cond: viaInbound(accepted), id: "0001"},
+		{
+			name: "every attribute of the clause has to hold on one neighbour",
+			cond: via(map[string]config.AttrCondition{
+				config.DefaultStatusField: testAttrEq(config.StatusAccepted),
+				"owner":                   testAttrEq("platform"),
+			}),
+			id:   "0001",
+			want: true,
+		},
+		{
+			name: "no single neighbour holds every attribute",
+			cond: via(map[string]config.AttrCondition{
+				config.DefaultStatusField: testAttrEq(config.StatusDeprecated),
+				"owner":                   testAttrEq("platform"),
+			}),
+			id: "0001",
+		},
+		{
+			name: "an attribute the neighbour does not carry",
+			cond: via(map[string]config.AttrCondition{"owner": testAttrEq("storage")}),
+			id:   "0001",
+		},
+		{
+			name: "a negative clause is satisfied by a neighbour without the attribute",
+			cond: via(map[string]config.AttrCondition{"owner": testAttrNot("platform")}),
+			id:   "0001",
+			want: true,
+		},
+		{
+			name: "a clause without attributes asks only that a neighbour exists",
+			cond: via(nil),
+			id:   "0004",
+			want: true,
+		},
+		{name: "an unknown document matches nothing", cond: via(deprecated), id: "0099"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id)); got != tt.want {
+				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvalRuleLocatesAOneHopClauseAtTheEdgeKey(t *testing.T) {
+	g := testViaFixture()
+	cfg := config.ADRPreset()
+	rule := config.Rule{
+		Name:     "stale_dependency",
+		Severity: model.SeverityWarn,
+		When: config.Condition{Via: &config.ViaCondition{
+			Edge: config.EdgeDependsOn.String(),
+			Attr: map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusDeprecated)},
+		}},
+		Message: "depends on a deprecated decision",
+	}
+
+	f := testAssertSingleFinding(t, EvalRule(g, cfg, rule), rule.Name, model.SeverityWarn, "0001")
+
+	if want := testNodeLocation("0001", testDependsOnLine); f.Location != want {
+		t.Fatalf("location = %+v, want %+v (the edge the reader can change)", f.Location, want)
+	}
+}
+
+func testGraphInt(v int) *int { return &v }

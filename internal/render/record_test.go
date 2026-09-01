@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
 	"github.com/Kaikei-e/DocDag/internal/model"
 )
@@ -106,5 +107,33 @@ func TestRecordRenderersPropagateWriterErrors(t *testing.T) {
 	}
 	if err := RecordsJSON(failingWriter{}, testRecords()); err == nil {
 		t.Error("RecordsJSON err = nil, want the write failure surfaced")
+	}
+}
+
+func TestWithProjectionsAddsTheDerivedColumns(t *testing.T) {
+	g := testOKBasicGraph()
+	cfg := config.ADRPreset()
+	records := Records(g, []model.ID{"0002", "0003"})
+
+	got := WithProjections(records, []string{config.ProjectionAcceptedUnsuperseded}, graph.EvalProjections(g, cfg))
+
+	var buf bytes.Buffer
+	if err := RecordsText(&buf, got, []string{FieldID, config.ProjectionAcceptedUnsuperseded}); err != nil {
+		t.Fatalf("RecordsText: %v", err)
+	}
+	want := "0002\tfalse\n0003\ttrue\n"
+	if buf.String() != want {
+		t.Fatalf("records = %q, want %q", buf.String(), want)
+	}
+}
+
+func TestWithProjectionsLeavesAListingThatAskedForNoneAlone(t *testing.T) {
+	g := testOKBasicGraph()
+	records := Records(g, []model.ID{"0002"})
+
+	got := WithProjections(records, nil, graph.EvalProjections(g, config.ADRPreset()))
+
+	if got[0].Projections != nil {
+		t.Fatalf("projections = %v, want none", got[0].Projections)
 	}
 }

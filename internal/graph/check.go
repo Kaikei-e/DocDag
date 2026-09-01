@@ -508,82 +508,141 @@ func Check(g *model.Graph, cfg config.Config) []model.Finding {
 	return findings
 }
 
-// edgeIndex answers "does this document have an edge of type t" in constant
-// time, so a rule pass stays linear in the number of edges.
+// edgeIndex answers "which documents does this one reach over an edge type" in
+// constant time, so a rule pass stays linear in the number of edges. The graph
+// holds one edge per source, target and type, so a degree is the length of a
+// neighbour list.
 type edgeIndex struct {
-	inbound  map[model.ID]map[model.EdgeType]bool
-	outbound map[model.ID]map[model.EdgeType]bool
+	inbound  map[model.ID]map[model.EdgeType][]model.ID
+	outbound map[model.ID]map[model.EdgeType][]model.ID
 }
 
 func newEdgeIndex(g *model.Graph) edgeIndex {
 	ix := edgeIndex{
-		inbound:  make(map[model.ID]map[model.EdgeType]bool, len(g.Nodes)),
-		outbound: make(map[model.ID]map[model.EdgeType]bool, len(g.Nodes)),
+		inbound:  make(map[model.ID]map[model.EdgeType][]model.ID, len(g.Nodes)),
+		outbound: make(map[model.ID]map[model.EdgeType][]model.ID, len(g.Nodes)),
 	}
 	for _, e := range g.Edges {
 		if e.Origin == model.OriginReference {
 			continue
 		}
-		mark(ix.outbound, e.From, e.Type)
-		mark(ix.inbound, e.To, e.Type)
+		mark(ix.outbound, e.From, e.Type, e.To)
+		mark(ix.inbound, e.To, e.Type, e.From)
 	}
 	return ix
 }
 
-func mark(index map[model.ID]map[model.EdgeType]bool, id model.ID, t model.EdgeType) {
+func mark(index map[model.ID]map[model.EdgeType][]model.ID, id model.ID, t model.EdgeType, peer model.ID) {
 	types, ok := index[id]
 	if !ok {
-		types = make(map[model.EdgeType]bool, 1)
+		types = make(map[model.EdgeType][]model.ID, 1)
 		index[id] = types
 	}
-	types[t] = true
+	types[t] = append(types[t], peer)
 }
 
-func (ix edgeIndex) match(g *model.Graph, cond config.Condition, id model.ID) bool {
-	n, ok := g.Nodes[id]
+// neighbors returns the documents one edge type reaches from a document, in
+// graph order. An endpoint the corpus does not hold is among them: it is a
+// dangling reference, reported on its own, and the edge still exists.
+func (ix edgeIndex) neighbors(id model.ID, t model.EdgeType, inbound bool) []model.ID {
+	if inbound {
+		return ix.inbound[id][t]
+	}
+	return ix.outbound[id][t]
+}
+
+// degree counts the edges of one type at a document, in the direction asked
+// for, counting the ones whose other endpoint is missing for the same reason
+// neighbors lists them.
+func (ix edgeIndex) degree(id model.ID, t model.EdgeType, inbound bool) int {
+	return len(ix.neighbors(id, t, inbound))
+}
+
+// evalContext is everything a condition is evaluated against: the graph, the
+// edge index, and the projections that answer as virtual attributes.
+type evalContext struct {
+	g         *model.Graph
+	ix        edgeIndex
+	projected Projections
+}
+
+func newEvalContext(g *model.Graph, cfg config.Config) evalContext {
+	ix := newEdgeIndex(g)
+	return evalContext{g: g, ix: ix, projected: evalProjections(g, cfg, ix)}
+}
+
+func (e evalContext) match(cond config.Condition, id model.ID) bool {
+	n, ok := e.g.Nodes[id]
 	if !ok {
 		return false
 	}
 	for _, clause := range cond.EdgeClauses() {
-		types := ix.outbound
-		if clause.Inbound {
-			types = ix.inbound
+		if !clause.Holds(e.ix.degree(id, model.EdgeType(clause.Edge), clause.Inbound)) {
+			return false
 		}
-		if types[id][model.EdgeType(clause.Edge)] == clause.Negate {
+	}
+	for _, clause := range cond.ViaClauses() {
+		if !e.matchVia(clause, id) {
 			return false
 		}
 	}
 	for key, want := range cond.Attr {
-		if !matchAttr(n, key, want) {
+		if !e.matchAttr(n, key, want) {
 			return false
 		}
 	}
 	if len(cond.AnyOf) > 0 && !slices.ContainsFunc(cond.AnyOf, func(alternative config.Condition) bool {
-		return ix.match(g, alternative, id)
+		return e.match(alternative, id)
 	}) {
 		return false
 	}
-	return cond.Not == nil || !ix.match(g, *cond.Not, id)
+	return cond.Not == nil || !e.match(*cond.Not, id)
+}
+
+// matchVia holds when at least one neighbour one hop away satisfies every
+// attribute clause. A neighbour the corpus does not hold carries no attributes
+// at all and cannot be that witness: an edge into a missing document is a
+// dangling reference, not evidence about one.
+func (e evalContext) matchVia(clause config.ViaClause, id model.ID) bool {
+	for _, neighbor := range e.ix.neighbors(id, model.EdgeType(clause.Edge), clause.Inbound) {
+		n, known := e.g.Nodes[neighbor]
+		if !known {
+			continue
+		}
+		if e.matchAttrs(n, clause.Attr) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e evalContext) matchAttrs(n *model.Node, want map[string]config.AttrCondition) bool {
+	for key, clause := range want {
+		if !e.matchAttr(n, key, clause) {
+			return false
+		}
+	}
+	return true
 }
 
 // matchAttr applies one attribute clause. A positive clause needs the attribute
 // to be there; a negative one is satisfied by an attribute that is not.
-func matchAttr(n *model.Node, key string, want config.AttrCondition) bool {
+func (e evalContext) matchAttr(n *model.Node, key string, want config.AttrCondition) bool {
 	switch {
 	case want.Eq != nil:
-		value, present := n.Attr(key)
+		value, present := e.attr(n, key)
 		return present && strings.EqualFold(value, *want.Eq)
 	case want.Not != nil:
-		value, present := n.Attr(key)
+		value, present := e.attr(n, key)
 		return !present || !strings.EqualFold(value, *want.Not)
 	case want.Contains != nil:
-		items, present := n.AttrList(key)
+		items, present := e.attrList(n, key)
 		return present && containsFold(items, *want.Contains)
 	case want.NotContains != nil:
-		items, present := n.AttrList(key)
+		items, present := e.attrList(n, key)
 		return !present || !containsFold(items, *want.NotContains)
 	case want.SubsetOf != nil:
-		items, present := n.AttrList(key)
+		items, present := e.attrList(n, key)
 		if !present {
 			return false
 		}
@@ -597,36 +656,64 @@ func matchAttr(n *model.Node, key string, want config.AttrCondition) bool {
 	return true
 }
 
+// attr reads one attribute of a document, a projection of that name first: a
+// projection is a virtual attribute, and it shadows a frontmatter key spelled
+// the same way. The derived value is the one the configuration meant, and a
+// document must not be able to take it back by writing the key down.
+func (e evalContext) attr(n *model.Node, key string) (string, bool) {
+	if value, ok := e.virtual(n.ID, key); ok {
+		return value, true
+	}
+	return n.Attr(key)
+}
+
+// attrList reads one attribute as a list. A projection is a scalar, so it reads
+// as the one-element list a scalar always does.
+func (e evalContext) attrList(n *model.Node, key string) ([]string, bool) {
+	if value, ok := e.virtual(n.ID, key); ok {
+		return []string{value}, true
+	}
+	return n.AttrList(key)
+}
+
+func (e evalContext) virtual(id model.ID, key string) (string, bool) {
+	if !e.projected.Declares(key) {
+		return "", false
+	}
+	return ProjectionValue(e.projected.Holds(key, id)), true
+}
+
 func containsFold(items []string, want string) bool {
 	return slices.ContainsFunc(items, func(item string) bool { return strings.EqualFold(item, want) })
 }
 
 // MatchCondition reports whether one node satisfies every clause of a rule
-// condition.
-func MatchCondition(g *model.Graph, cond config.Condition, id model.ID) bool {
-	return newEdgeIndex(g).match(g, cond, id)
+// condition, the configured projections included.
+func MatchCondition(g *model.Graph, cfg config.Config, cond config.Condition, id model.ID) bool {
+	return newEvalContext(g, cfg).match(cond, id)
 }
 
 // EvalRule evaluates one declarative rule over every node.
 func EvalRule(g *model.Graph, cfg config.Config, rule config.Rule) []model.Finding {
-	return evalRule(g, cfg, newEdgeIndex(g), rule)
+	return evalRule(g, cfg, newEvalContext(g, cfg), rule)
 }
 
-// EvalRules evaluates every configured rule over every node. The edge index is
-// built once: it is linear in the graph, and rebuilding it per rule is not.
+// EvalRules evaluates every configured rule over every node. The evaluation
+// context is built once: the edge index and the projections are each linear in
+// the graph, and rebuilding them per rule is not.
 func EvalRules(g *model.Graph, cfg config.Config) []model.Finding {
-	ix := newEdgeIndex(g)
+	ctx := newEvalContext(g, cfg)
 	findings := []model.Finding{}
 	for _, rule := range cfg.Rules {
-		findings = append(findings, evalRule(g, cfg, ix, rule)...)
+		findings = append(findings, evalRule(g, cfg, ctx, rule)...)
 	}
 	return findings
 }
 
-func evalRule(g *model.Graph, cfg config.Config, ix edgeIndex, rule config.Rule) []model.Finding {
+func evalRule(g *model.Graph, cfg config.Config, ctx evalContext, rule config.Rule) []model.Finding {
 	findings := []model.Finding{}
 	for _, id := range g.NodeIDs() {
-		if !ix.match(g, rule.When, id) {
+		if !ctx.match(rule.When, id) {
 			continue
 		}
 		findings = append(findings, model.Finding{
@@ -650,6 +737,14 @@ func ruleLocation(cfg config.Config, n *model.Node, cond config.Condition) model
 			attrs[key] = true
 		}
 		for _, clause := range nested.EdgeClauses() {
+			if spec, ok := cfg.Edge(model.EdgeType(clause.Edge)); ok {
+				edges = append(edges, spec.Key)
+			}
+		}
+		// A one-hop clause reads the neighbour's attributes, which are in
+		// another file; what this document can change is the edge that reaches
+		// it, so that is the key the finding points at.
+		for _, clause := range nested.ViaClauses() {
 			if spec, ok := cfg.Edge(model.EdgeType(clause.Edge)); ok {
 				edges = append(edges, spec.Key)
 			}

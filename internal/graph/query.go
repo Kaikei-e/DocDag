@@ -177,40 +177,52 @@ func Query(g *model.Graph, id model.ID, opts QueryOptions) ([]QueryResult, error
 	return results, nil
 }
 
-// Binding reports whether a document is currently binding: its status is the
-// configured accepted value and no document supersedes it.
+// Binding reports whether a document is currently binding: it satisfies the
+// projection the configuration names under binding. A caller asking about many
+// documents wants BindingSet, which evaluates the projections once.
 func Binding(g *model.Graph, cfg config.Config, id model.ID) bool {
-	n, ok := g.Nodes[id]
+	spec, ok := cfg.BindingProjection()
 	if !ok {
-		return false
+		return bindingByStatus(g, cfg)[id]
 	}
-	for _, e := range g.EdgesOfType(config.EdgeSupersedes) {
-		if e.To == id {
-			return false
-		}
-	}
-	return isAccepted(cfg, n)
+	return EvalProjections(g, cfg).Holds(spec.Name, id)
 }
 
 // BindingSet lists every binding document, sorted.
 func BindingSet(g *model.Graph, cfg config.Config) []model.ID {
-	superseded := make(map[model.ID]bool)
-	for _, e := range g.EdgesOfType(config.EdgeSupersedes) {
-		superseded[e.To] = true
+	spec, ok := cfg.BindingProjection()
+	if ok {
+		return EvalProjections(g, cfg).Set(spec.Name)
 	}
+	held := bindingByStatus(g, cfg)
 	binding := []model.ID{}
 	for _, id := range g.NodeIDs() {
-		if superseded[id] {
-			continue
-		}
-		if isAccepted(cfg, g.Nodes[id]) {
+		if held[id] {
 			binding = append(binding, id)
 		}
 	}
 	return binding
 }
 
-func isAccepted(cfg config.Config, n *model.Node) bool {
-	status, _ := canonicalStatus(cfg, n.Status)
-	return strings.EqualFold(status, config.StatusAccepted)
+// bindingByStatus is the binding projection written in code: accepted, and
+// superseded by nothing. It answers for a configuration that resolves no
+// binding projection — one that cleared the preset's with an explicit empty
+// list, or that names none — because a corpus still has a current set, and
+// reporting every document as current would be worse than an opinion. Every
+// preset-derived configuration resolves a projection instead: the merge carries
+// the preset's binding down to it.
+func bindingByStatus(g *model.Graph, cfg config.Config) map[model.ID]bool {
+	superseded := make(map[model.ID]bool)
+	for _, e := range g.EdgesOfType(config.EdgeSupersedes) {
+		superseded[e.To] = true
+	}
+	binding := make(map[model.ID]bool, len(g.Nodes))
+	for id, n := range g.Nodes {
+		if superseded[id] {
+			continue
+		}
+		status, _ := canonicalStatus(cfg, n.Status)
+		binding[id] = strings.EqualFold(status, config.StatusAccepted)
+	}
+	return binding
 }

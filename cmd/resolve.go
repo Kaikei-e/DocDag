@@ -18,11 +18,11 @@ func newResolveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fields, err := recordFields(cmd)
+			g, cfg, err := loadGraph(cmd)
 			if err != nil {
 				return err
 			}
-			g, cfg, err := loadGraph(cmd)
+			fields, err := recordFields(cmd, cfg)
 			if err != nil {
 				return err
 			}
@@ -38,7 +38,7 @@ func newResolveCmd() *cobra.Command {
 				return domainErr("%v", err)
 			}
 			out := cmd.OutOrStdout()
-			records := render.Records(g, ids)
+			records := withProjections(g, cfg, render.Records(g, ids), fields)
 			if format == formatJSON {
 				err = render.RecordsJSON(out, records)
 			} else {
