@@ -513,6 +513,192 @@ the body changed at line 11, which append-only history forbids
 
 No fix suggestion. [ci.md](ci.md) covers what the check allows and how to wire it into a workflow.
 
+## Lint findings
+
+`docdag lint` reports on the configuration rather than on the corpus: a rule no document could ever
+fire, a rule every document fires, a rule that says what another rule already says. **None of them
+is structural.** `structural:` cannot raise or lower one, their severities are fixed, and `validate`
+never reports them — the health of a `docdag.yaml` and the state of a vault have different
+lifecycles. See [commands.md](commands.md#lint) for the flags and the exit codes.
+
+A lint finding is located in the configuration file, on the line the rule, projection, edge or path
+constraint was written on, and at the virtual path `<preset:adr>` or `<preset:spec>` for a rule the
+preset ships:
+
+```
+docdag.yaml:41: WARN never_fired deviation_pressure: fired on 0 of 128 clause documents
+  fix: keep it only if a fixture under lint/ shows it can fire (docdag lint --fixtures)
+```
+
+| Finding | Severity | Layer | Trigger |
+| --- | --- | --- | --- |
+| `unsatisfiable_condition` | error | 1 | one alternative of a condition contradicts itself |
+| `unfirable_rule` | error | 1 | every alternative of a rule contradicts itself |
+| `unsatisfiable_projection` | error | 1 | every alternative of a projection contradicts itself |
+| `ambivalent_fix` | error | 1 | two rules whose remedies write two values into one key can both fire |
+| `tautological_rule` | warn | 1 | a rule that constrains nothing, or whose alternatives cover a whole vocabulary |
+| `tautological_projection` | warn | 1 | the same, for a projection |
+| `subsumed_rule` | warn | 1 | a rule that fires only where a same-or-weaker rule already fires |
+| `shadowed_rule` | warn | 1 | the same, where the subsumed rule is the stronger of the two |
+| `unused_edge` | warn | 1 | a declared edge type nothing in the configuration reads |
+| `unused_status` | warn | 1 | a declared status vocabulary no condition reads |
+| `prefer_target` | warn | 1 | a path constraint an edge's own `target:` would say one hop shorter |
+| `condition_too_wide` | warn | 1 | a condition that expands past 64 alternatives, so the analysis stops |
+| `never_fired` | warn, info | 2 | a rule the corpus never fires — info where a fixture shows it can |
+| `always_fired` | warn | 2 | a rule every document it could apply to fires |
+| `never_true` | warn, error | 2 | a projection that holds nowhere — error where `binding:` names it |
+| `always_true` | warn | 2 | a projection that holds for every document it could apply to |
+| `unused_edge_in_corpus` | info | 2 | a declared edge type the corpus holds no edge of |
+| `newly_fired` / `stopped_firing` | info | 2 | a rule whose silence began or ended since `--since <rev>` |
+| `fixture_mismatch` | error | 3 | a rule that did not fire in `ruleid/`, or fired in `ok/` |
+| `missing_fixture` | warn | 3 | a rule with no `ruleid/` or no `ok/` directory |
+
+`info` is a severity of lint's own: it never affects an exit code, `--strict` does not raise it, and
+the text report prints it as `INFO`, the GitHub format as a `notice` and rdjson as `INFO`.
+
+### Layer 1: what the configuration says about itself
+
+Every condition is expanded into disjunctive normal form — `any_of` is the disjunction, everything
+else the conjunction, and `not` is pushed down to the literals — and each conjunction is checked for
+a contradiction. The judgement is a set operation over finite domains: the declared vocabularies
+(`status_values`, a field's `one_of`, the kind names, a projection's `true`/`false`), the integer
+window a degree clause asks for, and the kinds an edge joins. There is no solver and no search,
+which is the direct return of a fixed vocabulary with no expression language in it.
+
+### `unsatisfiable_condition` — error, lint
+
+One alternative of a condition holds a contradiction, so no document can satisfy it: `one
+alternative contradicts itself: attr status cannot be both "accepted" and "proposed"`. The reported
+contradictions are
+
+- one attribute pinned to two values, or pinned to a value the same conjunction denies,
+- a value outside the vocabulary the attribute answers to — `status_values`, the kind's own where
+  kinds declare one, a field's `one_of`, the kind names, `true`/`false` for a projection,
+- an edge required and forbidden at once (`inbound: X` beside `not_inbound: X`),
+- two degree windows that do not meet, or a threshold above the edge's own `max_inbound` or
+  `max_outbound`,
+- a `kind` no clause of the conjunction leaves: an `attr: {kind: ...}` against the `from:`/`to:`
+  kinds of an edge the same conjunction names,
+- a one-hop clause no neighbour could answer, because the edge joins it to kinds whose vocabulary
+  does not hold the value it asks for,
+- the same contradictions inside an edge's `target:` condition, where `leaf_of:` reads as the
+  `not_inbound:` it is sugar for.
+
+Fix: `drop the alternative or the clause that contradicts it`.
+
+### `unfirable_rule` — error, lint
+
+Every alternative of a rule contradicts itself, so the rule can never report anything: `every
+alternative contradicts itself: <the first reason>`. It is the same analysis as above, reported
+once for the whole rule rather than once per alternative. `unsatisfiable_projection` is the same
+finding for a projection, and an edge target that no target could satisfy is reported as
+`unsatisfiable_condition` against the edge.
+
+### `tautological_rule` — warn, lint
+
+A rule that fires on every document says nothing about the one it is filed against: `constrains
+nothing, so it holds for every document`, or `the alternatives cover the whole vocabulary of status
+(proposed, accepted, …), so it holds for every document that writes it`. `tautological_projection`
+is the same for a projection. This is the vacuity model checkers look for: an antecedent that is
+always true.
+
+### `subsumed_rule` and `shadowed_rule` — warn, lint
+
+Rule A is subsumed by rule B when every alternative of A claims everything some alternative of B
+claims: A fires only where B fires, so one of the two reports nothing new. Two rules that subsume
+each other are one rule written twice, reported once against the one written later. Where A is the
+*stronger* of the two it is `shadowed_rule` instead: it fires only where the build has already
+failed, so nobody ever reads it. A tautological or unfirable rule is left out of the comparison —
+everything is subsumed by a rule that fires everywhere — because both are already reported as what
+they are.
+
+### `ambivalent_fix` — error, lint
+
+Two rules whose `fix:` writes a value into the same frontmatter key demand two different values, and
+their conditions can hold for one document at once. Only the remedies DocDag itself generates are
+compared — the `set <field>: <value>` shapes of `status_drift` and `superseded_orphan` — because a
+rule's own `message:` is prose, and lint does not read prose. The preset's own pair cannot both
+fire: one needs an inbound `supersedes` and the other needs none.
+
+### `unused_edge` — warn, lint
+
+A declared edge type nothing reads. An edge is *read* when a rule, a projection, an edge `target:`
+or a path constraint names it, when a `derived_edges:` entry produces it, when another edge's
+`leaf_of:` walks it, when it declares an `inverse:`, endpoint kinds, a degree bound or attributes —
+each of those is a structural check that reads the declaration — or when it is one of the four the
+engine reads by name: `supersedes`, `depends-on`, `about` and `excepts`. What is left is an edge
+that is parsed and drawn and never reasoned about, which is usually a rule that was renamed.
+
+### `unused_status` — warn, lint
+
+A declared status vocabulary that no rule, projection or target condition reads — for a corpus with
+kinds, one kind's vocabulary at a time. The finding is about the vocabulary rather than about a
+single value on purpose: a value a rule does not name still changes what the rule answers, because
+`status: {eq: accepted}` answers differently for `accepted` than for every other word of the
+vocabulary. What is genuinely unused is a vocabulary nothing asks about, where `unknown_status` is
+the only check its words ever reach.
+
+### `prefer_target` — warn, lint
+
+A `path_constraints:` entry that an edge's own `target:` would say one hop shorter: a two-step
+`path:` with `equals: none` says that whatever the first step reaches has no second step to take,
+which is exactly `target: {not_outbound: <second>}` on the first edge — or `not_inbound:` where the
+second step is walked backwards. Only that shape is reported. A one-step path is about the documents
+an edge leaves rather than the one it reaches, a path whose first step is `^` reversed starts at a
+document no target condition can constrain, and a `subset_of` comparison is not the empty set.
+
+### `condition_too_wide` — warn, lint
+
+A condition whose expansion passes 64 alternatives, or nests deeper than 16. The analysis stops
+there and the rest of that rule is not judged, so a configuration cannot make lint take exponential
+time. Fix: split the `any_of` nesting into separate rules.
+
+### Layer 2: what the corpus says about the configuration
+
+`--corpus` builds the graph exactly as `validate` does and evaluates every rule and projection over
+it. `never_fired` and `always_fired` count against the documents a rule *could* apply to: the count
+is narrowed to one kind wherever the condition pins one, by an `attr: {kind: ...}` clause or by
+naming an edge only one kind can be at the near end of, so `fired on 0 of 128 clause documents` is
+not counted against a vault of ten thousand documents of other kinds. A rule with nothing in scope
+at all is reported at `info`.
+
+`never_true` on the projection `binding:` names is an error rather than a warning: the set of
+documents in force is then empty, and every command that reads it answers about nothing.
+
+`--since <rev>` builds the corpus a second time from the files that revision holds and reports
+`newly_fired` and `stopped_firing` as facts, at `info`. Both are read through `git`, so a corpus
+outside a repository cannot answer them.
+
+### Layer 3: the fixtures a rule is tested by
+
+`--fixtures <dir>` runs each rule against two miniature corpora of its own:
+
+```
+lint/
+  orphan_must/
+    ruleid/       # here the rule must fire
+    ok/           # here it must not
+```
+
+The names are Semgrep's. Each directory is an independent corpus read under the same `docdag.yaml`
+as the vault, with the documents directories rerooted onto it: for a corpus that declares no kinds
+the fixture directory *is* the documents directory, and for one that declares `kinds:` the fixture
+holds the same kind-relative layout — `lint/orphan_must/ruleid/spec/clauses/UZ-V-900.md`. A kind the
+fixture does not hold is read as empty rather than as an error, so a fixture holds only the kinds
+its rule is about.
+
+A fixture may be written for any rule, any projection and any structural check: what "fires" means
+is a finding of that name, or a projection that holds somewhere. A suppressed finding has not fired,
+which is what lets an `ok/` fixture record an exception and show the suppression working.
+
+`fixture_mismatch` is filed on the fixture — the document that fired, or the directory the rule was
+silent in — and relates the rule's own line in the configuration. `missing_fixture` asks for the two
+directories, and exempts the rules a preset ships, because DocDag ships their fixtures with them.
+
+Together the two layers answer the question a silent check leaves open. A fixture proves the rule
+*can* fire; the corpus shows it is *not* firing now. A `never_fired` rule whose `ruleid/` fixture
+passes falls to `info` for exactly that reason.
+
 ## The fixture corpora
 
 This repository ships one corpus per failure mode under `testdata/fixtures`, next to the clean
@@ -562,3 +748,18 @@ It carries one more conflict that is not in that report: `UZ-V-006` permits what
 to do, and the vault records the exception, so the finding is suppressed. `--show-suppressed` is
 what reads it, and `docdag context UZ-V-006` is where the whole neighbourhood — the subject, the
 exception, the interoperation requirement — is written out.
+
+### The lint fixtures
+
+`testdata/lint/adr` and `testdata/lint/spec` are the per-rule fixtures of the two presets, one
+directory per rule and per structural check, each holding a `ruleid/` corpus and an `ok/` one. They
+are run by DocDag's own test suite, so a preset edit that stops a rule from firing — or starts it
+firing where it should not — fails here rather than in somebody's repository:
+
+```console
+$ docdag lint --config testdata/lint/spec/docdag.yaml --fixtures testdata/lint/spec
+OK: no lint findings
+```
+
+They double as documentation: `testdata/lint/spec/orphan_must/ruleid` is the smallest corpus that
+`orphan_must` reports, and its `ok/` is the same corpus with the conformance test that answers it.

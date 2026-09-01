@@ -271,7 +271,7 @@ func TestConfigFileOverridesThePreset(t *testing.T) {
 }
 
 func TestTheCommandSetIsExactlyTheDocumentedOne(t *testing.T) {
-	want := []string{"validate", "resolve", "query", "context", "export", "stats", "new", "help"}
+	want := []string{"validate", "lint", "resolve", "query", "context", "export", "stats", "new", "help"}
 
 	// The help command is registered lazily, so ask for it before counting.
 	root := newRootCmd()

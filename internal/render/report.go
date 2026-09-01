@@ -111,11 +111,19 @@ func FindingsJSON(w io.Writer, findings []model.Finding, summary model.Summary, 
 // summary is what a reader sees when a corpus fails widely.
 func FindingsGitHub(w io.Writer, findings []model.Finding, summary model.Summary) error {
 	out := &errWriter{w: w}
+	writeAnnotations(out, findings)
+	writeSummary(out, summary)
+	if out.err != nil {
+		return fmt.Errorf("write findings: %w", out.err)
+	}
+	return nil
+}
+
+// writeAnnotations writes the workflow command every finding is annotated with,
+// whichever report is being written.
+func writeAnnotations(out *errWriter, findings []model.Finding) {
 	for _, f := range findings {
-		level := "error"
-		if f.Severity == model.SeverityWarn {
-			level = "warning"
-		}
+		level := githubLevel(f.Severity)
 		properties := []string{"file=" + escapeProperty(f.Location.Path)}
 		if f.Location.Line > 0 {
 			properties = append(properties, fmt.Sprintf("line=%d", f.Location.Line))
@@ -126,11 +134,19 @@ func FindingsGitHub(w io.Writer, findings []model.Finding, summary model.Summary
 		properties = append(properties, "title="+escapeProperty(f.Rule))
 		out.printf("::%s %s::%s\n", level, strings.Join(properties, ","), escapeData(subjectDetail(f)))
 	}
-	writeSummary(out, summary)
-	if out.err != nil {
-		return fmt.Errorf("write findings: %w", out.err)
+}
+
+// githubLevel names the annotation level one severity is rendered at. An info
+// finding is a notice: the workflow command set has exactly that word for
+// something a reader should see and no job should fail on.
+func githubLevel(s model.Severity) string {
+	switch s {
+	case model.SeverityWarn:
+		return "warning"
+	case model.SeverityInfo:
+		return "notice"
 	}
-	return nil
+	return "error"
 }
 
 // escapeData and escapeProperty apply the escaping the workflow command parser
@@ -189,15 +205,21 @@ type rdjsonRelated struct {
 // FindingsRDJSON writes the findings in the reviewdog diagnostic format, which
 // carries no summary: it is read by a machine.
 func FindingsRDJSON(w io.Writer, findings []model.Finding, summary model.Summary) error {
-	result := rdjson{
-		Source:      rdjsonSource{Name: toolName, URL: toolURL},
-		Severity:    rdjsonSeverity(model.SeverityError),
-		Diagnostics: make([]rdjsonDiagnostic, 0, len(findings)),
-	}
 	// The result-level severity is the default for a diagnostic that carries
 	// none, so it follows the strongest finding in the report.
+	worst := model.SeverityError
 	if summary.Errors == 0 && summary.Warnings > 0 {
-		result.Severity = rdjsonSeverity(model.SeverityWarn)
+		worst = model.SeverityWarn
+	}
+	return writeRDJSON(w, findings, worst)
+}
+
+// writeRDJSON writes a diagnostic result, whichever report is being written.
+func writeRDJSON(w io.Writer, findings []model.Finding, worst model.Severity) error {
+	result := rdjson{
+		Source:      rdjsonSource{Name: toolName, URL: toolURL},
+		Severity:    rdjsonSeverity(worst),
+		Diagnostics: make([]rdjsonDiagnostic, 0, len(findings)),
 	}
 	for _, f := range findings {
 		d := rdjsonDiagnostic{
@@ -226,8 +248,11 @@ func rdjsonLocationOf(loc model.Location) rdjsonLocation {
 }
 
 func rdjsonSeverity(s model.Severity) string {
-	if s == model.SeverityWarn {
+	switch s {
+	case model.SeverityWarn:
 		return "WARNING"
+	case model.SeverityInfo:
+		return "INFO"
 	}
 	return "ERROR"
 }

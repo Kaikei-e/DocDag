@@ -1,0 +1,5 @@
+# The configuration the shipped spec fixtures are evaluated under: the preset
+# and nothing else, so a fixture answers for what DocDag ships rather than for
+# a corpus's own opinion about it. Each rule's ruleid/ and ok/ directories hold
+# the same kind-relative layout the corpus does.
+preset: spec

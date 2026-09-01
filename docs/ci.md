@@ -94,6 +94,80 @@ does not have. Ask for the full history and name the branch the change is propos
 `github.base_ref` is the branch a pull request targets and is empty on a push, where the default
 branch is the useful comparison.
 
+## Linting the configuration
+
+`docdag lint` answers about `docdag.yaml` rather than about the documents, and `validate` never runs
+it: a lint warning on every pull request is a warning nobody reads. Run it where the configuration
+or the fixtures change, and on a schedule for the corpus layer:
+
+```yaml
+name: decisions
+on: [push, pull_request]
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      config: ${{ steps.filter.outputs.config }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            config:
+              - docdag.yaml
+              - lint/**
+
+  validate:                                    # every pull request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Kaikei-e/DocDag@v0.2.0
+
+  lint:                                        # only where the rules changed
+    needs: changes
+    if: needs.changes.outputs.config == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Kaikei-e/DocDag@v0.2.0
+        with:
+          args: lint --all --format github
+```
+
+`lint --all` runs every layer: the configuration alone, the rules against the current vault, and
+each rule's own `ruleid/` and `ok/` fixtures under `lint/`. It exits 1 on any error, 2 on warnings
+alone and 3 on a configuration that does not validate, so a repository that wants the warnings to
+gate adds `--strict` and one that does not lets the 2 through:
+
+```yaml
+        with:
+          args: lint --all --strict --format github
+```
+
+The corpus layer answers about a vault that changes under it — a rule that fires nowhere today may
+be the one that catches tomorrow's mistake — so it is worth a scheduled run of its own:
+
+```yaml
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+jobs:
+  lint:
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: Kaikei-e/DocDag@v0.2.0
+        with:
+          args: lint --corpus --since origin/main --format text
+```
+
+`--since` needs enough history for `git merge-base` to resolve, exactly as `--immutable-since` does.
+[commands.md](commands.md#lint) covers the flags and [checks.md](checks.md#lint-findings) every
+finding.
+
 ## The pre-commit hook
 
 A [pre-commit](https://pre-commit.com) hook is also shipped:
@@ -108,5 +182,8 @@ repos:
 
 Hooks are advisory: `git commit --no-verify` walks straight past them, and a contributor who never
 ran `pre-commit install` never had them. CI is the gate; the hook only shortens the loop.
+
+The shipped hook script validates a document edit and lints a `docdag.yaml` edit — layer 1 only,
+which reads no documents and costs milliseconds.
 
 The plugin ships a `PostToolUse` hook for agents as well — see [agents.md](agents.md).

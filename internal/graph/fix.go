@@ -37,14 +37,15 @@ func Suggest(findings []model.Finding, g *model.Graph, cfg config.Config) []mode
 }
 
 func suggestion(f model.Finding, g *model.Graph, cfg config.Config) string {
+	field, value, _ := FixSetsField(cfg, f.Rule)
 	switch f.Rule {
 	case model.RuleDanglingRef, model.RuleDanglingReference:
 		return didYouMean(g, f.Detail, f.ID)
 	case model.RuleStatusDrift:
-		return fmt.Sprintf("set %s: %s in %s", statusField(cfg), config.StatusSuperseded, f.Location.Path)
+		return fmt.Sprintf("set %s: %s in %s", field, value, f.Location.Path)
 	case model.RuleSupersededOrphan:
 		return fmt.Sprintf("declare %s: %s in the replacing document, or set %s: %s",
-			supersedesKey(cfg), f.ID, statusField(cfg), config.StatusWithdrawn)
+			supersedesKey(cfg), f.ID, field, value)
 	case model.RuleUnstructuredSupersedes:
 		return declareEdge(g, cfg, f.ID)
 	case model.RuleStaleTarget:
@@ -62,6 +63,24 @@ func suggestion(f model.Finding, g *model.Graph, cfg config.Config) string {
 		return migrateField(g, cfg, f)
 	}
 	return ""
+}
+
+// FixSetsField reports the frontmatter key and value a rule's built-in remedy
+// tells the reader to write, and whether the rule has such a remedy at all. It
+// is the whole vocabulary of "set <field>: <value>" suggestions DocDag
+// generates — the two status changes below — and it is exported because the
+// preset lint compares those demands against each other: two rules that can
+// both fire on one document and demand two different values for one key are an
+// ambivalent pair, and reading the demand from here is what keeps the check and
+// the suggestion from drifting apart.
+func FixSetsField(cfg config.Config, rule string) (field, value string, ok bool) {
+	switch rule {
+	case model.RuleStatusDrift:
+		return statusField(cfg), config.StatusSuperseded, true
+	case model.RuleSupersededOrphan:
+		return statusField(cfg), config.StatusWithdrawn, true
+	}
+	return "", "", false
 }
 
 // migrateField names the key a retired field's value belongs under, where the

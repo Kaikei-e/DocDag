@@ -8,8 +8,8 @@ share.
 ## Global flags
 
 `--dir <path>`, `--config <path>` and `--format text|json` are answered by every command.
-`validate` also answers in `github` and `rdjson`, `context` in `md`, and `export` replaces the
-format flag with its own `mermaid|dot|json`.
+`validate` and `lint` also answer in `github` and `rdjson`, `context` in `md`, and `export` replaces
+the format flag with its own `mermaid|dot|json`.
 
 Without `--dir`, DocDag looks in `docs/adr`, `doc/adr`, `docs/decisions`, `docs/ADR`, `adr` — the
 first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 to 6 digits.
@@ -19,6 +19,7 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 | Command | What it prints | Notable failures |
 | --- | --- | --- |
 | `docdag validate [--touching <path>]... [--show-suppressed] [--immutable-since <rev>] [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` when nothing errored | exit 1 if any finding is an error, exit 3 if `--immutable-since` is given outside a git repository or without `git` |
+| `docdag lint [--corpus] [--fixtures <dir>] [--all] [--since <rev>] [--strict] [--format text\|json\|github\|rdjson]` | one line per lint finding, then the counts, or `OK: no lint findings` | exit 1 on any error (or on any warning with `--strict`), exit 2 on warnings alone, exit 3 if the configuration does not validate |
 | `docdag resolve <ref> [--fields <list>]` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it | exit 1 on an unknown reference or a supersedes cycle |
 | `docdag query <ref> [--ancestors\|--descendants] [--edge <type>] [--include-refs] [--fields <list>]` | the reachable set over typed edges, descendants by default; reference-layer hits are suffixed ` (reference)` | exit 1 unknown reference, exit 2 unknown edge type or conflicting flags |
 | `docdag query --binding [--fields <list>]` | every binding document, with its `modality` beside it where the configuration declares one | exit 2 if combined with `--ancestors`, `--descendants`, `--edge` or `--include-refs` |
@@ -26,6 +27,7 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 | `docdag export [--format mermaid\|dot\|json] [--include-refs] [--connected] [--edge <type>]... [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 2 on an unknown edge type, exit 3 if the output file cannot be written |
 | `docdag stats [--fields]` | document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree, and — where the configuration declares them — the modality distribution, the clauses per topic and the suppressed-conflict count; with `--fields`, the frontmatter fields instead | exit 3 without `--fields` if the configuration declares no `supersedes` edge |
 | `docdag new <title> [--kind <name>] [--id <ref>] [--supersedes <ref>]... [--depends-on <ref>]... [--dry-run]` | the path of the created document, or the plan under `--dry-run` | exit 1 on an unknown reference, a claimed identifier or a `--kind` the corpus cannot answer, exit 3 on a write error |
+| `docdag new --fixture <rule> [--fixtures <dir>]` | the files of the rule's generated `ruleid/` and `ok/` fixture, one path per line | exit 1 if no such rule is configured or it can never fire, exit 3 on a write error |
 
 `docdag context` and `--fields` are covered in [agents.md](agents.md), along with
 `validate --touching`.
@@ -158,10 +160,104 @@ and the identifier rules above work exactly as they do without `--kind`.
 entry would be incomplete, and a creation has no value to put there — write that edge into the
 created document instead.
 
+## lint
+
+`docdag lint` reads `docdag.yaml` and reports on the configuration rather than on the documents: the
+rules that cannot fire, the ones that fire everywhere, the ones that say what another rule already
+says. It answers in three layers, and `validate` never runs any of them — the health of a
+configuration and the state of a corpus have different lifecycles, and a lint warning on every pull
+request is a warning nobody reads.
+
+```console
+$ docdag lint                      # layer 1: the configuration alone
+$ docdag lint --corpus             # + the rules the current vault never fires
+$ docdag lint --fixtures lint/     # + each rule's own ruleid/ and ok/ fixtures
+$ docdag lint --all                # all three, reading fixtures from lint/
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--corpus` | also evaluate every rule and projection against the vault |
+| `--fixtures <dir>` | also run the per-rule fixtures under `<dir>` |
+| `--all` | every layer, with `--fixtures` defaulting to `lint/` |
+| `--since <rev>` | with the corpus layer, also evaluate the corpus `<rev>` holds and report what started or stopped firing |
+| `--strict` | exit 1 on warnings as well as errors |
+
+Layer 1 reads no documents at all, so it costs milliseconds: it is what the pre-commit and
+`PostToolUse` hooks run when `docdag.yaml` itself is edited. `--corpus` and `--since` read the vault
+and the repository, and belong in CI — see [ci.md](ci.md#linting-the-configuration).
+
+Exit codes are `0` for a clean report, `1` for any error, `2` for warnings alone, and `3` for a
+configuration that does not validate. `info` findings — a fact about the corpus rather than a fault
+— never raise the code, and `--strict` does not raise them either. [checks.md](checks.md#lint-findings)
+lists every finding, its severity and its trigger.
+
+A finding names the configuration file and the line the rule was written on, and a rule the preset
+ships is located at the virtual path `<preset:adr>` or `<preset:spec>`, there being no file to open:
+
+```
+docdag.yaml:41: WARN never_fired deviation_pressure: fired on 0 of 128 clause documents
+  fix: keep it only if a fixture under lint/ shows it can fire (docdag lint --fixtures)
+<preset:spec>: INFO unused_edge_in_corpus measures: is declared and the corpus holds no edge of it
+```
+
+`--format json` writes a report of its own top-level kind, so a consumer can never read it as a
+validation report:
+
+```json
+{
+  "kind": "lint",
+  "schema_version": 1,
+  "preset_version": 1,
+  "findings": [
+    {
+      "severity": "warn",
+      "rule": "never_fired",
+      "id": "deviation_pressure",
+      "detail": "fired on 0 of 128 clause documents",
+      "location": {"path": "docdag.yaml", "line": 41},
+      "fix": "keep it only if a fixture under lint/ shows it can fire (docdag lint --fixtures)"
+    }
+  ],
+  "summary": {"errors": 0, "warnings": 1, "infos": 0}
+}
+```
+
+`--format github` writes one workflow command per finding, an `info` finding as a `notice`, and
+`--format rdjson` the reviewdog diagnostic format, exactly as `validate` does.
+
+### new --fixture
+
+`docdag new --fixture <rule>` writes the skeleton of a rule's fixture under `lint/<rule>/`, derived
+from the rule's own condition: the documents that satisfy one alternative of it in `ruleid/`, and
+the same documents with one literal of that alternative broken in `ok/`. Identifiers, kinds and
+directories come from the configuration, so a generated document is one the corpus would accept —
+on a corpus that declares `kinds:`, each document lands in its kind's own directory under the
+fixture.
+
+```console
+$ docdag new --fixture orphan_must
+lint/orphan_must/ruleid/spec/clauses/UZ-A-000.md
+lint/orphan_must/ok/spec/clauses/UZ-A-000.md
+lint/orphan_must/ok/spec/conform/b.md
+```
+
+It generates what it can derive and says what it cannot. A condition resting on a degree threshold,
+a `subset_of`, a projection or an edge `target:` is satisfiable in more ways than a generator should
+choose between; the layout is written anyway and the documents carry a `<!-- TODO: … -->` naming
+what is left. Every generated fixture is read back before it is written, so a skeleton with no TODO
+in it is one `docdag lint --fixtures` already accepts. A file that exists is never overwritten, so
+running it again fills in what a first run could not and leaves hand-written fixtures alone.
+
+`--fixtures <dir>` writes somewhere other than `lint/`. `--format json` answers with
+`{"paths": [...]}`.
+
 ## Exit codes
 
 `0` success (warnings allowed), `1` domain failure, `2` usage error, `3` I/O or config error —
-including "no documents directory found", so a repository without one needs `--dir`.
+including "no documents directory found", so a repository without one needs `--dir`. `lint` reads
+`2` differently — warnings alone, which is not a usage error there — because a configuration that
+lints with warnings is neither a failure nor nothing; `--strict` turns them into `1`.
 
 ## validate --show-suppressed
 
@@ -259,8 +355,9 @@ remedy: the format has no field for one.
 
 ## JSON headers
 
-The two JSON outputs that are objects — `validate --format json` and `context --format json` — are
-headed by a `schema_version` and, where the configuration names one, a `preset_version`. Both are at
-`schema_version: 2`. The listings are arrays of records rather than objects (`query`, `query
+The three JSON outputs that are objects — `validate --format json`, `context --format json` and
+`lint --format json` — are headed by a `schema_version` and, where the configuration names one, a
+`preset_version`. The first two are at `schema_version: 2`; the lint report is a different kind of
+report at `schema_version: 1` and says so in a `kind` field of its own. The listings are arrays of records rather than objects (`query`, `query
 --fields`, `resolve`), so they carry no header; `preset_version` is read from `validate` beside
 them. The text, `md`, `github` and `rdjson` formats are unversioned: a header is a JSON affair.

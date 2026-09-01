@@ -299,3 +299,38 @@ func TestRepoFile(t *testing.T) {
 		}
 	})
 }
+
+func TestRepoFiles(t *testing.T) {
+	dir := testRepo(t, map[string]string{
+		"docs/adr/0001-a-decision.md":     "# A decision\n",
+		"docs/adr/notes/0002-a-nested.md": "# Nested\n",
+		"elsewhere/0003-another.md":       "# Elsewhere\n",
+	})
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	head := strings.TrimSpace(testGit(t, dir, "rev-parse", "HEAD"))
+
+	t.Run("the revision's own files come back", func(t *testing.T) {
+		// The working tree gains a file the revision does not hold, which is
+		// exactly what a comparison against a revision must not see.
+		testWrite(t, dir, map[string]string{"docs/adr/0004-later.md": "# Later\n"})
+
+		got, err := repo.Files(head, filepath.Join(dir, "docs", "adr"))
+		if err != nil {
+			t.Fatalf("Files: %v", err)
+		}
+
+		want := []string{"docs/adr/0001-a-decision.md", "docs/adr/notes/0002-a-nested.md"}
+		if !slices.Equal(got, want) {
+			t.Errorf("Files = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("a directory outside the working tree is an error", func(t *testing.T) {
+		if _, err := repo.Files(head, filepath.Join(t.TempDir(), "elsewhere")); err == nil {
+			t.Fatal("Files succeeded outside the working tree, want an error")
+		}
+	})
+}

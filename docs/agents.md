@@ -85,6 +85,25 @@ a narrowed report never turns a failing repository into a passing one, and the n
 withheld goes to stderr. The summary line and the `summary` object answer for the corpus too: only
 the list of findings narrows.
 
+## Changing the rules
+
+`docdag lint` is the command for an edit to `docdag.yaml` rather than to a document. It reports the
+rules that cannot fire, the ones that fire on everything, and the ones that say what another rule
+already says — with `--corpus` the ones the vault never fires, and with `--fixtures` the ones whose
+own fixtures disagree with them. `validate` never runs it, so a rule change is checked by asking:
+
+```console
+$ docdag lint
+docdag.yaml:12: ERROR unfirable_rule orphan_should: every alternative contradicts itself: inbound enforces and not_inbound enforces cannot both hold
+  fix: drop the rule, or the clause that contradicts the rest
+```
+
+An agent adding a rule should add its fixture in the same edit: `docdag new --fixture <rule>` writes
+the `ruleid/` corpus the rule has to fire in and the `ok/` corpus it must not, derived from the
+rule's own condition, and `docdag lint --fixtures lint/` reads them back. The pair is what keeps the
+intent of a rule readable after the rule is rewritten — see
+[commands.md](commands.md#lint).
+
 ## Writing a record
 
 `docdag new "<title>" --supersedes <ref>` writes the new document and rewrites the superseded one's
@@ -103,6 +122,10 @@ $ claude
 /plugin marketplace add Kaikei-e/DocDag
 /plugin install docdag@docdag
 ```
+
+The hook reads what was edited: a Markdown file inside the documents directory is validated, and
+`docdag.yaml` itself is linted — `docdag lint` at layer 1, which reads no documents and costs
+milliseconds — so a rule that contradicts itself is reported in the same turn it was written.
 
 The hook needs `docdag` and `jq` on `PATH` and does nothing without them. Allow the commands once
 with `"permissions": {"allow": ["Bash(docdag *)"]}` in `.claude/settings.json`:

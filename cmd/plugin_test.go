@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -145,5 +146,45 @@ func TestPluginHookIgnoresPathsOutsideTheDocumentsDirectory(t *testing.T) {
 		if len(out) != 0 {
 			t.Errorf("hook on %s wrote %q, want silence for an unrelated path", payload, out)
 		}
+	}
+}
+
+// TestPluginHookLintsAConfigurationEdit covers the hook's other branch: what
+// breaks when docdag.yaml changes is the rules, so the edit is linted rather
+// than validated. The stub stands in for the binary, so the test is about the
+// branch rather than about what lint happens to report today.
+func TestPluginHookLintsAConfigurationEdit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the hook is a POSIX shell script")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("the hook reads its payload with jq")
+	}
+	project := t.TempDir()
+	bin := filepath.Join(project, "bin")
+	if err := os.MkdirAll(bin, 0o750); err != nil {
+		t.Fatalf("mkdir %s: %v", bin, err)
+	}
+	report := "docdag.yaml:3: WARN tautological_rule everything: constrains nothing"
+	stub := "#!/bin/sh\ncase \"$1\" in lint) echo \"" + report + "\"; exit 2 ;; esac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docdag"), []byte(stub), 0o750); err != nil {
+		t.Fatalf("write the stub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, "docdag.yaml"), []byte("preset: adr\n"), 0o600); err != nil {
+		t.Fatalf("write the configuration: %v", err)
+	}
+
+	cmd := exec.Command("sh", filepath.Join(repoRoot(t), "scripts", "docdag-validate.sh"))
+	cmd.Stdin = strings.NewReader(`{"tool_name":"Edit","tool_input":{"file_path":"` + filepath.Join(project, "docdag.yaml") + `"}}`)
+	cmd.Dir = project
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 2 {
+		t.Fatalf("hook exited %v, want 2 so the report reaches the agent (output %q)", err, out)
+	}
+	if !strings.Contains(string(out), report) {
+		t.Errorf("hook wrote %q, want the lint report", out)
 	}
 }

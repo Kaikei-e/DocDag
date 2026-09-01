@@ -34,13 +34,20 @@ const (
 // Severity ranks a finding.
 type Severity string
 
-// Finding severities.
+// Finding severities. Info is what `docdag lint` says a fact in: it never
+// fails a build and never raises an exit code, so a check that reports one is
+// telling the reader something about the corpus rather than about a mistake.
+// No structural check speaks at it — `structural:` cannot lower a check to
+// info, because the checks are the contract.
 const (
 	SeverityError Severity = "error"
 	SeverityWarn  Severity = "warn"
+	SeverityInfo  Severity = "info"
 )
 
-// Rank orders severities for deterministic output, errors first.
+// Rank orders severities for deterministic output, errors first. Info sorts
+// last, where an unrecognized severity already sorted: both are things a
+// report ends with, and a finding is ordered by its position after that.
 func (s Severity) Rank() int {
 	switch s {
 	case SeverityError:

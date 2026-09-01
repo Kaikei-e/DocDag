@@ -77,6 +77,22 @@ func (r *Repo) Untracked(dir string) ([]string, error) {
 	return records(out), nil
 }
 
+// Files lists the repository-relative paths under dir that rev holds. It is the
+// listing File reads one entry of, so a caller can rebuild what a directory
+// looked like at a revision without walking the working tree, which is a
+// different set of files.
+func (r *Repo) Files(rev, dir string) ([]string, error) {
+	scope, err := r.Rel(dir)
+	if err != nil {
+		return nil, err
+	}
+	out, err := run(r.root, "ls-tree", "-r", "-z", "--name-only", rev, "--", scope)
+	if err != nil {
+		return nil, fmt.Errorf("list %s at %s: %w", scope, rev, err)
+	}
+	return records(out), nil
+}
+
 // File returns the contents of a repository-relative path as of rev.
 func (r *Repo) File(rev, path string) ([]byte, error) {
 	out, err := run(r.root, "show", rev+":"+path)

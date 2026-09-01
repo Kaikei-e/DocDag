@@ -101,6 +101,12 @@ mechanical remedy, and exits 1 if any finding is an error:
 
 [docs/checks.md](docs/checks.md) gives each finding its severity, its trigger and its remedy.
 
+`docdag lint` asks the other question — whether the rules themselves hold up. It reports a rule that
+can never fire, one that fires on every document, one that says what another rule already says, and,
+with `--corpus` and `--fixtures`, the rules the vault never fires and the rules whose own fixtures
+disagree with them. `validate` never runs it: a configuration's health and a corpus's state have
+different lifecycles.
+
 ## For agents
 
 An agent should ask the graph rather than read the directory: one command replaces a fan-out of file
@@ -125,7 +131,8 @@ $ claude
 - [docs/configuration.md](docs/configuration.md) — the `docdag.yaml` reference: the preset in full,
   every optional key, and the rule vocabulary.
 - [docs/checks.md](docs/checks.md) — one entry per finding: what triggers it and what clears it.
-- [docs/ci.md](docs/ci.md) — the composite action, append-only history and the pre-commit hook.
+- [docs/ci.md](docs/ci.md) — the composite action, append-only history, linting the configuration
+  and the pre-commit hook.
 - [docs/agents.md](docs/agents.md) — `context`, `--fields`, `--touching` and the plugin.
 
 ## MADR compatibility

@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/internal/lint"
 	"github.com/Kaikei-e/DocDag/internal/model"
 	"github.com/Kaikei-e/DocDag/internal/newdoc"
 	"github.com/Kaikei-e/DocDag/internal/parse"
@@ -21,20 +22,25 @@ const (
 	flagDryRun     = "dry-run"
 	flagID         = "id"
 	flagKind       = "kind"
+	flagFixture    = "fixture"
 )
 
 func newNewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "new <title>",
 		Short: "Create the next document and mark the ones it supersedes",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runNew,
+		// A title is what a document is created from, and --fixture creates a
+		// rule's fixture instead, whose documents are named after the rule.
+		Args: cobra.MaximumNArgs(1),
+		RunE: runNew,
 	}
 	cmd.Flags().StringArray(flagSupersedes, nil, "reference this document supersedes (repeatable)")
 	cmd.Flags().StringArray(flagDependsOn, nil, "reference this document depends on (repeatable)")
 	cmd.Flags().Bool(flagDryRun, false, "print what would be written and write nothing")
 	cmd.Flags().String(flagID, "", "identifier to create the document under, instead of the next free one")
 	cmd.Flags().String(flagKind, "", "kind of document to create, on a corpus that declares kinds")
+	cmd.Flags().String(flagFixture, "", "create the ruleid/ and ok/ fixture of a rule instead of a document")
+	cmd.Flags().String(flagFixtures, lint.DefaultFixtureDir, "directory --fixture writes the fixture into")
 	return cmd
 }
 
@@ -71,6 +77,16 @@ func runNew(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	flags := cmd.Flags()
+	fixture, err := flags.GetString(flagFixture)
+	if err != nil {
+		return usageErr("%v", err)
+	}
+	if fixture != "" {
+		return runNewFixture(cmd, fixture, format)
+	}
+	if len(args) != 1 {
+		return usageErr("new takes a title, or --%s <rule>", flagFixture)
+	}
 	supersedes, err := flags.GetStringArray(flagSupersedes)
 	if err != nil {
 		return usageErr("%v", err)
