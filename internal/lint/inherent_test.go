@@ -60,6 +60,12 @@ func TestUnsatisfiableCondition(t *testing.T) {
 			phrase: `attr current: "yes" is outside true, false`,
 		},
 		{
+			name: "a value outside the two words in_force answers with",
+			cfg: testConfig(testRule("outside_in_force", model.SeverityError,
+				testAttr(config.AttrInForce, testEq("yes")))),
+			phrase: `attr in_force: "yes" is outside true, false`,
+		},
+		{
 			name: "an edge required and forbidden",
 			cfg: testConfig(testRule("both_ways", model.SeverityError, config.Condition{
 				Inbound:    config.EdgeCondition{Edge: "supersedes"},

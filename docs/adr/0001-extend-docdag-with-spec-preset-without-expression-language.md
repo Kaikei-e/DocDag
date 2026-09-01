@@ -98,12 +98,12 @@ edges:
     direction: forward
     attrs:
       reason: {required: true, one_of: [recurrence, premise-collapse, conflict, vocabulary]}
+  # （0005 により改訂）`expires` は辺属性から deviation ノードのフィールドに移った。
+  # 1 つの逸脱記録が 2 つの条項から逸脱する場合、期間は 1 つであって 2 つではない。
   - name: deviates-from
     key: deviates-from
     from: [deviation]
     to: [clause]
-    attrs:
-      expires: {required: true, type: date}
   - name: measures
     key: measures
     from: [measure]
@@ -151,6 +151,8 @@ binding: effective        # query --binding が返す集合。省略時は prese
   - **次数の閾値**: `inbound: {edge: deviates-from, min: 5}` / `max`。既存の文字列形は `min: 1` の糖衣。
   - **一段隣の属性**: `via: {edge: premise, attr: {status: {eq: retired}}}`（出辺先のいずれかが条件を
     満たす）。入辺側は `via_inbound`。ネストは 1 段に限定する（推移閉包は `resolve` の領分）。
+    （0005 により改訂）`stale_premise` はこの形を `attr: {in_force: {eq: "false"}}` に改めた。
+    `in_force` は `period:` から engine が計算する属性で、語彙に日付は入らない。
 - 式言語は導入しない。算術・文字列操作・変数束縛は語彙に含めない。
 
 ### D4. `fields:` — フィールドの生命周期と preset 版
@@ -197,7 +199,7 @@ kinds: { clause: {...}, conform: {...}, deviation: {...}, measure: {...}, premis
 edges:
   - {name: supersedes,     key: supersedes,     from: [clause, premise], to: [clause, premise], acyclic: true, direction: forward, attrs: {reason: {required: true, one_of: [recurrence, premise-collapse, conflict, vocabulary]}}}
   - {name: enforces,       key: enforces,       from: [conform],   to: [clause]}
-  - {name: deviates-from,  key: deviates-from,  from: [deviation], to: [clause], attrs: {expires: {required: true, type: date}}}
+  - {name: deviates-from,  key: deviates-from,  from: [deviation], to: [clause]}   # 0005: expires は deviation のフィールドへ
   - {name: premise,        key: premise,        from: [clause],    to: [premise]}
   - {name: rationale,      key: rationale,      from: [clause],    to: [principle]}
   - {name: counterexample, key: counterexample, from: [clause, principle], to: [pm]}
@@ -214,7 +216,8 @@ binding: effective
 rules:
   - {name: orphan_must,      severity: error, when: {any_of: [{attr: {modality: {eq: MUST}, status: {eq: accepted}}}, {attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}}], not_inbound: enforces}, message: "is MUST or MUST_NOT and accepted but nothing enforces it"}
   - {name: orphan_test,      severity: error, when: {attr: {kind: {eq: conform}}, not_outbound: enforces},                                    message: "enforces no clause"}
-  - {name: stale_premise,    severity: error, when: {attr: {status: {eq: accepted}}, via: {edge: premise, attr: {status: {eq: retired}}}},   message: "is accepted but a premise is retired"}
+  # （0005 により改訂）premise は `period: {from: date, until: retired_on}` を持ち、規則は日付を読む
+  - {name: stale_premise,    severity: error, when: {attr: {status: {eq: accepted}}, via: {edge: premise, attr: {in_force: {eq: "false"}}}}, message: "is accepted but a premise is no longer in force"}
   - {name: deviation_pressure, severity: warn, when: {attr: {status: {eq: accepted}}, inbound: {edge: deviates-from, min: 5}},               message: "has 5+ deviations; reconsider the clause"}
   - {name: no_counterexample, severity: warn, when: {attr: {kind: {eq: clause}, status: {eq: accepted}}, not_outbound: counterexample},      message: "is accepted without a counterexample"}
 ```
@@ -382,3 +385,8 @@ rules:
   を `effective` の各 alternative に足す形で乗る）。
 - 0005: `deviates-from` の辺属性 `expires` を deviation ノードのフィールドに移し、`premise` の
   `status: retired` を `period: {until: retired_on}` に置き換える。`stale_premise` は `in_force` を読む。
+  **反映済み**（本文の該当ブロックに「0005 により改訂」と注記）。`spec` preset は preset_version 2 に上げ、
+  clause / deviation / premise の 3 kind が `period:` を宣言する。`status: retired` は premise の
+  status_values に残した：規則が読むのは日付だが、文書を書く人が手で書く語としては有用で、
+  語彙から外すと既存文書が `unknown_status` になるためである（0005 の「status を増やさない」方針は
+  「status を新設しない」ことであって、既存の語を削ることではない）。

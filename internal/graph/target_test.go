@@ -37,7 +37,7 @@ func testReplacedGraph() *model.Graph {
 
 func TestCheckTargets(t *testing.T) {
 	t.Run("an edge declaring no target reports nothing", func(t *testing.T) {
-		if got := CheckTargets(testReplacedGraph(), config.ADRPreset()); len(got) != 0 {
+		if got := CheckTargets(testReplacedGraph(), config.ADRPreset(), testAsOf); len(got) != 0 {
 			t.Fatalf("findings = %+v, want none: no edge declares a target", got)
 		}
 	})
@@ -45,7 +45,7 @@ func TestCheckTargets(t *testing.T) {
 	t.Run("a dependency on a replaced document is an error on the document that declared it", func(t *testing.T) {
 		g := testReplacedGraph()
 
-		f := testAssertSingleFinding(t, CheckTargets(g, testLeafOfConfig()), model.RuleStaleTarget, model.SeverityError, "0003")
+		f := testAssertSingleFinding(t, CheckTargets(g, testLeafOfConfig(), testAsOf), model.RuleStaleTarget, model.SeverityError, "0003")
 
 		if f.Detail != "depends-on targets 0001, which 0002 supersedes" {
 			t.Errorf("detail = %q, want the edge, the target and what replaced it", f.Detail)
@@ -78,7 +78,7 @@ func TestCheckTargets(t *testing.T) {
 			nil,
 		)
 
-		if got := CheckTargets(g, testLeafOfConfig()); len(got) != 0 {
+		if got := CheckTargets(g, testLeafOfConfig(), testAsOf); len(got) != 0 {
 			t.Fatalf("findings = %+v, want none: the dependency names the leaf", got)
 		}
 	})
@@ -90,7 +90,7 @@ func TestCheckTargets(t *testing.T) {
 			nil,
 		)
 
-		if got := CheckTargets(g, testLeafOfConfig()); len(got) != 0 {
+		if got := CheckTargets(g, testLeafOfConfig(), testAsOf); len(got) != 0 {
 			t.Fatalf("findings = %+v, want none: there is no target to hold a condition against", got)
 		}
 	})
@@ -111,7 +111,7 @@ func TestCheckTargets(t *testing.T) {
 			nil,
 		)
 
-		f := testAssertSingleFinding(t, CheckTargets(g, cfg), model.RuleStaleTarget, model.SeverityError, "0003")
+		f := testAssertSingleFinding(t, CheckTargets(g, cfg, testAsOf), model.RuleStaleTarget, model.SeverityError, "0003")
 
 		if f.Detail != "depends-on targets 0001, which does not satisfy the edge's target condition" {
 			t.Errorf("detail = %q, want the generic wording: the condition is whatever the corpus wrote", f.Detail)
@@ -129,7 +129,7 @@ func TestCheckTargets(t *testing.T) {
 			}},
 		}
 
-		f := testAssertSingleFinding(t, CheckTargets(testReplacedGraph(), cfg), model.RuleStaleTarget, model.SeverityError, "0003")
+		f := testAssertSingleFinding(t, CheckTargets(testReplacedGraph(), cfg, testAsOf), model.RuleStaleTarget, model.SeverityError, "0003")
 		if !strings.Contains(f.Detail, "0001") {
 			t.Errorf("detail = %q, want the target the binding projection does not hold for", f.Detail)
 		}
@@ -157,7 +157,7 @@ func TestCheckTargets(t *testing.T) {
 
 		// The derived edge was written by 0001's status field, so that is the
 		// document the finding is filed against and the line it points at.
-		f := testAssertSingleFinding(t, CheckTargets(g, cfg), model.RuleStaleTarget, model.SeverityError, "0001")
+		f := testAssertSingleFinding(t, CheckTargets(g, cfg, testAsOf), model.RuleStaleTarget, model.SeverityError, "0001")
 		if f.Location != testNodeLocation("0001", testStatusLine) {
 			t.Errorf("location = %+v, want the derived field's line", f.Location)
 		}
@@ -192,7 +192,7 @@ func TestCheckTargets(t *testing.T) {
 			nil,
 		)
 
-		f := testAssertSingleFinding(t, CheckTargets(g, cfg), model.RuleStaleTarget, model.SeverityError, "0001")
+		f := testAssertSingleFinding(t, CheckTargets(g, cfg, testAsOf), model.RuleStaleTarget, model.SeverityError, "0001")
 		if f.Detail != "supersedes targets 0001, which does not satisfy the edge's target condition" {
 			t.Errorf("detail = %q, want the head of the edge rather than the identifier the key names", f.Detail)
 		}
@@ -206,7 +206,7 @@ func TestCheckTargets(t *testing.T) {
 		g.Nodes["0004"] = testNode("0004", config.StatusAccepted)
 		g.Edges = append(g.Edges, testEdge("0004", "0001", config.EdgeDependsOn))
 
-		got := CheckTargets(g, testLeafOfConfig())
+		got := CheckTargets(g, testLeafOfConfig(), testAsOf)
 
 		testAssertIDs(t, "stale target ids", testFindingIDs(got, model.RuleStaleTarget), testIDs("0003", "0004"))
 		testAssertSortedFindings(t, got)
@@ -227,7 +227,7 @@ func TestSuggestTheLeafOfAStaleTarget(t *testing.T) {
 		g := testReplacedGraph()
 		cfg := testLeafOfConfig()
 
-		got := Suggest(CheckTargets(g, cfg), g, cfg)
+		got := Suggest(CheckTargets(g, cfg, testAsOf), g, cfg, testAsOf)
 
 		if len(got) != 1 || got[0].Fix != "did you mean 0002?" {
 			t.Fatalf("fix = %+v, want the leaf of the lineage", got)
@@ -251,7 +251,7 @@ func TestSuggestTheLeafOfAStaleTarget(t *testing.T) {
 		)
 		cfg := testLeafOfConfig()
 
-		got := Suggest(CheckTargets(g, cfg), g, cfg)
+		got := Suggest(CheckTargets(g, cfg, testAsOf), g, cfg, testAsOf)
 
 		// The check itself is local — it saw only that 0002 supersedes 0001 —
 		// and only the suggestion walks the rest of the lineage.
@@ -280,7 +280,7 @@ func TestSuggestTheLeafOfAStaleTarget(t *testing.T) {
 		)
 		cfg := testLeafOfConfig()
 
-		got := Suggest(CheckTargets(g, cfg), g, cfg)
+		got := Suggest(CheckTargets(g, cfg, testAsOf), g, cfg, testAsOf)
 
 		if len(got) != 1 || got[0].Fix != "did you mean one of: 0002, 0003?" {
 			t.Fatalf("fix = %+v, want both leaves listed", got)
@@ -306,7 +306,7 @@ func TestSuggestTheLeafOfAStaleTarget(t *testing.T) {
 		)
 		cfg := testLeafOfConfig()
 
-		got := Suggest(CheckTargets(g, cfg), g, cfg)
+		got := Suggest(CheckTargets(g, cfg, testAsOf), g, cfg, testAsOf)
 
 		if len(got) != 1 {
 			t.Fatalf("findings = %+v, want the stale target to stand", got)
@@ -325,7 +325,7 @@ func TestSuggestTheLeafOfAStaleTarget(t *testing.T) {
 		}
 		g := testReplacedGraph()
 
-		got := Suggest(CheckTargets(g, cfg), g, cfg)
+		got := Suggest(CheckTargets(g, cfg, testAsOf), g, cfg, testAsOf)
 
 		if len(got) != 1 || got[0].Fix != "" {
 			t.Fatalf("fix = %+v, want none: which document satisfies the condition is not the graph's answer", got)

@@ -23,7 +23,7 @@ func testSuggestionGraph() *model.Graph {
 
 func testSuggest(t *testing.T, f model.Finding) string {
 	t.Helper()
-	suggested := Suggest([]model.Finding{f}, testSuggestionGraph(), config.ADRPreset())
+	suggested := Suggest([]model.Finding{f}, testSuggestionGraph(), config.ADRPreset(), testAsOf)
 	if len(suggested) != 1 {
 		t.Fatalf("suggested = %+v, want one finding back", suggested)
 	}
@@ -139,7 +139,7 @@ func TestSuggestFollowsTheConfiguredVocabulary(t *testing.T) {
 	findings := Suggest([]model.Finding{
 		{Rule: model.RuleStatusDrift, ID: "0001", Location: model.Location{Path: "0001.md"}},
 		{Rule: model.RuleMissingFrontmatter, ID: "0002"},
-	}, testSuggestionGraph(), cfg)
+	}, testSuggestionGraph(), cfg, testAsOf)
 
 	if findings[0].Fix != "set state: superseded in 0001.md" {
 		t.Errorf("fix = %q, want the configured status field", findings[0].Fix)

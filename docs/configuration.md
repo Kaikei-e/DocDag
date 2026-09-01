@@ -242,7 +242,7 @@ edges:
     attrs:
       agreement: {required: true, type: number}
       model:     {required: true, type: string}
-      expires:   {type: date}                    # optional, and a date when written
+      taken_on:  {type: date}                    # optional, and a date when written
 ```
 
 An entry under such a key is then either a plain reference or a mapping naming one:
@@ -255,8 +255,14 @@ measures:
   - ref: "0002"
     agreement: 0.92
     model: sonnet
-    expires: 2026-01-01
+    taken_on: 2026-01-01
 ```
+
+An attribute is a fact about the relation — the reason a clause replaced another, the model a
+measurement was taken with. A *lifetime* is not one: how long a document is in force belongs to the
+document, under [`period:`](#periods-and-as-of), because a record that departs from two clauses has
+one lifetime and not two. That is why the `spec` preset's `deviates-from` carries no attributes and
+its `deviation` kind carries `expires:`.
 
 `type:` is `string` (the default), `number` or `date`, a date being `YYYY-MM-DD`; `one_of:` is a
 closed vocabulary of strings, compared exactly rather than case-insensitively, and it implies
@@ -499,6 +505,10 @@ a list is a one-element list; comparison is case-insensitive; a positive clause 
 to be there and a negative one is satisfied by its absence. There is no expression language: no
 arithmetic, no string operations, no variables.
 
+An `attr:` key reads a frontmatter key, a declared projection, or `in_force` — the one attribute the
+engine computes rather than reads, from the [`period:`](#periods-and-as-of) a kind declares. The
+date comparison behind it stays in the engine, which is what keeps the vocabulary free of dates.
+
 `inbound` and `outbound` read either as an edge name or as a degree threshold, and the name alone is
 sugar for one edge or more. `via` and `via_inbound` reach exactly one hop: they hold when at least
 one neighbour across the named edge type satisfies every attribute clause they carry. A neighbour
@@ -574,6 +584,113 @@ what `stats` counts and what `context` keeps. A configuration that declares no p
 falls back on the built-in definition, accepted and superseded by nothing, which is what the `adr`
 preset's `accepted_unsuperseded` projection writes down.
 
+## Periods and as-of
+
+A `period:` declaration says which frontmatter keys a document writes the days it is in force
+between. It is written per kind, or once at the top level for a corpus that declares no kinds:
+
+```yaml
+kinds:
+  clause:
+    period: {from: in_force_from, until: in_force_until}   # from defaults to date
+  deviation:
+    period: {from: date, until: expires}
+  premise:
+    period: {from: date, until: retired_on}
+```
+
+The two values are **key names, not days**: the days are facts about each document, so they live in
+the documents. Both keys are ISO 8601 calendar dates — `YYYY-MM-DD`, no time and no timezone — and
+the interval they describe is closed-open, `[from, until)`: a document is in force on the day it
+begins and not on the day it ends. A kind that names no `from` reads the `date` field; a document
+that does not write the named key has no beginning to compare against, so it has always begun.
+Declaring the period is what makes its keys known to a `closed: true` kind, and declaring them under
+`fields:` as well is what makes `stats --fields` count them.
+
+A period whose two ends are one key, or which names no key at all, is a configuration error
+(exit 3), as is one naming a key an edge already declares.
+
+**The end can be derived.** For a document that writes none, `until` is the earliest day an
+**accepted** successor begins on — over the `supersedes` lineage — and the derived day is never
+written back into the frontmatter, for the reason no derived value is. A successor nobody has
+accepted derives nothing, and one that is withdrawn stops deriving: the predecessor's period opens
+up again with nothing rewritten but the successor's own status. A written end that disagrees with a
+derived one is `period_conflict`; the written day is the one that decides.
+
+**`in_force` is what rules read.** From the period and the day the run is about, the engine computes
+`in_force(d) := from(d) ≤ as-of < until(d)` and exposes it as an attribute that reads exactly like a
+projection — `attr: {in_force: {eq: "true"}}`. It is the one attribute the engine computes rather
+than reads, and the date comparison stays inside it: the vocabulary gains no date literal and no
+arithmetic. A projection named `in_force` is a configuration error, because it would shadow the
+attribute. A kind that declares no period is always in force, which is what keeps a configuration
+without periods answering as it always did. [checks.md](checks.md#periods-and-the-day-a-run-is-about)
+has the three findings a period turns on, and the rule that an out-of-force document's edges stop
+counting.
+
+### The day a command answers for
+
+| Command | Default as-of | Why |
+| --- | --- | --- |
+| `validate`, `lint --corpus` | the day HEAD was committed on | a gate has to answer the same way for one commit however long afterwards it runs |
+| `query`, `resolve`, `context`, `stats` | the day the command runs | a listing is a question about now |
+
+`--as-of YYYY-MM-DD` names the day explicitly on any of them, and `$DOCDAG_AS_OF` names it for a
+whole pipeline; the flag wins where both are written, and a day that is not a date is a usage error
+(exit 2). Outside a git repository, or where git cannot answer, `validate` falls back on the day it
+runs. Detecting an expiry as it happens is a scheduled run that says so — `--as-of $(date -I)`,
+which [ci.md](ci.md#periodic-runs) writes out.
+
+`--at <rev>` is the other axis: it reads every managed document from a revision instead of from the
+working tree. The two are independent — the valid time of a temporal database and its transaction
+time — so combining them asks what the vault at that revision said was in force on that day:
+
+```console
+$ docdag query --binding --at v1.2.0 --as-of 2026-06-01
+```
+
+`--at` is read-only, so `new` does not take it, and a corpus outside a repository cannot answer it
+(exit 3). Every JSON report carries `as_of`, and `at` where a revision was named; the text reports
+carry the day only where some kind declares a period, because a corpus that answers the same on
+every day has no day worth printing.
+
+### Time-dependent status checks
+
+The `adr` preset's `status_drift` is time-independent: the moment a successor exists, the
+predecessor has to say `superseded`. A corpus that declares a period can replace it with the three
+rules the `spec` preset carries, which read the day instead:
+
+```yaml
+period: {from: date}
+projections:
+  - name: has_inforce_successor
+    when: {via_inbound: {edge: supersedes, attr: {in_force: {eq: "true"}, status: {eq: accepted}}}}
+rules:
+  - name: status_drift
+    severity: error
+    when:
+      attr: {status: {not: superseded}}
+      via_inbound: {edge: supersedes, attr: {status: {eq: accepted}, in_force: {eq: "true"}}}
+    message: "an in-force successor supersedes it but status is not superseded"
+  - name: pending_successor
+    severity: warn
+    when:
+      attr: {status: {eq: accepted}}
+      inbound: supersedes
+      not: {attr: {has_inforce_successor: {eq: "true"}}}
+    message: "a successor is declared but not yet in force; this clause remains binding until then"
+  - name: premature_superseded
+    severity: error
+    when:
+      attr: {status: {eq: superseded}}
+      not: {attr: {has_inforce_successor: {eq: "true"}}}
+    message: "status is superseded but no successor is in force yet"
+```
+
+Writing `rules:` replaces the preset's list, so the rules a corpus keeps are written out with them.
+A binding projection that should follow the same reading adds `in_force: {eq: "true"}` and the
+absence of `has_inforce_successor` to its own condition, which is what the `spec` preset's
+`effective` does.
+
 ## The spec preset
 
 `preset: spec` is the second built-in configuration: a normative standard as a graph of clauses, the
@@ -590,7 +707,7 @@ The file below is that preset in full:
 
 ```yaml
 preset: spec
-preset_version: 1
+preset_version: 2
 status_field: status
 
 kinds:
@@ -603,6 +720,9 @@ kinds:
       modality:                 # the strength the clause claims, and it has to claim one
         one_of: [MUST, MUST_NOT, SHOULD, SHOULD_NOT, MAY]
         required: true
+      in_force_from: {}         # declared so stats --fields counts them; the period reads them
+      in_force_until: {}
+    period: {from: in_force_from, until: in_force_until}
   conform:
     dir: spec/conform
     id: '^conform/[a-z0-9-]+$'
@@ -613,6 +733,9 @@ kinds:
     id: '^dev-\d{4}$'
     status_values: [proposed, accepted, resolved, withdrawn]
     closed: true
+    fields:
+      expires: {}               # the day the departure stops being recorded
+    period: {from: date, until: expires}
   measure:
     dir: spec/measures
     id: '^interp/UZ-[A-Z]-\d{3}@\d{4}-\d{2}-\d{2}$'
@@ -620,6 +743,9 @@ kinds:
     dir: spec/premises
     id: '^premise/[a-z0-9/-]+$'
     status_values: [proposed, accepted, retired, superseded]
+    fields:
+      retired_on: {}            # the day the world stopped making it true
+    period: {from: date, until: retired_on}
   principle:
     dir: spec/principles
     id: '^principle/[a-z0-9/-]+$'
@@ -646,14 +772,12 @@ edges:
     direction: forward
     from: [conform]
     to: [clause]
-    target: {leaf_of: supersedes}     # sugar for not_inbound: supersedes
+    target: {leaf_of: supersedes}     # the current leaf: no in-force accepted successor
   - name: deviates-from
     key: deviates-from
     direction: forward
     from: [deviation]
     to: [clause]
-    attrs:
-      expires: {required: true, type: date}
     target:
       attr: {status: {eq: accepted}}
       not_inbound: supersedes         # = binding: a departure departs from something in force
@@ -704,39 +828,41 @@ edges:
 projections:
   - name: enforced
     when: {inbound: enforces}
+  - name: has_inforce_successor       # in_force is the engine's, computed from period:
+    when: {via_inbound: {edge: supersedes, attr: {in_force: {eq: "true"}, status: {eq: accepted}}}}
   - name: effective_must
     any_of:
       - when:
-          attr: {modality: {eq: MUST}, status: {eq: accepted}}
+          attr: {modality: {eq: MUST}, status: {eq: accepted}, in_force: {eq: "true"}}
           inbound: enforces
-          not_inbound: supersedes
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
       - when:
-          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}
+          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}, in_force: {eq: "true"}}
           inbound: enforces
-          not_inbound: supersedes
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
   - name: effective_should
     any_of:
       - when:
-          attr: {modality: {eq: SHOULD}, status: {eq: accepted}}
-          not_inbound: supersedes
+          attr: {modality: {eq: SHOULD}, status: {eq: accepted}, in_force: {eq: "true"}}
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
       - when:
-          attr: {modality: {eq: SHOULD_NOT}, status: {eq: accepted}}
-          not_inbound: supersedes
+          attr: {modality: {eq: SHOULD_NOT}, status: {eq: accepted}, in_force: {eq: "true"}}
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
       - when:
-          attr: {modality: {eq: MUST}, status: {eq: accepted}}
+          attr: {modality: {eq: MUST}, status: {eq: accepted}, in_force: {eq: "true"}}
+          not_inbound: enforces           # a condition holds one not: block; this is the other absence
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
+      - when:
+          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}, in_force: {eq: "true"}}
           not_inbound: enforces
-          not: {inbound: supersedes}      # a condition holds one not_inbound; this is the other
-      - when:
-          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}
-          not_inbound: enforces
-          not: {inbound: supersedes}
-  - name: effective                     # in_force is reserved: ADR-0005 computes it from period:
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
+  - name: effective                     # the first two already read the day through the projections
     any_of:
       - when: {attr: {effective_must: {eq: "true"}}}
       - when: {attr: {effective_should: {eq: "true"}}}
       - when:
-          attr: {modality: {eq: MAY}, status: {eq: accepted}}
-          not_inbound: supersedes         # a permission is effective as the permission it states
+          attr: {modality: {eq: MAY}, status: {eq: accepted}, in_force: {eq: "true"}}
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
 
 binding: effective
 
@@ -759,8 +885,8 @@ rules:
     severity: error
     when:
       attr: {status: {eq: accepted}}
-      via: {edge: premise, attr: {status: {eq: retired}}}
-    message: "is accepted but a premise is retired"
+      via: {edge: premise, attr: {in_force: {eq: "false"}}}
+    message: "is accepted but a premise is no longer in force"
   - name: deviation_pressure
     severity: warn
     when:
@@ -785,6 +911,25 @@ rules:
       outbound: interop
       via: {edge: interop, attr: {modality: {not: MUST}}}
     message: "interop must point at a MUST clause"
+  - name: status_drift                  # time-dependent, unlike the adr preset's rule of that name
+    severity: error
+    when:
+      attr: {status: {not: superseded}}
+      via_inbound: {edge: supersedes, attr: {status: {eq: accepted}, in_force: {eq: "true"}}}
+    message: "an in-force successor supersedes it but status is not superseded"
+  - name: pending_successor
+    severity: warn
+    when:
+      attr: {status: {eq: accepted}}
+      inbound: supersedes
+      not: {attr: {has_inforce_successor: {eq: "true"}}}
+    message: "a successor is declared but not yet in force; this clause remains binding until then"
+  - name: premature_superseded
+    severity: error
+    when:
+      attr: {status: {eq: superseded}}
+      not: {attr: {has_inforce_successor: {eq: "true"}}}
+    message: "status is superseded but no successor is in force yet"
 ```
 
 There is no top-level `status_values`, and each kind that answers to a vocabulary carries its own.
@@ -809,7 +954,10 @@ exception of under `excepts:`, the requirement its option leans on under `intero
 `premise:`, `rationale:` and `counterexample:`. Its frontmatter is `closed: true`, so a key nobody
 declared is a finding rather than another tool's field; `modality` is declared under the kind's
 `fields:`, which is what admits it — with the vocabulary it comes from and `required: true`, because
-a clause that states no strength states nothing.
+a clause that states no strength states nothing. Its `period:` reads `in_force_from:` and
+`in_force_until:`, so a clause released next quarter can be written today and binds nothing until
+then; a clause that writes neither day has always been in force and stops when its successor takes
+over.
 
 The vocabulary is five values rather than a strength and a polarity because BCP 14 has no `MAY NOT`:
 a pair of fields would have an invalid combination to check for, where a closed set of five has
@@ -828,17 +976,22 @@ a missed one, and `docdag stats` reports the per-topic counts to watch it with.
 declares `enforces:`, and that edge is what gives a `MUST` its force. The identifier carries a
 slash, so no file name can hold it and the document writes `id:` in its frontmatter.
 
-**deviation** — a recorded departure from a clause, `dev-0001`. It declares `deviates-from:` with a
-required `expires:` attribute, so every departure has an end date written on the edge that departs
-rather than in a field of the document. `closed: true`, like a clause: a deviation is a
-hand-written record too.
+**deviation** — a recorded departure from a clause, `dev-0001`. It runs from the day it was recorded
+to the day it names under `expires:`, which is the deviation's own field: a record that departs from
+two clauses has one lifetime and not two. Past that day it stops counting — for
+`deviation_pressure`, and for anything else that reads the edges it declares — and reports
+`expired_deviation` while its status still says accepted. `closed: true`, like a clause: a deviation
+is a hand-written record too.
 
 **measure** — one measurement of one clause on one day, `interp/UZ-V-001@2026-08-01`, generated by
 the standard's own CLI. It declares `measures:` with a required agreement rate and model name.
 
 **premise** — something the standard assumes is true, `premise/runs-are-reproducible`, written by
-whoever noticed the assumption. It is `retired` rather than superseded when the world stops making
-it true, and every accepted clause still resting on a retired premise is a `stale_premise` finding.
+whoever noticed the assumption. It names the day the world stopped making it true under
+`retired_on:`, and every accepted clause still resting on a premise past that day is a
+`stale_premise` finding. `retired` stays in its status vocabulary for the person writing the
+document; the rule reads the day, so a premise retired next month holds its clauses up until next
+month.
 
 **principle** — the reason behind a family of clauses, `principle/evidence-over-assertion`. Clauses
 point at it through `rationale:`, and it may carry a `counterexample:` of its own.
@@ -877,13 +1030,14 @@ error and carries the force of a `SHOULD` in the meantime — which is what `eff
 `MUST_NOT` is a strict rule in exactly the same way, so it needs the same test behind it and falls
 to a `SHOULD_NOT` without one; `effective_must` is the pair of them.
 
-`binding:` names `effective`, which is every accepted, unsuperseded clause at whatever strength the
-three projections leave it with, the explicit permission included. It is wider than
-`effective_must` on purpose: a permission and a prohibition can only be seen to conflict if both are
-in the set, so `query --binding` lists them all with a `modality` column saying which is which, and
+`binding:` names `effective`, which is every accepted clause that is in force on the day being asked
+about and that no in-force successor has taken over from, at whatever strength the three projections
+leave it with, the explicit permission included. It is wider than `effective_must` on purpose: a
+permission and a prohibition can only be seen to conflict if both are in the set, so
+`query --binding` lists them all with a `modality` column saying which is which, and
 `modality_conflict` compares the ones that are actually in force. It is not called `in_force`: that
-name belongs to the period-derived attribute a later revision computes, and a projection shadows an
-attribute spelled the same way.
+name is the attribute the engine computes from `period:`, and a projection shadows an attribute
+spelled the same way — so the engine rejects one, and `effective` reads it instead.
 
 **An exception is recorded, never inferred.** Where a permission and a prohibition are meant to
 stand side by side, the more specific clause declares `excepts:` on the general one with a `scope:`

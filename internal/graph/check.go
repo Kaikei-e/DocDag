@@ -656,8 +656,9 @@ func derivedOwner(cfg config.Config, e model.Edge) model.ID {
 }
 
 // Check runs every built-in structural check. These cannot be disabled. asOf is
-// the day the time-dependent checks compare against — a field sunset is the
-// only one today — and the zero time means today.
+// the one day every time-dependent check compares against — the field sunsets,
+// the periods, and everything the periods decide — and the zero time means
+// today.
 func Check(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
 	findings := []model.Finding{}
 	findings = append(findings, CheckCycles(g, cfg)...)
@@ -665,13 +666,14 @@ func Check(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
 	findings = append(findings, CheckInverse(g, cfg)...)
 	findings = append(findings, CheckCardinality(g, cfg)...)
 	findings = append(findings, CheckEdgeKinds(g, cfg)...)
-	findings = append(findings, CheckTargets(g, cfg)...)
+	findings = append(findings, CheckTargets(g, cfg, asOf)...)
 	findings = append(findings, CheckPathConstraints(g, cfg)...)
 	findings = append(findings, CheckStatusVocabulary(g, cfg)...)
 	findings = append(findings, CheckDerived(g, cfg)...)
 	findings = append(findings, CheckFieldValues(g, cfg)...)
 	findings = append(findings, CheckDeprecatedFields(g, cfg, asOf)...)
-	findings = append(findings, CheckModalityConflicts(g, cfg)...)
+	findings = append(findings, CheckPeriods(g, cfg, asOf)...)
+	findings = append(findings, CheckModalityConflicts(g, cfg, asOf)...)
 	findings = append(findings, CheckExceptsStrict(g, cfg)...)
 	SortFindings(findings)
 	return findings
@@ -686,19 +688,42 @@ type edgeIndex struct {
 	outbound map[model.ID]map[model.EdgeType][]model.ID
 }
 
-func newEdgeIndex(g *model.Graph) edgeIndex {
+// newEdgeIndex indexes the typed edges the conditions read, dropping the ones
+// an out-of-force document declared: a departure that has expired and an
+// exception whose clause has ended state nothing any more, so the thresholds
+// that count them and the one-hop clauses that cross them do not see them.
+// That is what "in force" has to mean for a document's own statements — a
+// standard that kept counting expired departures would report pressure nobody
+// is applying — and it costs a corpus without periods nothing, because there
+// every document is in force.
+//
+// The supersession lineage is exempt, and periodLineage says why: it is what
+// the ends are derived from, and a successor that has not begun is the fact
+// pending_successor is written to report.
+func newEdgeIndex(g *model.Graph, periods Periods) edgeIndex {
 	ix := edgeIndex{
 		inbound:  make(map[model.ID]map[model.EdgeType][]model.ID, len(g.Nodes)),
 		outbound: make(map[model.ID]map[model.EdgeType][]model.ID, len(g.Nodes)),
 	}
 	for _, e := range g.Edges {
-		if e.Origin == model.OriginReference {
+		if e.Origin == model.OriginReference || !carriesWeight(periods, e) {
 			continue
 		}
 		mark(ix.outbound, e.From, e.Type, e.To)
 		mark(ix.inbound, e.To, e.Type, e.From)
 	}
 	return ix
+}
+
+// carriesWeight reports whether an edge still says something on the day the
+// periods were evaluated for: every edge of a corpus without periods, every
+// edge of the supersession lineage, and every edge an in-force document
+// declared.
+func carriesWeight(periods Periods, e model.Edge) bool {
+	if e.Type == periodLineage || !periods.Declared(e.From) {
+		return true
+	}
+	return periods.InForce(e.From)
 }
 
 func mark(index map[model.ID]map[model.EdgeType][]model.ID, id model.ID, t model.EdgeType, peer model.ID) {
@@ -728,16 +753,22 @@ func (ix edgeIndex) degree(id model.ID, t model.EdgeType, inbound bool) int {
 }
 
 // evalContext is everything a condition is evaluated against: the graph, the
-// edge index, and the projections that answer as virtual attributes.
+// edge index, the periods that say what is in force on the day being asked
+// about, and the projections that answer as virtual attributes.
 type evalContext struct {
 	g         *model.Graph
 	ix        edgeIndex
+	periods   Periods
 	projected Projections
 }
 
-func newEvalContext(g *model.Graph, cfg config.Config) evalContext {
-	ix := newEdgeIndex(g)
-	return evalContext{g: g, ix: ix, projected: evalProjections(g, cfg, ix)}
+// newEvalContext builds the context one day's evaluation reads. The periods
+// come first: in_force is computed rather than derived, and a projection may
+// read it, so it has to be an answer before the projections are evaluated.
+func newEvalContext(g *model.Graph, cfg config.Config, asOf time.Time) evalContext {
+	periods := EvalPeriods(g, cfg, asOf)
+	ix := newEdgeIndex(g, periods)
+	return evalContext{g: g, ix: ix, periods: periods, projected: evalProjections(g, cfg, ix, periods)}
 }
 
 func (e evalContext) match(cond config.Condition, id model.ID) bool {
@@ -845,7 +876,16 @@ func (e evalContext) attrList(n *model.Node, key string) ([]string, bool) {
 	return n.AttrList(key)
 }
 
+// virtual reads the attributes nothing wrote down: the one the engine computes
+// from the kinds' periods, and every declared projection. in_force is answered
+// first and unconditionally — a projection of that name is a configuration
+// error, so there is nothing for it to collide with, and a corpus without
+// periods answers true everywhere, which is what "this kind has no period"
+// means.
 func (e evalContext) virtual(id model.ID, key string) (string, bool) {
+	if key == config.AttrInForce {
+		return ProjectionValue(e.periods.InForce(id)), true
+	}
 	if !e.projected.Declares(key) {
 		return "", false
 	}
@@ -857,21 +897,22 @@ func containsFold(items []string, want string) bool {
 }
 
 // MatchCondition reports whether one node satisfies every clause of a rule
-// condition, the configured projections included.
-func MatchCondition(g *model.Graph, cfg config.Config, cond config.Condition, id model.ID) bool {
-	return newEvalContext(g, cfg).match(cond, id)
+// condition, the configured projections and the computed in_force included.
+// asOf is the day the periods are read against, the zero time meaning today.
+func MatchCondition(g *model.Graph, cfg config.Config, cond config.Condition, id model.ID, asOf time.Time) bool {
+	return newEvalContext(g, cfg, asOf).match(cond, id)
 }
 
 // EvalRule evaluates one declarative rule over every node.
-func EvalRule(g *model.Graph, cfg config.Config, rule config.Rule) []model.Finding {
-	return evalRule(g, cfg, newEvalContext(g, cfg), rule)
+func EvalRule(g *model.Graph, cfg config.Config, rule config.Rule, asOf time.Time) []model.Finding {
+	return evalRule(g, cfg, newEvalContext(g, cfg, asOf), rule)
 }
 
 // EvalRules evaluates every configured rule over every node. The evaluation
-// context is built once: the edge index and the projections are each linear in
-// the graph, and rebuilding them per rule is not.
-func EvalRules(g *model.Graph, cfg config.Config) []model.Finding {
-	ctx := newEvalContext(g, cfg)
+// context is built once: the edge index, the periods and the projections are
+// each linear in the graph, and rebuilding them per rule is not.
+func EvalRules(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
+	ctx := newEvalContext(g, cfg, asOf)
 	findings := []model.Finding{}
 	for _, rule := range cfg.Rules {
 		findings = append(findings, evalRule(g, cfg, ctx, rule)...)
@@ -932,7 +973,7 @@ func Validate(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding
 	findings := make([]model.Finding, 0, len(g.Findings))
 	findings = append(findings, g.Findings...)
 	findings = append(findings, Check(g, cfg, asOf)...)
-	findings = append(findings, EvalRules(g, cfg)...)
+	findings = append(findings, EvalRules(g, cfg, asOf)...)
 	SortFindings(findings)
 	return findings
 }

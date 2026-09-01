@@ -3,6 +3,7 @@ package cmd
 import (
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -70,7 +71,7 @@ func bindingColumns(cfg config.Config) []string {
 // withColumns fills in the derived and declared columns a listing was asked
 // for. Both are computed over the whole graph, so a listing that names neither
 // pays nothing for them.
-func withColumns(g *model.Graph, cfg config.Config, records []render.Record, fields []string) []render.Record {
+func withColumns(g *model.Graph, cfg config.Config, records []render.Record, fields []string, asOf time.Time) []render.Record {
 	projections, declared := []string{}, []string{}
 	for _, name := range fields {
 		switch {
@@ -81,7 +82,7 @@ func withColumns(g *model.Graph, cfg config.Config, records []render.Record, fie
 		}
 	}
 	if len(projections) > 0 {
-		records = render.WithProjections(records, projections, graph.EvalProjections(g, cfg))
+		records = render.WithProjections(records, projections, graph.EvalProjections(g, cfg, asOf))
 	}
 	if len(declared) > 0 {
 		records = render.WithFields(records, declared, g)

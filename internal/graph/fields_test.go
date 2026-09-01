@@ -202,7 +202,7 @@ func TestSuggestMigratesARetiredField(t *testing.T) {
 		cfg := testDeprecatedConfig(config.FieldSpec{Deprecated: true, MigrateTo: "owned-by"})
 		g := testDeprecatedGraph(cfg)
 
-		got := Suggest(CheckDeprecatedFields(g, cfg, testDay(t, "2026-09-01")), g, cfg)
+		got := Suggest(CheckDeprecatedFields(g, cfg, testDay(t, "2026-09-01")), g, cfg, testAsOf)
 
 		if len(got) != 1 || got[0].Fix != "migrate owner to owned-by" {
 			t.Fatalf("fix = %+v, want \"migrate owner to owned-by\"", got)
@@ -213,7 +213,7 @@ func TestSuggestMigratesARetiredField(t *testing.T) {
 		cfg := testDeprecatedConfig(config.FieldSpec{Deprecated: true})
 		g := testDeprecatedGraph(cfg)
 
-		got := Suggest(CheckDeprecatedFields(g, cfg, testDay(t, "2026-09-01")), g, cfg)
+		got := Suggest(CheckDeprecatedFields(g, cfg, testDay(t, "2026-09-01")), g, cfg, testAsOf)
 
 		if len(got) != 1 || got[0].Fix != "" {
 			t.Fatalf("fix = %+v, want none", got)

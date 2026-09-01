@@ -21,18 +21,33 @@ const (
 	toolURL  = "https://github.com/Kaikei-e/DocDag"
 )
 
-// Report is the JSON shape of `docdag validate`. PresetVersion is the revision
-// of the preset the corpus is written against, left out where the configuration
-// names none, so a repository can pin what its documents were checked under.
+// Header is what a machine-readable report carries beside its findings: the
+// revision of the preset the corpus is written against, the day the
+// time-dependent checks were given for, and the revision the documents were
+// read from. Each is left out where there is nothing to say, and together they
+// are what makes a report reproducible: the same documents, read at the same
+// revision, asked about the same day, answer the same way.
+type Header struct {
+	PresetVersion int
+	AsOf          string
+	At            string
+}
+
+// Report is the JSON shape of `docdag validate`.
 type Report struct {
 	SchemaVersion int             `json:"schema_version"`
 	PresetVersion int             `json:"preset_version,omitempty"`
+	AsOf          string          `json:"as_of,omitempty"`
+	At            string          `json:"at,omitempty"`
 	Findings      []model.Finding `json:"findings"`
 	Summary       model.Summary   `json:"summary"`
 }
 
 // FindingsText writes one line per finding, errors first, then a summary line.
-func FindingsText(w io.Writer, findings []model.Finding, summary model.Summary) error {
+// asOf is the day the run asked about, written only where the corpus has an
+// answer that depends on it; the closing line carries it, so a report a person
+// reads says which day it is about without a line in front of the findings.
+func FindingsText(w io.Writer, findings []model.Finding, summary model.Summary, asOf string) error {
 	out := &errWriter{w: w}
 	for _, f := range findings {
 		out.printf("%s%s %s%s: %s\n", locationPrefix(f.Location), strings.ToUpper(string(f.Severity)), f.Rule, subject(f.ID), f.Detail)
@@ -40,7 +55,7 @@ func FindingsText(w io.Writer, findings []model.Finding, summary model.Summary) 
 			out.printf("  fix: %s\n", f.Fix)
 		}
 	}
-	writeSummary(out, summary)
+	writeSummary(out, summary, asOf)
 	if out.err != nil {
 		return fmt.Errorf("write findings: %w", out.err)
 	}
@@ -81,19 +96,30 @@ func locationPrefix(loc model.Location) string {
 }
 
 // writeSummary appends the closing line. A corpus that failed gets no
-// reassuring summary.
-func writeSummary(out *errWriter, summary model.Summary) {
-	if summary.Errors == 0 {
-		out.printf("OK: %d docs, %d typed edges, no cycles\n", summary.Documents, summary.Edges)
+// reassuring summary — only the day it was asked about, where that day decides
+// anything.
+func writeSummary(out *errWriter, summary model.Summary, asOf string) {
+	if summary.Errors > 0 {
+		if asOf != "" {
+			out.printf("as of %s\n", asOf)
+		}
+		return
 	}
+	line := fmt.Sprintf("OK: %d docs, %d typed edges, no cycles", summary.Documents, summary.Edges)
+	if asOf != "" {
+		line += ", as of " + asOf
+	}
+	out.printf("%s\n", line)
 }
 
 // FindingsJSON writes the findings and the summary as a JSON report, headed by
-// the schema version and the preset revision the corpus was checked under.
-func FindingsJSON(w io.Writer, findings []model.Finding, summary model.Summary, presetVersion int) error {
+// the schema version and everything the header says about the run.
+func FindingsJSON(w io.Writer, findings []model.Finding, summary model.Summary, header Header) error {
 	report := Report{
 		SchemaVersion: ReportSchemaVersion,
-		PresetVersion: presetVersion,
+		PresetVersion: header.PresetVersion,
+		AsOf:          header.AsOf,
+		At:            header.At,
 		Findings:      findings,
 		Summary:       summary,
 	}
@@ -109,10 +135,10 @@ func FindingsJSON(w io.Writer, findings []model.Finding, summary model.Summary, 
 // FindingsGitHub writes one GitHub Actions workflow command per finding, then
 // the text summary. A workflow step renders at most ten annotations, so the
 // summary is what a reader sees when a corpus fails widely.
-func FindingsGitHub(w io.Writer, findings []model.Finding, summary model.Summary) error {
+func FindingsGitHub(w io.Writer, findings []model.Finding, summary model.Summary, asOf string) error {
 	out := &errWriter{w: w}
 	writeAnnotations(out, findings)
-	writeSummary(out, summary)
+	writeSummary(out, summary, asOf)
 	if out.err != nil {
 		return fmt.Errorf("write findings: %w", out.err)
 	}
@@ -323,9 +349,14 @@ func CreationPlan(w io.Writer, plan Plan, field string, asJSON bool) error {
 	return nil
 }
 
-// StatsText writes the corpus statistics as an aligned text report.
-func StatsText(w io.Writer, s graph.Statistics) error {
+// StatsText writes the corpus statistics as an aligned text report. asOf is the
+// day the counts are about, written as a row of its own only where the corpus
+// has counts that depend on it.
+func StatsText(w io.Writer, s graph.Statistics, asOf string) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if asOf != "" {
+		fmt.Fprintf(tw, "as of\t%s\n", asOf)
+	}
 	fmt.Fprintf(tw, "documents\t%d\n", s.Documents)
 	fmt.Fprintf(tw, "binding\t%d\n", s.Binding)
 	fmt.Fprintf(tw, "orphans\t%d (%.1f%%)\n", s.Orphans, s.OrphanRate*100)
@@ -353,9 +384,18 @@ func StatsText(w io.Writer, s graph.Statistics) error {
 	return nil
 }
 
+// StatsReport is the JSON shape of `docdag stats`: the counts, headed by the
+// day and the revision they are about. The statistics are embedded rather than
+// nested, so the fields a consumer already reads stay where they were.
+type StatsReport struct {
+	AsOf string `json:"as_of,omitempty"`
+	At   string `json:"at,omitempty"`
+	graph.Statistics
+}
+
 // StatsJSON writes the corpus statistics as JSON.
-func StatsJSON(w io.Writer, s graph.Statistics) error {
-	if err := writeJSON(w, s); err != nil {
+func StatsJSON(w io.Writer, s graph.Statistics, header Header) error {
+	if err := writeJSON(w, StatsReport{AsOf: header.AsOf, At: header.At, Statistics: s}); err != nil {
 		return fmt.Errorf("write statistics: %w", err)
 	}
 	return nil

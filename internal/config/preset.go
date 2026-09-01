@@ -153,10 +153,25 @@ const (
 // Edge attributes of the spec preset.
 const (
 	AttrReason    = "reason"
-	AttrExpires   = "expires"
 	AttrAgreement = "agreement"
 	AttrModel     = "model"
 	AttrScope     = "scope"
+)
+
+// The frontmatter keys the spec preset's periods are written under: a clause
+// states the days it is in force between, a deviation the day its departure
+// expires, and a premise the day the world stopped making it true.
+//
+// A clause names its own two keys rather than reading date, because the day a
+// clause was written and the day it takes effect are different facts: a
+// standard's release date is chosen, and a clause that has not been released
+// yet is not in force. A deviation and a premise both begin the day they were
+// recorded, which is what date already says.
+const (
+	FieldInForceFrom  = "in_force_from"
+	FieldInForceUntil = "in_force_until"
+	FieldExpires      = "expires"
+	FieldRetiredOn    = "retired_on"
 )
 
 // SupersedesReasons is the closed vocabulary a supersedes entry states its
@@ -231,20 +246,30 @@ const (
 // — a permission and a prohibition can only be seen to conflict if both are in
 // the set, and ADR-0003 R2 puts MAY in `--binding` for exactly that reason.
 //
-// It is not called in_force: ADR-0005 reserves that name for an attribute the
-// engine computes from a kind's `period:` declaration, and a projection shadows
-// a frontmatter or engine attribute spelled the same way — so a projection of
-// that name would mask the very attribute this preset will need to read. When
-// that ADR lands, `in_force: {eq: "true"}` joins the alternatives below.
+// It is not called in_force: that name is the attribute the engine computes
+// from a kind's `period:` declaration, and a projection shadows an attribute
+// spelled the same way — so a projection of that name would mask the very
+// attribute these projections read. The engine rejects one, and the
+// alternatives below read `in_force: {eq: "true"}` instead.
+//
+// has_inforce_successor is the other half of that reading: a clause stops being
+// effective when a successor actually takes over, which is a successor somebody
+// accepted whose own period has begun. A successor that is proposed, in trial,
+// or accepted but dated next quarter leaves its predecessor effective, which is
+// the state the standard had no way to say before.
 const (
-	ProjectionEnforced        = "enforced"
-	ProjectionEffectiveMust   = "effective_must"
-	ProjectionEffectiveShould = "effective_should"
-	ProjectionEffective       = "effective"
+	ProjectionEnforced         = "enforced"
+	ProjectionInForceSuccessor = "has_inforce_successor"
+	ProjectionEffectiveMust    = "effective_must"
+	ProjectionEffectiveShould  = "effective_should"
+	ProjectionEffective        = "effective"
 )
 
 // SpecPresetVersion is the revision the built-in spec configuration is at.
-const SpecPresetVersion = 1
+// Revision 2 is ADR-0005: the three kinds that have a lifetime declare the keys
+// they write it under, `expires` moved from the deviates-from edge to the
+// deviation that carries it, and the rules read the day.
+const SpecPresetVersion = 2
 
 // SpecPreset returns the built-in normative-clause configuration: eight kinds
 // of document, the edges between them declared on the side that generates
@@ -270,8 +295,21 @@ func SpecPreset() Config {
 			DefaultStatusField: eq(StatusAccepted),
 		}
 	}
+	// A clause carries force where it says so and the day says so: the same two
+	// questions plus the one the periods answer.
+	inForce := func(modality string) map[string]AttrCondition {
+		attrs := stated(modality)
+		attrs[AttrInForce] = eq(ProjectionTrue)
+		return attrs
+	}
 	accepted := func() map[string]AttrCondition {
 		return map[string]AttrCondition{DefaultStatusField: eq(StatusAccepted)}
+	}
+	// Not replaced yet: written as the negation of the projection rather than
+	// as not_inbound: supersedes, because a successor that has not taken over
+	// is still a declared successor.
+	unreplaced := func() *Condition {
+		return &Condition{Attr: map[string]AttrCondition{ProjectionInForceSuccessor: eq(ProjectionTrue)}}
 	}
 	atLeast := func(n int) *int { return &n }
 	return Config{
@@ -294,7 +332,17 @@ func SpecPreset() Config {
 				Closed: true,
 				Fields: map[string]FieldSpec{
 					FieldModality: {OneOf: slices.Clone(Modalities), Required: true},
+					// The two days the period is read from are declared as
+					// fields as well, so `stats --fields` counts how much of
+					// the standard has dated itself.
+					FieldInForceFrom:  {},
+					FieldInForceUntil: {},
 				},
+				// A clause is in force from the day the standard released it
+				// until the day its successor takes over, and a clause that
+				// names neither day is in force from the beginning with no end
+				// in sight — which is what an undated standard says.
+				Period: &PeriodSpec{From: FieldInForceFrom, Until: FieldInForceUntil},
 			},
 			KindConform: {
 				Dir: "spec/conform",
@@ -311,6 +359,12 @@ func SpecPreset() Config {
 					StatusProposed, StatusAccepted, StatusResolved, StatusWithdrawn,
 				},
 				Closed: true,
+				Fields: map[string]FieldSpec{FieldExpires: {}},
+				// A departure runs from the day it was recorded to the day it
+				// expires. The expiry is the deviation's own fact rather than
+				// the edge's: a record with two departures would otherwise have
+				// two lifetimes, and only one of them could be its own.
+				Period: &PeriodSpec{From: KeyDate, Until: FieldExpires},
 			},
 			KindMeasure: {
 				Dir: "spec/measures",
@@ -319,11 +373,20 @@ func SpecPreset() Config {
 			KindPremise: {
 				Dir: "spec/premises",
 				ID:  IDPremise,
-				// A premise is retired when the world stops making it true,
-				// which is what stale_premise reads one hop away.
+				// A premise holds until the day the world stopped making it
+				// true, which is what stale_premise reads one hop away.
+				//
+				// `retired` stays in the vocabulary beside it: the day is what
+				// the rule reads, and the word is what a person writing the
+				// document reaches for. Dropping it would report every premise
+				// already written as an unknown_status, and a status a person
+				// writes is prose about the document rather than a fact the
+				// engine derives anything from.
 				StatusValues: []string{
 					StatusProposed, StatusAccepted, StatusRetired, StatusSuperseded,
 				},
+				Fields: map[string]FieldSpec{FieldRetiredOn: {}},
+				Period: &PeriodSpec{From: KeyDate, Until: FieldRetiredOn},
 			},
 			KindPrinciple: {
 				Dir: "spec/principles",
@@ -377,9 +440,10 @@ func SpecPreset() Config {
 				Direction: DirectionForward,
 				From:      []string{KindDeviation},
 				To:        []string{KindClause},
-				Attrs: map[string]EdgeAttrSpec{
-					AttrExpires: {Required: true, Type: AttrTypeDate},
-				},
+				// The edge carries no attributes: the expiry it used to carry
+				// belongs to the deviation, which has one lifetime however many
+				// clauses it departs from.
+				//
 				// A departure is only a departure from something in force, so the
 				// target is binding: accepted and superseded by nothing. That is
 				// written out rather than deferred to the binding projection,
@@ -469,6 +533,22 @@ func SpecPreset() Config {
 				When: Condition{Inbound: EdgeCondition{Edge: EdgeEnforces.String()}},
 			},
 			{
+				// What "replaced" means once a clause has a lifetime: a
+				// successor somebody accepted, whose own period has begun. It
+				// is a projection of its own because four alternatives below
+				// read it, and because the difference between "a successor
+				// exists" and "a successor has taken over" is the whole of
+				// what ADR-0005 adds to the standard.
+				Name: ProjectionInForceSuccessor,
+				When: Condition{ViaInbound: &ViaCondition{
+					Edge: EdgeSupersedes.String(),
+					Attr: map[string]AttrCondition{
+						AttrInForce:        eq(ProjectionTrue),
+						DefaultStatusField: eq(StatusAccepted),
+					},
+				}},
+			},
+			{
 				// A MUST_NOT is a strict rule exactly as a MUST is, so it needs
 				// the same conformance test behind it and falls the same way
 				// without one. The two are alternatives of one projection
@@ -479,14 +559,14 @@ func SpecPreset() Config {
 				Name: ProjectionEffectiveMust,
 				AnyOf: []ProjectionAlt{
 					{When: Condition{
-						Attr:       stated(ModalityMUST),
-						Inbound:    EdgeCondition{Edge: EdgeEnforces.String()},
-						NotInbound: EdgeSupersedes.String(),
+						Attr:    inForce(ModalityMUST),
+						Inbound: EdgeCondition{Edge: EdgeEnforces.String()},
+						Not:     unreplaced(),
 					}},
 					{When: Condition{
-						Attr:       stated(ModalityMUSTNOT),
-						Inbound:    EdgeCondition{Edge: EdgeEnforces.String()},
-						NotInbound: EdgeSupersedes.String(),
+						Attr:    inForce(ModalityMUSTNOT),
+						Inbound: EdgeCondition{Edge: EdgeEnforces.String()},
+						Not:     unreplaced(),
 					}},
 				},
 			},
@@ -494,28 +574,28 @@ func SpecPreset() Config {
 				Name: ProjectionEffectiveShould,
 				AnyOf: []ProjectionAlt{
 					{When: Condition{
-						Attr:       stated(ModalitySHOULD),
-						NotInbound: EdgeSupersedes.String(),
+						Attr: inForce(ModalitySHOULD),
+						Not:  unreplaced(),
 					}},
 					{When: Condition{
-						Attr:       stated(ModalitySHOULDNOT),
-						NotInbound: EdgeSupersedes.String(),
+						Attr: inForce(ModalitySHOULDNOT),
+						Not:  unreplaced(),
 					}},
 					// A MUST nothing enforces carries the force of a SHOULD,
 					// which is the point of the projection, and an unenforced
-					// MUST_NOT falls to a SHOULD_NOT the same way. Each
-					// alternative needs two absences and a condition holds one
-					// not_inbound, so the second is written as the
-					// not: {inbound: …} the vocabulary word is sugar for.
+					// MUST_NOT falls to a SHOULD_NOT the same way. A condition
+					// holds one not: block, so the absent conformance test is
+					// written as the not_inbound word and the missing
+					// replacement as the projection it reads.
 					{When: Condition{
-						Attr:       stated(ModalityMUST),
+						Attr:       inForce(ModalityMUST),
 						NotInbound: EdgeEnforces.String(),
-						Not:        &Condition{Inbound: EdgeCondition{Edge: EdgeSupersedes.String()}},
+						Not:        unreplaced(),
 					}},
 					{When: Condition{
-						Attr:       stated(ModalityMUSTNOT),
+						Attr:       inForce(ModalityMUSTNOT),
 						NotInbound: EdgeEnforces.String(),
-						Not:        &Condition{Inbound: EdgeCondition{Edge: EdgeSupersedes.String()}},
+						Not:        unreplaced(),
 					}},
 				},
 			},
@@ -524,14 +604,16 @@ func SpecPreset() Config {
 				// the projections above leave it with, plus the explicit
 				// permission, which nothing enforces and nothing needs to. It
 				// reads the other two as attributes rather than repeating
-				// them, so a revision of what force means is one edit.
+				// them, so a revision of what force means is one edit — and
+				// the day is already in what they answer, which is why only
+				// the permission spells it out here.
 				Name: ProjectionEffective,
 				AnyOf: []ProjectionAlt{
 					{When: Condition{Attr: map[string]AttrCondition{ProjectionEffectiveMust: eq(ProjectionTrue)}}},
 					{When: Condition{Attr: map[string]AttrCondition{ProjectionEffectiveShould: eq(ProjectionTrue)}}},
 					{When: Condition{
-						Attr:       stated(ModalityMAY),
-						NotInbound: EdgeSupersedes.String(),
+						Attr: inForce(ModalityMAY),
+						Not:  unreplaced(),
 					}},
 				},
 			},
@@ -560,16 +642,21 @@ func SpecPreset() Config {
 				Message: "enforces no clause",
 			},
 			{
+				// The premise the clause rests on has left force — its
+				// retired_on has passed. The rule reads the day rather than
+				// the word, so a premise retired next month stops holding the
+				// clause up next month rather than the moment somebody typed
+				// the word.
 				Name:     model.RuleStalePremise,
 				Severity: model.SeverityError,
 				When: Condition{
 					Attr: accepted(),
 					Via: &ViaCondition{
 						Edge: EdgePremise.String(),
-						Attr: map[string]AttrCondition{DefaultStatusField: eq(StatusRetired)},
+						Attr: map[string]AttrCondition{AttrInForce: eq(ProjectionFalse)},
 					},
 				},
-				Message: "is accepted but a premise is retired",
+				Message: "is accepted but a premise is no longer in force",
 			},
 			{
 				Name:     model.RuleDeviationPressure,
@@ -622,6 +709,52 @@ func SpecPreset() Config {
 					},
 				},
 				Message: "interop must point at a MUST clause",
+			},
+			{
+				// The three that read the day. status_drift here is the
+				// time-dependent reading of the rule the adr preset carries
+				// under the same name: a successor that has not taken over
+				// does not make its predecessor superseded, and saying so is
+				// the whole point of declaring a period.
+				Name:     model.RuleStatusDrift,
+				Severity: model.SeverityError,
+				When: Condition{
+					Attr: map[string]AttrCondition{DefaultStatusField: not(StatusSuperseded)},
+					ViaInbound: &ViaCondition{
+						Edge: EdgeSupersedes.String(),
+						Attr: map[string]AttrCondition{
+							DefaultStatusField: eq(StatusAccepted),
+							AttrInForce:        eq(ProjectionTrue),
+						},
+					},
+				},
+				Message: "an in-force successor supersedes it but status is not superseded",
+			},
+			{
+				// The state the standard had no word for: the revision is
+				// written and the clause it replaces is still what binds. A
+				// warning rather than an error — nothing is wrong, and a
+				// reader wants to know the change is in flight.
+				Name:     model.RulePendingSuccessor,
+				Severity: model.SeverityWarn,
+				When: Condition{
+					Attr:    accepted(),
+					Inbound: EdgeCondition{Edge: EdgeSupersedes.String()},
+					Not:     unreplaced(),
+				},
+				Message: "a successor is declared but not yet in force; this clause remains binding until then",
+			},
+			{
+				// The mirror image, and an error: a clause marked superseded
+				// while nothing has taken over leaves the standard with a gap
+				// nobody is bound by.
+				Name:     model.RulePrematureSuperseded,
+				Severity: model.SeverityError,
+				When: Condition{
+					Attr: map[string]AttrCondition{DefaultStatusField: eq(StatusSuperseded)},
+					Not:  unreplaced(),
+				},
+				Message: "status is superseded but no successor is in force yet",
 			},
 		},
 	}

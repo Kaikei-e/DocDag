@@ -28,6 +28,7 @@ func newExportCmd() *cobra.Command {
 	cmd.Flags().Bool(flagConnected, false, "emit only documents a typed edge touches")
 	cmd.Flags().StringArray(flagEdge, nil, "restrict the typed edges to one type (repeatable)")
 	cmd.Flags().String(flagOut, "-", "output file, or - for stdout")
+	addAtFlag(cmd)
 	return cmd
 }
 
@@ -55,10 +56,12 @@ func runExport(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return usageErr("%v", err)
 	}
-	g, cfg, err := loadGraph(cmd)
+	c, err := loadCorpus(cmd)
 	if err != nil {
 		return err
 	}
+	defer c.close()
+	g, cfg := c.graph, c.cfg
 	for _, name := range edges {
 		if _, ok := cfg.Edge(model.EdgeType(name)); !ok {
 			return usageErr("unknown edge type %q", name)

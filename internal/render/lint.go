@@ -23,13 +23,15 @@ type LintReport struct {
 	Kind          string          `json:"kind"`
 	SchemaVersion int             `json:"schema_version"`
 	PresetVersion int             `json:"preset_version,omitempty"`
+	AsOf          string          `json:"as_of,omitempty"`
+	At            string          `json:"at,omitempty"`
 	Findings      []model.Finding `json:"findings"`
 	Summary       lint.Summary    `json:"summary"`
 }
 
 // LintText writes one line per lint finding, in the shape a validation finding
 // is written in, and a closing line saying what the run found.
-func LintText(w io.Writer, findings []model.Finding, summary lint.Summary) error {
+func LintText(w io.Writer, findings []model.Finding, summary lint.Summary, asOf string) error {
 	out := &errWriter{w: w}
 	for _, f := range findings {
 		out.printf("%s%s %s%s: %s\n", locationPrefix(f.Location), strings.ToUpper(string(f.Severity)), f.Rule, subject(f.ID), f.Detail)
@@ -37,11 +39,22 @@ func LintText(w io.Writer, findings []model.Finding, summary lint.Summary) error
 			out.printf("  fix: %s\n", f.Fix)
 		}
 	}
-	out.printf("%s\n", lintSummary(summary))
+	out.printf("%s\n", lintAsOf(lintSummary(summary), asOf))
 	if out.err != nil {
 		return fmt.Errorf("write lint findings: %w", out.err)
 	}
 	return nil
+}
+
+// lintAsOf appends the day a run asked about to its closing line. Only a run
+// that read the corpus at a day it could have read differently carries one:
+// layer 1 answers about the configuration alone, and a configuration means the
+// same thing on every day.
+func lintAsOf(line, asOf string) string {
+	if asOf == "" {
+		return line
+	}
+	return line + ", as of " + asOf
 }
 
 // lintSummary is the closing line: what the run found, or that it found
@@ -70,11 +83,13 @@ func plural(n int, noun string) string {
 }
 
 // LintJSON writes the lint findings as a JSON report of their own kind.
-func LintJSON(w io.Writer, findings []model.Finding, summary lint.Summary, presetVersion int) error {
+func LintJSON(w io.Writer, findings []model.Finding, summary lint.Summary, header Header) error {
 	report := LintReport{
 		Kind:          LintKind,
 		SchemaVersion: LintSchemaVersion,
-		PresetVersion: presetVersion,
+		PresetVersion: header.PresetVersion,
+		AsOf:          header.AsOf,
+		At:            header.At,
 		Findings:      findings,
 		Summary:       summary,
 	}
@@ -89,10 +104,10 @@ func LintJSON(w io.Writer, findings []model.Finding, summary lint.Summary, prese
 
 // LintGitHub writes one workflow command per lint finding, then the closing
 // line. An info finding is a notice, which no job fails on.
-func LintGitHub(w io.Writer, findings []model.Finding, summary lint.Summary) error {
+func LintGitHub(w io.Writer, findings []model.Finding, summary lint.Summary, asOf string) error {
 	out := &errWriter{w: w}
 	writeAnnotations(out, findings)
-	out.printf("%s\n", lintSummary(summary))
+	out.printf("%s\n", lintAsOf(lintSummary(summary), asOf))
 	if out.err != nil {
 		return fmt.Errorf("write lint findings: %w", out.err)
 	}

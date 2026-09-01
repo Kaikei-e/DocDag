@@ -16,7 +16,7 @@ import (
 // configuration, the way the corpus layer reads the vault.
 func testCorpusGraph(t *testing.T, cfg config.Config, dir string) *model.Graph {
 	t.Helper()
-	g, err := corpusGraph(rootedConfig(cfg, map[string]string{"": dir}))
+	g, err := corpusGraph(cfg.Reroot(map[string]string{"": dir}))
 	if err != nil {
 		t.Fatalf("read the corpus at %s: %v", dir, err)
 	}
@@ -99,7 +99,7 @@ func TestCorpusKindNarrowing(t *testing.T) {
 	for name, spec := range cfg.Kinds {
 		dirs[name] = filepath.Join(root, spec.Dir)
 	}
-	g, err := corpusGraph(rootedConfig(cfg, dirs))
+	g, err := corpusGraph(cfg.Reroot(dirs))
 	if err != nil {
 		t.Fatalf("read the corpus: %v", err)
 	}

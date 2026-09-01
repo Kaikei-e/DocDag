@@ -2,6 +2,7 @@ package graph
 
 import (
 	"slices"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -62,14 +63,17 @@ func (p Projections) Set(name string) []model.ID {
 
 // EvalProjections evaluates every configured projection over every document, in
 // dependency order, so a projection that reads another as an attribute sees the
-// evaluated value rather than an absent one.
-func EvalProjections(g *model.Graph, cfg config.Config) Projections {
-	return evalProjections(g, cfg, newEdgeIndex(g))
+// evaluated value rather than an absent one. asOf is the day the periods a
+// projection may read are answered for, the zero time meaning today.
+func EvalProjections(g *model.Graph, cfg config.Config, asOf time.Time) Projections {
+	periods := EvalPeriods(g, cfg, asOf)
+	return evalProjections(g, cfg, newEdgeIndex(g, periods), periods)
 }
 
-// evalProjections is EvalProjections over an edge index the caller already
-// built, so evaluating rules and projections together indexes the graph once.
-func evalProjections(g *model.Graph, cfg config.Config, ix edgeIndex) Projections {
+// evalProjections is EvalProjections over an edge index and periods the caller
+// already built, so evaluating rules and projections together reads the graph
+// once.
+func evalProjections(g *model.Graph, cfg config.Config, ix edgeIndex, periods Periods) Projections {
 	p := Projections{
 		names: cfg.ProjectionNames(),
 		held:  make(map[string]map[model.ID]bool, len(cfg.Projections)),
@@ -84,8 +88,9 @@ func evalProjections(g *model.Graph, cfg config.Config, ix edgeIndex) Projection
 		return p
 	}
 	// The context shares the maps this loop fills, so each projection reads the
-	// results of the ones it depends on.
-	ctx := evalContext{g: g, ix: ix, projected: p}
+	// results of the ones it depends on. The periods are already computed: they
+	// read no projection, which is what lets a projection read in_force.
+	ctx := evalContext{g: g, ix: ix, periods: periods, projected: p}
 	for _, spec := range projectionOrder(cfg) {
 		held := make(map[model.ID]bool)
 		for _, id := range g.NodeIDs() {

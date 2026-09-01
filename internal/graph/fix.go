@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -20,23 +21,24 @@ var quotedRef = regexp.MustCompile(`"([^"]*)"`)
 
 // Suggest fills in the Fix of every finding it recognizes. The checks say what
 // is wrong; this says what to type, as a pass over a finished report so a check
-// never has to carry a remedy.
+// never has to carry a remedy. asOf is the day the run is about, so a remedy
+// that walks a lineage stops where the check that reported it stopped.
 //
 // A finding that arrives carrying one keeps it: where the remedy names the
 // other document of a pair, only the check that paired them knows which, and
 // recovering that from a finished finding would mean reading identifiers back
 // out of prose.
-func Suggest(findings []model.Finding, g *model.Graph, cfg config.Config) []model.Finding {
+func Suggest(findings []model.Finding, g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
 	for i := range findings {
 		if findings[i].Fix != "" {
 			continue
 		}
-		findings[i].Fix = suggestion(findings[i], g, cfg)
+		findings[i].Fix = suggestion(findings[i], g, cfg, asOf)
 	}
 	return findings
 }
 
-func suggestion(f model.Finding, g *model.Graph, cfg config.Config) string {
+func suggestion(f model.Finding, g *model.Graph, cfg config.Config, asOf time.Time) string {
 	field, value, _ := FixSetsField(cfg, f.Rule)
 	switch f.Rule {
 	case model.RuleDanglingRef, model.RuleDanglingReference:
@@ -49,7 +51,7 @@ func suggestion(f model.Finding, g *model.Graph, cfg config.Config) string {
 	case model.RuleUnstructuredSupersedes:
 		return declareEdge(g, cfg, f.ID)
 	case model.RuleStaleTarget:
-		return leafSuggestion(g, cfg, f)
+		return leafSuggestion(g, cfg, f, asOf)
 	case model.RuleUnknownStatus:
 		if len(cfg.StatusValues) == 0 {
 			return ""

@@ -115,7 +115,7 @@ func TestWithProjectionsAddsTheDerivedColumns(t *testing.T) {
 	cfg := config.ADRPreset()
 	records := Records(g, []model.ID{"0002", "0003"})
 
-	got := WithProjections(records, []string{config.ProjectionAcceptedUnsuperseded}, graph.EvalProjections(g, cfg))
+	got := WithProjections(records, []string{config.ProjectionAcceptedUnsuperseded}, graph.EvalProjections(g, cfg, testAsOf))
 
 	var buf bytes.Buffer
 	if err := RecordsText(&buf, got, []string{FieldID, config.ProjectionAcceptedUnsuperseded}); err != nil {
@@ -131,7 +131,7 @@ func TestWithProjectionsLeavesAListingThatAskedForNoneAlone(t *testing.T) {
 	g := testOKBasicGraph()
 	records := Records(g, []model.ID{"0002"})
 
-	got := WithProjections(records, nil, graph.EvalProjections(g, config.ADRPreset()))
+	got := WithProjections(records, nil, graph.EvalProjections(g, config.ADRPreset(), testAsOf))
 
 	if got[0].Projections != nil {
 		t.Fatalf("projections = %v, want none", got[0].Projections)

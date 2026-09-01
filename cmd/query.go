@@ -27,6 +27,8 @@ func newQueryCmd() *cobra.Command {
 	cmd.Flags().String(flagEdge, "", "restrict the walk to one edge type")
 	cmd.Flags().Bool(flagIncludeRefs, false, "overlay reference-layer neighbours")
 	cmd.Flags().Bool(flagBinding, false, "list every binding document")
+	addAsOfFlag(cmd, "today")
+	addAtFlag(cmd)
 	addFieldsFlag(cmd)
 	return cmd
 }
@@ -73,10 +75,16 @@ func runQuery(cmd *cobra.Command, args []string) error {
 			flagBinding, flagAncestors, flagDescendants, flagEdge, flagIncludeRefs)
 	}
 
-	g, cfg, err := loadGraph(cmd)
+	asOf, err := asOfToday(cmd)
 	if err != nil {
 		return err
 	}
+	c, err := loadCorpus(cmd)
+	if err != nil {
+		return err
+	}
+	defer c.close()
+	g, cfg := c.graph, c.cfg
 	fields, err := recordFields(cmd, cfg)
 	if err != nil {
 		return err
@@ -92,7 +100,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		if !flags.Changed(flagFields) {
 			fields = bindingColumns(cfg)
 		}
-		records := withColumns(g, cfg, render.Records(g, graph.BindingSet(g, cfg)), fields)
+		records := withColumns(g, cfg, render.Records(g, graph.BindingSet(g, cfg, asOf)), fields, asOf)
 		if format == formatJSON {
 			err = render.RecordsJSON(out, records)
 		} else {
@@ -122,7 +130,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return domainErr("query %s: %v", id, err)
 	}
-	records := withColumns(g, cfg, render.QueryRecords(g, results), fields)
+	records := withColumns(g, cfg, render.QueryRecords(g, results), fields, asOf)
 	if format == formatJSON {
 		err = render.RecordsJSON(out, records)
 	} else {

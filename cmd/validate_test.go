@@ -243,6 +243,38 @@ func gitRepo(t *testing.T, files map[string]string) string {
 	return dir
 }
 
+// gitRepoAt commits a corpus on a day of the caller's choosing, so a test about
+// the as-of default can tell the committer date from the clock.
+func gitRepoAt(t *testing.T, day string, files map[string]string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not on PATH")
+	}
+	dir := writeDocs(t, files)
+	git(t, dir, "init", "--quiet")
+	git(t, dir, "add", "-A")
+	gitCommit(t, dir, day, "the first revision")
+	return dir
+}
+
+// gitCommit writes one commit dated on a day, with an identity of its own so a
+// runner without a git configuration can make one.
+func gitCommit(t *testing.T, dir, day, message string) {
+	t.Helper()
+	stamp := day + "T12:00:00+00:00"
+	cmd := exec.Command("git", "-C", dir,
+		"-c", "user.name=DocDag Test",
+		"-c", "user.email=test@example.test",
+		"-c", "commit.gpgsign=false",
+		"commit", "--quiet", "-m", message)
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, "nonexistent-gitconfig"), "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_DATE="+stamp, "GIT_COMMITTER_DATE="+stamp)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
+}
+
 func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
@@ -1133,20 +1165,32 @@ func TestValidateACorpusUnderTheSpecPreset(t *testing.T) {
 	got := run(t, "validate", "--config", specVaultConfig(t))
 
 	assertExit(t, got, 1)
-	// Four of the six findings come from a preset rule — a standard hardening
-	// into dogma. The other two are the structural things wrong with the
-	// corpus: a conformance test left pointing at the clause UZ-V-004 replaced,
-	// and a MUST standing against a MUST_NOT about one subject. The weak
-	// conflict between UZ-V-006 and UZ-V-008 is not among them: the vault
-	// records the exception, so the finding is suppressed.
+	// Five of the eight findings come from a preset rule — a standard
+	// hardening into dogma, and a revision in flight. The other three are the
+	// structural things wrong with the corpus: a conformance test left
+	// pointing at the clause UZ-V-004 replaced, a MUST standing against a
+	// MUST_NOT about one subject, and a departure recorded until a day that has
+	// passed. The weak conflict between UZ-V-006 and UZ-V-008 is not among
+	// them: the vault records the exception, so the finding is suppressed.
+	//
+	// Three of the eight are the day's own answers, and they hold whatever day
+	// the run is asked about: the premise retired in February, the departure
+	// expired in August, and UZ-V-011 has been in trial since it was written.
 	assertLines(t, "findings", findingLines(got.stdout), []string{
 		"UZ-V-002.md:4: ERROR orphan_must UZ-V-002: is MUST or MUST_NOT and accepted but nothing enforces it",
-		"UZ-V-003.md:5: ERROR stale_premise UZ-V-003: is accepted but a premise is retired",
+		"UZ-V-003.md:5: ERROR stale_premise UZ-V-003: is accepted but a premise is no longer in force",
 		"UZ-V-009.md:4: ERROR modality_conflict UZ-V-009: is MUST and UZ-V-010 is MUST_NOT about topic/seed-recording",
 		"report-states-its-model.md:3: ERROR orphan_test conform/report-states-its-model: enforces no clause",
 		"uz-v-005.md:5: ERROR stale_target conform/uz-v-005: enforces targets UZ-V-005, which UZ-V-004 supersedes",
+		"UZ-V-003.md:5: WARN pending_successor UZ-V-003: a successor is declared but not yet in force; this clause remains binding until then",
 		"UZ-V-004.md:3: WARN no_counterexample UZ-V-004: is accepted without a counterexample",
+		"dev-0001.md:7: WARN expired_deviation dev-0001: expires 2026-08-01 has passed and the status is still accepted",
 	})
+	// The text report of a corpus that declares periods says which day it was
+	// asked about, because the answer above depends on it.
+	if !slices.Contains(lines(got.stdout), "as of "+headCommitterDay(t)) {
+		t.Errorf("stdout = %q, want the as-of line a corpus with periods carries", got.stdout)
+	}
 }
 
 // TestValidateShowsWhatAnExceptionSuppresses drives the defeater end to end: a
@@ -1230,8 +1274,11 @@ func TestValidateReportsTheSpecPresetRevision(t *testing.T) {
 	if report.PresetVersion != config.SpecPresetVersion {
 		t.Errorf("preset_version = %d, want %d", report.PresetVersion, config.SpecPresetVersion)
 	}
-	if report.Summary.Documents != 25 {
-		t.Errorf("documents = %d, want the twenty-five the eight kinds hold", report.Summary.Documents)
+	if report.Summary.Documents != 26 {
+		t.Errorf("documents = %d, want the twenty-six the eight kinds hold", report.Summary.Documents)
+	}
+	if report.AsOf != headCommitterDay(t) {
+		t.Errorf("as_of = %q, want the day HEAD was committed on", report.AsOf)
 	}
 }
 

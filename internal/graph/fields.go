@@ -130,16 +130,23 @@ func deprecatedDetail(name string, spec config.FieldSpec, past bool) string {
 	return detail
 }
 
-// asOfDay renders the comparison date as the calendar day a sunset is written
-// as. Days are compared as text because ISO 8601 dates sort chronologically:
-// there is no clock arithmetic to get wrong, and no timezone can carry a corpus
-// past a deadline its reader has not reached.
-func asOfDay(asOf time.Time) string {
+// AsOfDay renders the day a run is about the way frontmatter writes one. Days
+// are compared as text because ISO 8601 dates sort chronologically: there is no
+// clock arithmetic to get wrong, and no timezone can carry a corpus past a
+// deadline its reader has not reached. The zero time means today, which is what
+// a caller with no opinion about the date means.
+//
+// It is exported because every report that carries an as-of date has to write
+// the same day the checks compared against, down to the spelling.
+func AsOfDay(asOf time.Time) string {
 	if asOf.IsZero() {
 		asOf = time.Now()
 	}
 	return asOf.Format(config.AttrDateLayout)
 }
+
+// asOfDay is AsOfDay under the name the package's own callers read it by.
+func asOfDay(asOf time.Time) string { return AsOfDay(asOf) }
 
 // sunsetPassed reports whether the comparison day is past the day the field's
 // sunset names. The sunset day itself still warns: it is the last day the

@@ -22,8 +22,9 @@ func (a analyzer) domain(key, kind string) ([]string, bool) {
 		return a.cfg.KindNames(), true
 	}
 	// A projection reads as a boolean attribute, so its domain is the two words
-	// a condition compares it against.
-	if _, declared := a.cfg.Projection(key); declared {
+	// a condition compares it against — and so does the one attribute the
+	// engine computes rather than reads.
+	if _, declared := a.cfg.Projection(key); declared || key == config.AttrInForce {
 		return []string{config.ProjectionTrue, config.ProjectionFalse}, true
 	}
 	return a.fieldDomain(key, kind)

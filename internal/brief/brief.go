@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
@@ -32,12 +33,20 @@ const charsPerToken = 4
 
 // Options parameterise a brief. A Budget of zero or less is unbounded; a Depth
 // of zero reports the reference and its resolution alone.
+//
+// AsOf is the day the brief is about: what is binding, what a reference
+// resolves to and which conflicts an exception defeats are all answers about a
+// moment wherever a kind declares a period. The zero time means today. At names
+// the revision the documents were read from, empty for the working tree; the
+// brief carries it so a reader knows which vault they are looking at.
 type Options struct {
 	Depth   int
 	Types   []model.EdgeType
 	Budget  int
 	Section string
 	All     bool
+	AsOf    time.Time
+	At      string
 }
 
 // Entry is one document in a brief. Excerpt is the first paragraph of the
@@ -78,13 +87,17 @@ type Budget struct {
 // Related and Suppressed are the normative neighbourhood, and are left out
 // entirely for a configuration that declares none of what they read.
 type Brief struct {
-	SchemaVersion int     `json:"schema_version"`
-	PresetVersion int     `json:"preset_version,omitempty"`
-	Ref           Entry   `json:"ref"`
-	ResolvesTo    []Entry `json:"resolves_to"`
-	Related       []Entry `json:"related,omitempty"`
-	Ancestors     []Entry `json:"ancestors"`
-	Descendants   []Entry `json:"descendants"`
+	SchemaVersion int `json:"schema_version"`
+	PresetVersion int `json:"preset_version,omitempty"`
+	// AsOf is the day the brief was assembled for and At the revision it was
+	// read from, so a brief says which corpus at which moment it describes.
+	AsOf        string  `json:"as_of,omitempty"`
+	At          string  `json:"at,omitempty"`
+	Ref         Entry   `json:"ref"`
+	ResolvesTo  []Entry `json:"resolves_to"`
+	Related     []Entry `json:"related,omitempty"`
+	Ancestors   []Entry `json:"ancestors"`
+	Descendants []Entry `json:"descendants"`
 	// Suppressed is one line per conflict about this document that a recorded
 	// exception defeats — the reading that says why a permission and a
 	// prohibition are allowed to stand side by side.
@@ -123,6 +136,8 @@ func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief
 	b := &Brief{
 		SchemaVersion: SchemaVersion,
 		PresetVersion: cfg.PresetVersion,
+		AsOf:          graph.AsOfDay(opts.AsOf),
+		At:            opts.At,
 		ResolvesTo:    []Entry{},
 		Ancestors:     []Entry{},
 		Descendants:   []Entry{},
@@ -136,12 +151,12 @@ func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief
 	// What is binding is a projection over the whole graph, so it is evaluated
 	// once here rather than per candidate document.
 	binding := make(map[model.ID]bool)
-	for _, current := range graph.BindingSet(g, cfg) {
+	for _, current := range graph.BindingSet(g, cfg, opts.AsOf) {
 		binding[current] = true
 	}
 
 	taken := map[model.ID]bool{id: true}
-	if b.ResolvesTo, err = entries(g, opts, taken, binding, resolution(g, cfg, id), true); err != nil {
+	if b.ResolvesTo, err = entries(g, opts, taken, binding, resolution(g, cfg, id, opts.AsOf), true); err != nil {
 		return nil, err
 	}
 	// The normative neighbourhood is claimed before the walks, so a document
@@ -150,7 +165,7 @@ func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief
 	if b.Related, err = relatedEntries(g, cfg, opts, taken, binding, id); err != nil {
 		return nil, err
 	}
-	b.Suppressed = suppressed(g, cfg, id)
+	b.Suppressed = suppressed(g, cfg, id, opts.AsOf)
 	ancestors := within(g, graph.Reverse(g, opts.Types...), id, opts.Depth)
 	if b.Ancestors, err = entries(g, opts, taken, binding, ancestors, false); err != nil {
 		return nil, err
@@ -166,11 +181,11 @@ func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief
 
 // resolution names the documents that currently stand in for a superseded
 // reference.
-func resolution(g *model.Graph, cfg config.Config, id model.ID) []model.ID {
+func resolution(g *model.Graph, cfg config.Config, id model.ID, asOf time.Time) []model.ID {
 	if _, ok := cfg.Edge(config.EdgeSupersedes); !ok {
 		return nil
 	}
-	resolved, err := graph.Resolve(g, id, config.EdgeSupersedes)
+	resolved, err := graph.ResolveAt(g, cfg, id, config.EdgeSupersedes, asOf)
 	if err != nil {
 		// A supersedes cycle is a validation finding; a brief still reports the
 		// document the caller asked about.

@@ -5,6 +5,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -122,17 +123,19 @@ type Statistics struct {
 // TopReferencedLimit caps the reference-layer in-degree ranking.
 const TopReferencedLimit = 10
 
-// ComputeStats summarises the graph.
-func ComputeStats(g *model.Graph, cfg config.Config) Statistics {
+// ComputeStats summarises the graph on one day: what is binding, and how many
+// conflicts a recorded exception defeats, are answers about a moment wherever a
+// kind declares a period.
+func ComputeStats(g *model.Graph, cfg config.Config, asOf time.Time) Statistics {
 	stats := Statistics{
 		Documents:           len(g.Nodes),
 		Edges:               edgeCounts(g, cfg),
-		Binding:             len(BindingSet(g, cfg)),
+		Binding:             len(BindingSet(g, cfg, asOf)),
 		ChainDepth:          chainDepths(g),
 		TopReferenced:       topReferenced(g),
 		Topics:              topicCounts(g, cfg),
 		Modalities:          modalityCounts(g, cfg),
-		SuppressedConflicts: suppressedConflicts(g, cfg),
+		SuppressedConflicts: suppressedConflicts(g, cfg, asOf),
 	}
 
 	connected := make(map[model.ID]bool, len(g.Nodes))
@@ -235,9 +238,9 @@ func modalityVocabulary(cfg config.Config) []string {
 // suppressedConflicts counts the conflicts a recorded exception defeats. It is
 // the number a corpus watches: exceptions are decisions, and a standard growing
 // them faster than it grows clauses is one being written around.
-func suppressedConflicts(g *model.Graph, cfg config.Config) int {
+func suppressedConflicts(g *model.Graph, cfg config.Config, asOf time.Time) int {
 	count := 0
-	for _, c := range ModalityConflicts(g, cfg) {
+	for _, c := range ModalityConflicts(g, cfg, asOf) {
 		if c.Suppressed {
 			count++
 		}

@@ -18,14 +18,14 @@ A finding reads:
 | **Rule** | the rule's own `severity:` | `rules:` defines them; the preset ships two, and a config that writes `rules:` replaces the list |
 | **Reference and history** | `references.dangling`, or fixed | `dangling_reference` is off by default; `immutable_violation` needs `--immutable-since` |
 
-`structural:` accepts exactly these twenty-six names: `cycle`, `dangling_ref`, `id_collision`,
+`structural:` accepts exactly these twenty-nine names: `cycle`, `dangling_ref`, `id_collision`,
 `invalid_frontmatter`, `missing_frontmatter`, `unknown_status`, `derived_conflict`,
 `unstructured_supersedes`, `invalid_ref`, `empty_edge`, `inverse_mismatch`, `cardinality`,
 `edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`, `id_mismatch`, `kind_mismatch`,
 `unknown_field`, `unknown_field_value`, `missing_field`, `edge_kind_mismatch`, `deprecated_field`,
-`stale_target`, `path_mismatch`, `modality_conflict`, `excepts_strict`. Naming anything else —
-`status_drift` and `superseded_orphan` included, since they are rules — is a configuration error and
-exits 3.
+`stale_target`, `path_mismatch`, `modality_conflict`, `excepts_strict`, `period_invalid`,
+`period_conflict`, `expired_deviation`. Naming anything else — `status_drift` and
+`superseded_orphan` included, since they are rules — is a configuration error and exits 3.
 
 ## Status is a projection
 
@@ -37,6 +37,69 @@ status is `accepted` and no document supersedes it.
 Both are ordinary rules, so a configuration that writes its own `rules:` list replaces them. The
 `fix:` suggestions are keyed on these two names: a rule renamed keeps its check but loses its
 suggestion.
+
+## Periods and the day a run is about
+
+A kind that declares `period:` says which frontmatter keys its documents write the days they are in
+force between; [configuration.md](configuration.md#periods-and-as-of) has the declaration and the
+`--as-of` defaults. From it the engine computes one virtual attribute:
+
+```
+in_force(d) := from(d) ≤ as-of < until(d)
+```
+
+`in_force` reads exactly as a projection does — the string `"true"` or `"false"` — so a rule, a
+projection or a `target:` asks for it with `attr: {in_force: {eq: "true"}}`. **It is the one
+attribute the engine computes rather than reads**, and the only exception to "the rule vocabulary is
+fixed and complete": the vocabulary still has no expression language, no arithmetic and no date
+literal, because the comparison happens in the engine and only its answer reaches a condition. A
+projection named `in_force` is a configuration error (exit 3) — it would shadow the attribute it was
+written to read. A document whose kind declares no period is **always in force**, so a corpus that
+declares none answers exactly as it did before periods existed.
+
+`until` is derived where a document writes none: it is the earliest day an **accepted** successor
+begins on, and the derived day is never written back into the frontmatter. A successor that is
+withdrawn stops deriving one, and the predecessor's period opens up again — an abrogation taken
+back without rewriting anything.
+
+**An out-of-force document's statements lose their weight.** Once a document has left force, the
+edges it declares stop counting: for the degree thresholds (`inbound: {edge: deviates-from, min:
+5}`), for the one-hop clauses (`via`, `via_inbound`), and for the recorded exceptions that suppress
+a `modality_conflict`. An expired departure is a record of something that was, not a claim about
+what is, and a standard that kept counting them would report pressure nobody is applying. Two things
+are deliberately exempt: the `supersedes` lineage, which is what the ends are *derived from* — a
+successor that is not in force yet is exactly what `pending_successor` reports — and
+`path_constraints`, which are statements about the shape of the corpus rather than about what holds
+today. A corpus without periods loses nothing, because there every document is in force.
+
+### `period_invalid` — error, structural
+
+A period key holds a value that is not a date, or an interval ends before it begins:
+
+```
+in_force_from "next quarter" is not a date as YYYY-MM-DD
+in_force_until 2026-01-01 is before in_force_from 2026-06-01
+```
+
+On the line the day is written on. A day nobody can read constrains nothing, so the document is
+neither begun nor ended by it. No fix suggestion: only the author knows which day was meant.
+
+### `period_conflict` — error, structural
+
+A document writes an end that disagrees with the day its accepted successor begins on:
+`in_force_until 2026-12-31 disagrees with the 2026-06-01 its accepted successor UZ-V-002 begins
+on`. The successors are listed under `related`, and the day the document wrote is the one that
+decides what is in force — the finding says the two disagree, not which is right. No fix
+suggestion, for the reason `derived_conflict` carries none: DocDag does not guess.
+
+### `expired_deviation` — warn, structural
+
+A document's own end has passed while its status still says it is in effect: `expires 2026-08-01 has
+passed and the status is still accepted`. On the line the day is written on. It is named after the
+case it is for — a departure recorded until a day that has come and gone — and it reads any kind
+whose `period:` names an `until` key, so a corpus that dates its decisions gets the same reading of
+them. A document the successors ended is not reported here: that is supersession, and
+`status_drift` and `premature_superseded` are what say it.
 
 ## Document structure
 
@@ -246,7 +309,7 @@ An attribute value is not one the declaration accepts. One finding per rejected 
 ```
 supersedes reference "0001" attribute "reason" is "rewrite", want one of: recurrence, premise-collapse, conflict, vocabulary
 measures reference "0001" attribute "agreement" is "high", want a number
-measures reference "0001" attribute "expires" is "soon", want a date as YYYY-MM-DD
+measures reference "0001" attribute "taken_on" is "soon", want a date as YYYY-MM-DD
 measures reference "0001" attribute "model" is "[haiku sonnet]", want a string
 ```
 
@@ -443,6 +506,14 @@ The document has an inbound `supersedes` edge and a status other than `supersede
 supersedes but status is not superseded`. An absent status counts. Fix: `set status: superseded in
 <path>`.
 
+**The two presets read this name differently, on purpose.** The `adr` preset's rule is
+time-independent: the moment a successor exists, the predecessor has to say `superseded`. The
+`spec` preset's rule is about the day — `an in-force successor supersedes it but status is not
+superseded` — so a successor that is `proposed`, in `trial`, or accepted but dated next quarter
+leaves its predecessor alone until it takes over. An `adr` corpus that declares a `period:` gets
+the time-independent reading until it replaces the rule; the three rules to replace it with are in
+[configuration.md](configuration.md#time-dependent-status-checks).
+
 ### `superseded_orphan` — warn, preset rule
 
 The document's status is `superseded` and nothing supersedes it: `status is superseded but no
@@ -451,17 +522,19 @@ withdrawn`.
 
 ### The `spec` preset's rules
 
-`preset: spec` replaces the two rules above with seven of its own, written in
-[configuration.md](configuration.md#the-spec-preset) and carrying no fix suggestion — each names a
-decision rather than an edit:
+`preset: spec` replaces the two rules above with ten of its own, written in
+[configuration.md](configuration.md#the-spec-preset). Only its `status_drift` carries a fix
+suggestion; the rest name a decision rather than an edit:
 
 - `orphan_must` — error. An accepted `modality: MUST` or `modality: MUST_NOT` clause that no
   conformance test enforces: `is MUST or MUST_NOT and accepted but nothing enforces it`. Either
   write the test or drop the clause to `SHOULD` or `SHOULD_NOT`, which is what an unenforced strict
   clause carries the force of anyway.
 - `orphan_test` — error. A `conform` document that declares no `enforces:`: `enforces no clause`.
-- `stale_premise` — error. An accepted document one hop from a `retired` premise: `is accepted but a
-  premise is retired`.
+- `stale_premise` — error. An accepted document one hop from a premise that has left force: `is
+  accepted but a premise is no longer in force`. It reads the day the premise names under
+  `retired_on`, not the word `retired` — a premise retired next month holds its clause up until next
+  month. `retired` stays in the premise vocabulary for the person writing the document.
 - `deviation_pressure` — warn. Five or more deviations recorded against one clause: `has 5+
   deviations; reconsider the clause`.
 - `no_counterexample` — warn. An accepted clause with no `counterexample:`: `is accepted without a
@@ -472,6 +545,15 @@ decision rather than an edit:
   it is obvious and §6 warns against making the keywords a ritual.
 - `interop_not_must` — error. Some clause an `interop:` names is not a `MUST`: `interop must point
   at a MUST clause`. The obligation the option leans on is a MUST or it is not an obligation.
+- `status_drift` — error. The time-dependent reading described above: `an in-force successor
+  supersedes it but status is not superseded`. Fix: `set status: superseded in <path>`.
+- `pending_successor` — warn. An accepted clause with a declared successor that has not taken over —
+  nobody has accepted it, or its period has not begun: `a successor is declared but not yet in
+  force; this clause remains binding until then`. Nothing is wrong; the revision is in flight, and
+  the clause is still what binds.
+- `premature_superseded` — error. The mirror image: a clause marked `superseded` while no successor
+  is in force, `status is superseded but no successor is in force yet`. Nobody is bound by either
+  clause, which is a gap in the standard rather than a change in flight.
 
 ## The reference layer
 
@@ -734,11 +816,12 @@ directory itself, so it is run by `--config` alone:
 $ docdag validate --config testdata/fixtures/kinds/docdag.yaml
 ```
 
-`spec-vault` is a small corpus under the `spec` preset — twenty-five documents across the eight
-kinds, configured by `preset: spec` and nothing else. Four of its six findings come from a preset
-rule; the other two are structural: a conformance test still enforcing the clause its successor
-replaced, which is the `stale_target` the preset's `target:` conditions are there for, and a `MUST`
-standing against a `MUST_NOT` about one subject, which is the strong `modality_conflict`:
+`spec-vault` is a small corpus under the `spec` preset — twenty-six documents across the eight
+kinds, configured by `preset: spec` and nothing else. Five of its eight findings come from a preset
+rule; the other three are structural: a conformance test still enforcing the clause its successor
+replaced, which is the `stale_target` the preset's `target:` conditions are there for, a `MUST`
+standing against a `MUST_NOT` about one subject, which is the strong `modality_conflict`, and a
+departure recorded until a day that has passed, which is `expired_deviation`:
 
 ```console
 $ docdag validate --config testdata/fixtures/spec-vault/docdag.yaml
@@ -748,6 +831,13 @@ It carries one more conflict that is not in that report: `UZ-V-006` permits what
 to do, and the vault records the exception, so the finding is suppressed. `--show-suppressed` is
 what reads it, and `docdag context UZ-V-006` is where the whole neighbourhood — the subject, the
 exception, the interoperation requirement — is written out.
+
+It carries the day, too: `UZ-V-011` is the revision of `UZ-V-003` and is still in `trial`, so
+nothing has taken over and `UZ-V-003` keeps binding — which is the `pending_successor` warning, a
+change in flight rather than a fault. `premise/hand-written-notes-are-enough` names the day it
+stopped holding under `retired_on:`, which is what `stale_premise` reads, and `dev-0001` names an
+`expires:` that has passed. `docdag query --binding --as-of <day>` walks the same corpus at another
+day.
 
 ### The lint fixtures
 

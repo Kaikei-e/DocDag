@@ -895,7 +895,7 @@ func TestMatchCondition(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id)); got != tt.want {
+			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id), testAsOf); got != tt.want {
 				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
 			}
 		})
@@ -979,7 +979,7 @@ func TestMatchConditionOnListAttributes(t *testing.T) {
 			cfg := config.ADRPreset()
 			cond := config.Condition{Attr: map[string]config.AttrCondition{testListAttrsKey: tt.cond}}
 
-			if got := MatchCondition(g, cfg, cond, "0001"); got != tt.want {
+			if got := MatchCondition(g, cfg, cond, "0001", testAsOf); got != tt.want {
 				t.Fatalf("MatchCondition = %v, want %v", got, tt.want)
 			}
 		})
@@ -1047,7 +1047,7 @@ func TestMatchConditionWithAlternativesAndNegation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := MatchCondition(g, cfg, tt.cond, tt.id); got != tt.want {
+			if got := MatchCondition(g, cfg, tt.cond, tt.id, testAsOf); got != tt.want {
 				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
 			}
 		})
@@ -1067,7 +1067,7 @@ func TestEvalRuleLocatesANestedAttributeClause(t *testing.T) {
 		Message: "is retired without an explanation",
 	}
 
-	f := testAssertSingleFinding(t, EvalRule(g, config.ADRPreset(), rule), rule.Name, model.SeverityWarn, "0001")
+	f := testAssertSingleFinding(t, EvalRule(g, config.ADRPreset(), rule, testAsOf), rule.Name, model.SeverityWarn, "0001")
 	if f.Location != testNodeLocation("0001", testStatusLine) {
 		t.Errorf("location = %+v, want the status line the alternative reads", f.Location)
 	}
@@ -1084,7 +1084,7 @@ func TestEvalRule(t *testing.T) {
 			{Severity: drift.Severity, Rule: drift.Name, ID: "0004", Detail: drift.Message, Location: testNodeLocation("0004", testStatusLine)},
 		}
 
-		testAssertFindings(t, "EvalRule", EvalRule(g, cfg, drift), want)
+		testAssertFindings(t, "EvalRule", EvalRule(g, cfg, drift, testAsOf), want)
 	})
 
 	t.Run("a rule matching nothing reports nothing", func(t *testing.T) {
@@ -1095,7 +1095,7 @@ func TestEvalRule(t *testing.T) {
 			Message:  "no document has this status",
 		}
 
-		if got := EvalRule(g, cfg, unmatched); len(got) != 0 {
+		if got := EvalRule(g, cfg, unmatched, testAsOf); len(got) != 0 {
 			t.Fatalf("EvalRule = %+v, want none", got)
 		}
 	})
@@ -1113,7 +1113,7 @@ func TestEvalRules(t *testing.T) {
 			{Severity: orphan.Severity, Rule: orphan.Name, ID: "0003", Detail: orphan.Message, Location: testNodeLocation("0003", testStatusLine)},
 		}
 
-		testAssertFindings(t, "EvalRules", EvalRules(g, cfg), want)
+		testAssertFindings(t, "EvalRules", EvalRules(g, cfg, testAsOf), want)
 	})
 
 	t.Run("configured rules replace the preset rules", func(t *testing.T) {
@@ -1135,14 +1135,14 @@ func TestEvalRules(t *testing.T) {
 			Location: testNodeLocation("0002", testStatusLine),
 		}}
 
-		testAssertFindings(t, "EvalRules", EvalRules(g, custom), want)
+		testAssertFindings(t, "EvalRules", EvalRules(g, custom, testAsOf), want)
 	})
 
 	t.Run("no configured rules report nothing", func(t *testing.T) {
 		none := config.ADRPreset()
 		none.Rules = nil
 
-		if got := EvalRules(g, none); len(got) != 0 {
+		if got := EvalRules(g, none, testAsOf); len(got) != 0 {
 			t.Fatalf("EvalRules = %+v, want none", got)
 		}
 	})
@@ -1434,7 +1434,7 @@ func TestEvalRuleLocatesTheClauseItRead(t *testing.T) {
 	t.Run("an attribute clause points at its key", func(t *testing.T) {
 		cfg := config.ADRPreset()
 
-		got := EvalRule(g, cfg, cfg.Rules[0])
+		got := EvalRule(g, cfg, cfg.Rules[0], testAsOf)
 
 		if len(got) == 0 {
 			t.Fatal("findings = none, want the drifted documents")
@@ -1452,7 +1452,7 @@ func TestEvalRuleLocatesTheClauseItRead(t *testing.T) {
 			Message:  "supersedes another document",
 		}
 
-		got := EvalRule(g, config.ADRPreset(), rule)
+		got := EvalRule(g, config.ADRPreset(), rule, testAsOf)
 
 		if len(got) == 0 {
 			t.Fatal("findings = none, want the superseding document")
@@ -1550,7 +1550,7 @@ func TestMatchConditionOnDegreeThresholds(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id)); got != tt.want {
+			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id), testAsOf); got != tt.want {
 				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
 			}
 		})
@@ -1646,7 +1646,7 @@ func TestMatchConditionOnOneHopClauses(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id)); got != tt.want {
+			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id), testAsOf); got != tt.want {
 				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
 			}
 		})
@@ -1666,7 +1666,7 @@ func TestEvalRuleLocatesAOneHopClauseAtTheEdgeKey(t *testing.T) {
 		Message: "depends on a deprecated decision",
 	}
 
-	f := testAssertSingleFinding(t, EvalRule(g, cfg, rule), rule.Name, model.SeverityWarn, "0001")
+	f := testAssertSingleFinding(t, EvalRule(g, cfg, rule, testAsOf), rule.Name, model.SeverityWarn, "0001")
 
 	if want := testNodeLocation("0001", testDependsOnLine); f.Location != want {
 		t.Fatalf("location = %+v, want %+v (the edge the reader can change)", f.Location, want)

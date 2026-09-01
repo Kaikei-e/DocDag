@@ -123,7 +123,7 @@ type firing struct {
 // documents directories rerooted onto the fixture: a fixture is not a
 // configuration of its own, or it would be testing something else.
 func firings(opts Options, dir, name string) ([]firing, error) {
-	cfg := rootedConfig(opts.Config, fixtureDirs(opts.Config, opts.Root, dir))
+	cfg := opts.Config.Reroot(fixtureDirs(opts.Config, opts.Root, dir))
 	g, err := corpusGraph(cfg)
 	if err != nil {
 		return nil, err
@@ -132,7 +132,7 @@ func firings(opts Options, dir, name string) ([]firing, error) {
 		n.Path = parse.LocalPath(opts.Reported, n.Path)
 	}
 	if _, declared := cfg.Projection(name); declared {
-		held := graph.EvalProjections(g, cfg).Set(name)
+		held := graph.EvalProjections(g, cfg, opts.AsOf).Set(name)
 		out := make([]firing, 0, len(held))
 		for _, id := range held {
 			out = append(out, firing{id: id, at: g.Nodes[id].Location(cfg.EffectiveStatus())})

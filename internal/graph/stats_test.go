@@ -13,7 +13,7 @@ import (
 
 func TestComputeStats(t *testing.T) {
 	cfg := config.ADRPreset()
-	got := ComputeStats(testStatsFixture(), cfg)
+	got := ComputeStats(testStatsFixture(), cfg, testAsOf)
 
 	t.Run("documents are counted", func(t *testing.T) {
 		if got.Documents != 5 {
@@ -98,7 +98,7 @@ func TestComputeStatsTopReferenced(t *testing.T) {
 			{ID: "0005", Count: 1},
 		}
 
-		if got := ComputeStats(g, cfg).TopReferenced; !slices.Equal(got, want) {
+		if got := ComputeStats(g, cfg, testAsOf).TopReferenced; !slices.Equal(got, want) {
 			t.Fatalf("top referenced = %+v, want %+v (never-referenced documents are omitted)", got, want)
 		}
 	})
@@ -118,7 +118,7 @@ func TestComputeStatsTopReferenced(t *testing.T) {
 		}
 		g := testGraph(nodes, nil, refs)
 
-		got := ComputeStats(g, cfg).TopReferenced
+		got := ComputeStats(g, cfg, testAsOf).TopReferenced
 
 		if len(got) != TopReferencedLimit {
 			t.Fatalf("top referenced has %d entries, want %d", len(got), TopReferencedLimit)
@@ -136,7 +136,7 @@ func TestComputeStatsTopReferenced(t *testing.T) {
 func TestComputeStatsEmptyGraph(t *testing.T) {
 	cfg := config.ADRPreset()
 
-	got := ComputeStats(testGraph(nil, nil, nil), cfg)
+	got := ComputeStats(testGraph(nil, nil, nil), cfg, testAsOf)
 
 	if got.Documents != 0 || got.Binding != 0 || got.Orphans != 0 {
 		t.Fatalf("stats = %+v, want an empty corpus", got)
@@ -160,7 +160,7 @@ func TestComputeStatsOnCyclicGraph(t *testing.T) {
 	cfg := config.ADRPreset()
 
 	var got Statistics
-	testMustNotHang(t, 5*time.Second, func() { got = ComputeStats(testSupersedesCycle(), cfg) })
+	testMustNotHang(t, 5*time.Second, func() { got = ComputeStats(testSupersedesCycle(), cfg, testAsOf) })
 
 	if got.Documents != 3 {
 		t.Fatalf("documents = %d, want 3", got.Documents)
@@ -254,7 +254,7 @@ func TestComputeStatsOverAStandard(t *testing.T) {
 		testClause("UZ-V-003", config.ModalitySHOULD, []string{testOtherTopic}, nil),
 	}, cfg)
 
-	stats := ComputeStats(g, cfg)
+	stats := ComputeStats(g, cfg, testAsOf)
 
 	t.Run("the subjects rank by the clauses hanging off them", func(t *testing.T) {
 		want := []TopicCount{{Topic: testTopic, Clauses: 2}, {Topic: testOtherTopic, Clauses: 1}}
@@ -283,7 +283,7 @@ func TestComputeStatsOverAStandard(t *testing.T) {
 	})
 
 	t.Run("a corpus without the vocabulary reports none of it", func(t *testing.T) {
-		adr := ComputeStats(testStatsFixture(), config.ADRPreset())
+		adr := ComputeStats(testStatsFixture(), config.ADRPreset(), testAsOf)
 		if len(adr.Topics) != 0 || len(adr.Modalities) != 0 || adr.SuppressedConflicts != 0 {
 			t.Errorf("stats = %+v, want no subject or modality rows: the adr preset declares neither", adr)
 		}

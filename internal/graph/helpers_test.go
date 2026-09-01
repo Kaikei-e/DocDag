@@ -18,6 +18,12 @@ import (
 
 var errInvalidFixtureFrontmatter = errors.New("yaml: fixture frontmatter does not decode")
 
+// testAsOf is the day the evaluation helpers are given for: none, which the
+// engine reads as today. A configuration whose kinds declare no period answers
+// the same on every day, which is what most of these tests are about; one that
+// is about a period names the day it means.
+var testAsOf = time.Time{}
+
 func testNode(id, status string) *model.Node {
 	return testNodeAttrs(id, status, nil)
 }

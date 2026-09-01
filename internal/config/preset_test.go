@@ -324,7 +324,7 @@ func TestSpecPreset(t *testing.T) {
 		}{
 			{EdgeSupersedes, []string{KindClause, KindPremise}, []string{KindClause, KindPremise}, []string{AttrReason}},
 			{EdgeEnforces, []string{KindConform}, []string{KindClause}, nil},
-			{EdgeDeviatesFrom, []string{KindDeviation}, []string{KindClause}, []string{AttrExpires}},
+			{EdgeDeviatesFrom, []string{KindDeviation}, []string{KindClause}, nil},
 			{EdgePremise, []string{KindClause}, []string{KindPremise}, nil},
 			{EdgeRationale, []string{KindClause}, []string{KindPrinciple}, nil},
 			{EdgeCounterexample, []string{KindClause, KindPrinciple}, []string{KindPM}, nil},
@@ -362,9 +362,10 @@ func TestSpecPreset(t *testing.T) {
 
 	t.Run("force is a projection, and binding is what it names", func(t *testing.T) {
 		if !slices.Equal(cfg.ProjectionNames(), []string{
-			ProjectionEnforced, ProjectionEffectiveMust, ProjectionEffectiveShould, ProjectionEffective,
+			ProjectionEnforced, ProjectionInForceSuccessor,
+			ProjectionEffectiveMust, ProjectionEffectiveShould, ProjectionEffective,
 		}) {
-			t.Fatalf("projections = %v, want the four of the preset", cfg.ProjectionNames())
+			t.Fatalf("projections = %v, want the five of the preset", cfg.ProjectionNames())
 		}
 		if cfg.Binding != ProjectionEffective {
 			t.Errorf("binding = %q, want %q", cfg.Binding, ProjectionEffective)
@@ -390,16 +391,16 @@ func TestSpecPreset(t *testing.T) {
 			t.Fatalf("effective_should any_of = %+v, want the four alternatives", should.AnyOf)
 		}
 		// The unenforced-strict alternatives need two absences and a condition
-		// holds one not_inbound, so the other is written as the
-		// not: {inbound: …} that vocabulary word is sugar for.
+		// holds one not: block, so the missing conformance test is the
+		// not_inbound word and the missing replacement the projection.
 		for i, want := range []string{ModalityMUST, ModalityMUSTNOT} {
 			unenforced := should.AnyOf[2+i].When
 			if got := testDeref(t, "effective_should modality", unenforced.Attr[FieldModality].Eq); got != want {
 				t.Errorf("effective_should alternative %d modality = %q, want %q", 2+i, got, want)
 			}
 			if unenforced.NotInbound != EdgeEnforces.String() || unenforced.Not == nil ||
-				unenforced.Not.Inbound.Edge != EdgeSupersedes.String() {
-				t.Errorf("effective_should alternative %d = %+v, want an unenforced, unsuperseded strict clause", 2+i, unenforced)
+				testDeref(t, "effective_should successor", unenforced.Not.Attr[ProjectionInForceSuccessor].Eq) != ProjectionTrue {
+				t.Errorf("effective_should alternative %d = %+v, want an unenforced strict clause nothing has replaced", 2+i, unenforced)
 			}
 		}
 		// effective reads the other two rather than repeating them, and adds
@@ -457,7 +458,88 @@ func TestSpecPreset(t *testing.T) {
 		}
 	})
 
-	t.Run("seven rules over the whole standard", func(t *testing.T) {
+	t.Run("every effective alternative reads the day", func(t *testing.T) {
+		// ADR-0005 D2: what carries force is what the standard says and what
+		// the calendar says, so every alternative that pins a modality also
+		// pins in_force, and the two that read another projection inherit it.
+		for _, name := range []string{ProjectionEffectiveMust, ProjectionEffectiveShould, ProjectionEffective} {
+			spec, _ := cfg.Projection(name)
+			for i, when := range spec.Whens() {
+				if _, reads := when.Attr[FieldModality]; !reads {
+					continue
+				}
+				if got := testDeref(t, name+" in_force", when.Attr[AttrInForce].Eq); got != ProjectionTrue {
+					t.Errorf("%s alternative %d in_force = %q, want %q", name, i, got, ProjectionTrue)
+				}
+				if when.NotInbound == EdgeSupersedes.String() {
+					t.Errorf("%s alternative %d still reads not_inbound: %s, want the in-force successor projection",
+						name, i, EdgeSupersedes)
+				}
+			}
+		}
+		successor, declared := cfg.Projection(ProjectionInForceSuccessor)
+		if !declared {
+			t.Fatalf("no %q projection, want the one the alternatives read", ProjectionInForceSuccessor)
+		}
+		via := successor.When.ViaInbound
+		if via == nil || via.Edge != EdgeSupersedes.String() {
+			t.Fatalf("%s via_inbound = %+v, want a hop back along %s", ProjectionInForceSuccessor, via, EdgeSupersedes)
+		}
+		if got := testDeref(t, "successor in_force", via.Attr[AttrInForce].Eq); got != ProjectionTrue {
+			t.Errorf("%s in_force = %q, want %q", ProjectionInForceSuccessor, got, ProjectionTrue)
+		}
+		if got := testDeref(t, "successor status", via.Attr[DefaultStatusField].Eq); got != StatusAccepted {
+			t.Errorf("%s status = %q, want %q", ProjectionInForceSuccessor, got, StatusAccepted)
+		}
+	})
+
+	t.Run("the three kinds with a lifetime declare where they write it", func(t *testing.T) {
+		want := map[string]PeriodSpec{
+			KindClause:    {From: FieldInForceFrom, Until: FieldInForceUntil},
+			KindDeviation: {From: KeyDate, Until: FieldExpires},
+			KindPremise:   {From: KeyDate, Until: FieldRetiredOn},
+		}
+		for name, period := range want {
+			got, declared := cfg.KindPeriod(name)
+			switch {
+			case !declared:
+				t.Errorf("kind %q declares no period, want %+v", name, period)
+			case got != period:
+				t.Errorf("kind %q period = %+v, want %+v", name, got, period)
+			}
+			// A closed kind has to admit the keys its own period reads, and
+			// every kind has to declare them under fields: so stats --fields
+			// can report how much of the corpus has dated itself.
+			for _, key := range period.Fields() {
+				if !slices.Contains(cfg.KnownFrontmatterKeys(name), key) {
+					t.Errorf("kind %q known keys = %v, want %q among them", name, cfg.KnownFrontmatterKeys(name), key)
+				}
+				if _, ok := cfg.Field(name, key); !ok && key != KeyDate {
+					t.Errorf("kind %q declares no %q field, want one so stats --fields can count it", name, key)
+				}
+			}
+		}
+		for _, name := range []string{KindConform, KindMeasure, KindPrinciple, KindPM, KindTopic} {
+			if _, declared := cfg.KindPeriod(name); declared {
+				t.Errorf("kind %q declares a period, want none: it has no lifetime of its own", name)
+			}
+		}
+		if !cfg.Periods() {
+			t.Error("the preset declares no periods at all, want the three kinds that have one")
+		}
+	})
+
+	t.Run("the deviation carries its own expiry, not the edge", func(t *testing.T) {
+		spec, _ := cfg.Edge(EdgeDeviatesFrom)
+		if len(spec.Attrs) != 0 {
+			t.Errorf("%s attrs = %+v, want none: the expiry belongs to the deviation", EdgeDeviatesFrom, spec.Attrs)
+		}
+		if _, declared := cfg.Field(KindDeviation, FieldExpires); !declared {
+			t.Errorf("kind %q declares no %q field, want the one the period reads", KindDeviation, FieldExpires)
+		}
+	})
+
+	t.Run("ten rules over the whole standard", func(t *testing.T) {
 		want := []struct {
 			name     string
 			severity model.Severity
@@ -469,6 +551,9 @@ func TestSpecPreset(t *testing.T) {
 			{model.RuleNoCounterexample, model.SeverityWarn},
 			{model.RuleMayWithoutInterop, model.SeverityWarn},
 			{model.RuleInteropNotMust, model.SeverityError},
+			{model.RuleStatusDrift, model.SeverityError},
+			{model.RulePendingSuccessor, model.SeverityWarn},
+			{model.RulePrematureSuperseded, model.SeverityError},
 		}
 		if len(cfg.Rules) != len(want) {
 			t.Fatalf("rules = %+v, want %d", cfg.Rules, len(want))
@@ -503,6 +588,33 @@ func TestSpecPreset(t *testing.T) {
 		if got := testDeref(t, "interop_not_must modality", interop.When.Via.Attr[FieldModality].Not); got != ModalityMUST {
 			t.Errorf("interop_not_must modality = %q, want not %q", got, ModalityMUST)
 		}
+		// The premise the clause rests on has left force, which is the day
+		// rather than the word: `retired` stays in the vocabulary for the
+		// person writing the document, and the rule reads in_force.
+		premise := cfg.Rules[2]
+		if premise.When.Via == nil || premise.When.Via.Edge != EdgePremise.String() {
+			t.Fatalf("stale_premise via = %+v, want a hop across %s", premise.When.Via, EdgePremise)
+		}
+		if got := testDeref(t, "stale_premise in_force", premise.When.Via.Attr[AttrInForce].Eq); got != ProjectionFalse {
+			t.Errorf("stale_premise in_force = %q, want %q", got, ProjectionFalse)
+		}
+		if !slices.Contains(cfg.KindStatusValues(KindPremise), StatusRetired) {
+			t.Errorf("premise status_values = %v, want %q kept for the person who writes it",
+				cfg.KindStatusValues(KindPremise), StatusRetired)
+		}
+		// The three time-dependent status rules of ADR-0005 D4.
+		drift := cfg.Rules[7]
+		if drift.When.ViaInbound == nil ||
+			testDeref(t, "status_drift in_force", drift.When.ViaInbound.Attr[AttrInForce].Eq) != ProjectionTrue {
+			t.Errorf("status_drift = %+v, want an in-force accepted successor one hop back", drift.When)
+		}
+		for _, i := range []int{8, 9} {
+			rule := cfg.Rules[i]
+			if rule.When.Not == nil ||
+				testDeref(t, rule.Name+" successor", rule.When.Not.Attr[ProjectionInForceSuccessor].Eq) != ProjectionTrue {
+				t.Errorf("rule %q = %+v, want it to read the absence of an in-force successor", rule.Name, rule.When)
+			}
+		}
 	})
 
 	t.Run("each call returns an independent value", func(t *testing.T) {
@@ -526,7 +638,7 @@ func TestSpecPreset(t *testing.T) {
 // rather than trusted: a preset the file describes differently is a preset
 // nobody can adopt by reading about it.
 const specPresetYAML = `preset: spec
-preset_version: 1
+preset_version: 2
 status_field: status
 
 kinds:
@@ -539,6 +651,9 @@ kinds:
       modality:                 # the strength the clause claims, and it has to claim one
         one_of: [MUST, MUST_NOT, SHOULD, SHOULD_NOT, MAY]
         required: true
+      in_force_from: {}         # declared so stats --fields counts them; the period reads them
+      in_force_until: {}
+    period: {from: in_force_from, until: in_force_until}
   conform:
     dir: spec/conform
     id: '^conform/[a-z0-9-]+$'
@@ -549,6 +664,9 @@ kinds:
     id: '^dev-\d{4}$'
     status_values: [proposed, accepted, resolved, withdrawn]
     closed: true
+    fields:
+      expires: {}               # the day the departure stops being recorded
+    period: {from: date, until: expires}
   measure:
     dir: spec/measures
     id: '^interp/UZ-[A-Z]-\d{3}@\d{4}-\d{2}-\d{2}$'
@@ -556,6 +674,9 @@ kinds:
     dir: spec/premises
     id: '^premise/[a-z0-9/-]+$'
     status_values: [proposed, accepted, retired, superseded]
+    fields:
+      retired_on: {}            # the day the world stopped making it true
+    period: {from: date, until: retired_on}
   principle:
     dir: spec/principles
     id: '^principle/[a-z0-9/-]+$'
@@ -582,14 +703,12 @@ edges:
     direction: forward
     from: [conform]
     to: [clause]
-    target: {leaf_of: supersedes}     # sugar for not_inbound: supersedes
+    target: {leaf_of: supersedes}     # the current leaf: no in-force accepted successor
   - name: deviates-from
     key: deviates-from
     direction: forward
     from: [deviation]
     to: [clause]
-    attrs:
-      expires: {required: true, type: date}
     target:
       attr: {status: {eq: accepted}}
       not_inbound: supersedes         # = binding: a departure departs from something in force
@@ -640,39 +759,41 @@ edges:
 projections:
   - name: enforced
     when: {inbound: enforces}
+  - name: has_inforce_successor       # in_force is the engine's, computed from period:
+    when: {via_inbound: {edge: supersedes, attr: {in_force: {eq: "true"}, status: {eq: accepted}}}}
   - name: effective_must
     any_of:
       - when:
-          attr: {modality: {eq: MUST}, status: {eq: accepted}}
+          attr: {modality: {eq: MUST}, status: {eq: accepted}, in_force: {eq: "true"}}
           inbound: enforces
-          not_inbound: supersedes
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
       - when:
-          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}
+          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}, in_force: {eq: "true"}}
           inbound: enforces
-          not_inbound: supersedes
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
   - name: effective_should
     any_of:
       - when:
-          attr: {modality: {eq: SHOULD}, status: {eq: accepted}}
-          not_inbound: supersedes
+          attr: {modality: {eq: SHOULD}, status: {eq: accepted}, in_force: {eq: "true"}}
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
       - when:
-          attr: {modality: {eq: SHOULD_NOT}, status: {eq: accepted}}
-          not_inbound: supersedes
+          attr: {modality: {eq: SHOULD_NOT}, status: {eq: accepted}, in_force: {eq: "true"}}
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
       - when:
-          attr: {modality: {eq: MUST}, status: {eq: accepted}}
+          attr: {modality: {eq: MUST}, status: {eq: accepted}, in_force: {eq: "true"}}
+          not_inbound: enforces           # a condition holds one not: block; this is the other absence
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
+      - when:
+          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}, in_force: {eq: "true"}}
           not_inbound: enforces
-          not: {inbound: supersedes}      # a condition holds one not_inbound; this is the other
-      - when:
-          attr: {modality: {eq: MUST_NOT}, status: {eq: accepted}}
-          not_inbound: enforces
-          not: {inbound: supersedes}
-  - name: effective                     # in_force is reserved: ADR-0005 computes it from period:
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
+  - name: effective                     # the first two already read the day through the projections
     any_of:
       - when: {attr: {effective_must: {eq: "true"}}}
       - when: {attr: {effective_should: {eq: "true"}}}
       - when:
-          attr: {modality: {eq: MAY}, status: {eq: accepted}}
-          not_inbound: supersedes         # a permission is effective as the permission it states
+          attr: {modality: {eq: MAY}, status: {eq: accepted}, in_force: {eq: "true"}}
+          not: {attr: {has_inforce_successor: {eq: "true"}}}
 
 binding: effective
 
@@ -695,8 +816,8 @@ rules:
     severity: error
     when:
       attr: {status: {eq: accepted}}
-      via: {edge: premise, attr: {status: {eq: retired}}}
-    message: "is accepted but a premise is retired"
+      via: {edge: premise, attr: {in_force: {eq: "false"}}}
+    message: "is accepted but a premise is no longer in force"
   - name: deviation_pressure
     severity: warn
     when:
@@ -721,6 +842,25 @@ rules:
       outbound: interop
       via: {edge: interop, attr: {modality: {not: MUST}}}
     message: "interop must point at a MUST clause"
+  - name: status_drift                  # time-dependent, unlike the adr preset's rule of that name
+    severity: error
+    when:
+      attr: {status: {not: superseded}}
+      via_inbound: {edge: supersedes, attr: {status: {eq: accepted}, in_force: {eq: "true"}}}
+    message: "an in-force successor supersedes it but status is not superseded"
+  - name: pending_successor
+    severity: warn
+    when:
+      attr: {status: {eq: accepted}}
+      inbound: supersedes
+      not: {attr: {has_inforce_successor: {eq: "true"}}}
+    message: "a successor is declared but not yet in force; this clause remains binding until then"
+  - name: premature_superseded
+    severity: error
+    when:
+      attr: {status: {eq: superseded}}
+      not: {attr: {has_inforce_successor: {eq: "true"}}}
+    message: "status is superseded but no successor is in force yet"
 `
 
 func TestSpecPresetMatchesTheDocumentedYAML(t *testing.T) {

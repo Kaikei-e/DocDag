@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/internal/graph"
 	"github.com/Kaikei-e/DocDag/internal/lint"
 	"github.com/Kaikei-e/DocDag/internal/parse"
 	"github.com/Kaikei-e/DocDag/internal/render"
@@ -51,6 +52,8 @@ func newLintCmd() *cobra.Command {
 	cmd.Flags().Bool(flagAll, false, "run every layer, reading fixtures from "+lint.DefaultFixtureDir+"/")
 	cmd.Flags().Bool(flagStrict, false, "exit 1 on warnings as well as errors")
 	cmd.Flags().String(flagSince, "", "also evaluate the corpus at <rev> and report what started or stopped firing")
+	addAsOfFlag(cmd, "the day HEAD was committed on")
+	addAtFlag(cmd)
 	return cmd
 }
 
@@ -59,25 +62,34 @@ func runLint(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	opts, strict, err := lintOptions(cmd)
+	opts, run, err := lintOptions(cmd)
 	if err != nil {
 		return err
 	}
+	defer run.close()
 	findings, err := lint.Run(opts)
 	if err != nil {
 		return ioErr(err)
 	}
 	summary := lint.Summarize(findings)
 	out := cmd.OutOrStdout()
+	header := render.Header{PresetVersion: opts.Config.PresetVersion, AsOf: graph.AsOfDay(opts.AsOf), At: run.at}
+	// Only a run that read the corpus asked a question a day could change the
+	// answer to: layer 1 reads the configuration alone, and a configuration
+	// means the same thing on every day.
+	day := ""
+	if opts.Corpus != nil {
+		day = reportedAsOf(opts.Config, opts.AsOf)
+	}
 	switch format {
 	case formatJSON:
-		err = render.LintJSON(out, findings, summary, opts.Config.PresetVersion)
+		err = render.LintJSON(out, findings, summary, header)
 	case formatGitHub:
-		err = render.LintGitHub(out, findings, summary)
+		err = render.LintGitHub(out, findings, summary, day)
 	case formatRDJSON:
 		err = render.LintRDJSON(out, findings, summary)
 	default:
-		err = render.LintText(out, findings, summary)
+		err = render.LintText(out, findings, summary, day)
 	}
 	if err != nil {
 		return ioErr(err)
@@ -85,7 +97,7 @@ func runLint(cmd *cobra.Command, _ []string) error {
 	switch {
 	case summary.Errors > 0:
 		return &cliError{code: exitFailure}
-	case summary.Warnings > 0 && strict:
+	case summary.Warnings > 0 && run.strict:
 		return &cliError{code: exitFailure}
 	case summary.Warnings > 0:
 		return &cliError{code: exitLintWarn}
@@ -93,33 +105,48 @@ func runLint(cmd *cobra.Command, _ []string) error {
 	return nil
 }
 
+// lintRun is what the caller has to hold on to beside the options: whether a
+// warning fails the run, the revision the corpus was read from, and the
+// temporary tree --at left behind.
+type lintRun struct {
+	strict bool
+	at     string
+	corpus *corpus
+}
+
+func (r lintRun) close() { r.corpus.close() }
+
 // lintOptions reads the flags into one lint run: which layers to answer in,
 // where the configuration file is, and where the corpus and the fixtures are
 // read from.
-func lintOptions(cmd *cobra.Command) (lint.Options, bool, error) {
+func lintOptions(cmd *cobra.Command) (lint.Options, lintRun, error) {
 	flags := cmd.Flags()
-	corpus, err := flags.GetBool(flagCorpus)
+	readCorpus, err := flags.GetBool(flagCorpus)
 	if err != nil {
-		return lint.Options{}, false, usageErr("%v", err)
+		return lint.Options{}, lintRun{}, usageErr("%v", err)
 	}
 	fixtures, err := flags.GetString(flagFixtures)
 	if err != nil {
-		return lint.Options{}, false, usageErr("%v", err)
+		return lint.Options{}, lintRun{}, usageErr("%v", err)
 	}
 	all, err := flags.GetBool(flagAll)
 	if err != nil {
-		return lint.Options{}, false, usageErr("%v", err)
+		return lint.Options{}, lintRun{}, usageErr("%v", err)
 	}
-	strict, err := flags.GetBool(flagStrict)
-	if err != nil {
-		return lint.Options{}, false, usageErr("%v", err)
+	run := lintRun{}
+	if run.strict, err = flags.GetBool(flagStrict); err != nil {
+		return lint.Options{}, lintRun{}, usageErr("%v", err)
 	}
 	since, err := flags.GetString(flagSince)
 	if err != nil {
-		return lint.Options{}, false, usageErr("%v", err)
+		return lint.Options{}, lintRun{}, usageErr("%v", err)
+	}
+	asOf, err := asOfCommitted(cmd)
+	if err != nil {
+		return lint.Options{}, lintRun{}, err
 	}
 	if all {
-		corpus = true
+		readCorpus = true
 		if fixtures == "" {
 			fixtures = lint.DefaultFixtureDir
 		}
@@ -127,20 +154,20 @@ func lintOptions(cmd *cobra.Command) (lint.Options, bool, error) {
 	// A revision to compare against is a corpus question, so naming one asks
 	// for the corpus layer whether or not the flag beside it was written.
 	if since != "" {
-		corpus = true
+		readCorpus = true
 	}
 
 	root, err := os.Getwd()
 	if err != nil {
-		return lint.Options{}, false, ioErr(fmt.Errorf("working directory: %w", err))
+		return lint.Options{}, lintRun{}, ioErr(fmt.Errorf("working directory: %w", err))
 	}
 	cfg, err := effectiveConfig(cmd)
 	if err != nil {
-		return lint.Options{}, false, err
+		return lint.Options{}, lintRun{}, err
 	}
 	path, err := configFile(cmd, root)
 	if err != nil {
-		return lint.Options{}, false, err
+		return lint.Options{}, lintRun{}, err
 	}
 	opts := lint.Options{
 		Config:   cfg,
@@ -149,24 +176,26 @@ func lintOptions(cmd *cobra.Command) (lint.Options, bool, error) {
 		Since:    since,
 		Root:     corpusRoot(root, path),
 		Reported: root,
-		AsOf:     time.Now(),
+		AsOf:     asOf,
 	}
-	if corpus {
-		g, _, err := loadGraph(cmd)
+	if readCorpus {
+		read, err := loadCorpus(cmd)
 		if err != nil {
-			return lint.Options{}, false, err
+			return lint.Options{}, lintRun{}, err
 		}
-		opts.Corpus = g
+		run.corpus, run.at = read, read.at
+		opts.Corpus = read.graph
 	}
 	if since == "" {
-		return opts, strict, nil
+		return opts, run, nil
 	}
 	repo, err := vcs.Open(root)
 	if err != nil {
-		return lint.Options{}, false, ioErr(fmt.Errorf("--%s: %w", flagSince, err))
+		run.close()
+		return lint.Options{}, lintRun{}, ioErr(fmt.Errorf("--%s: %w", flagSince, err))
 	}
 	opts.Repo = repo
-	return opts, strict, nil
+	return opts, run, nil
 }
 
 // runNewFixture writes the ruleid/ and ok/ skeleton of one rule, derived from

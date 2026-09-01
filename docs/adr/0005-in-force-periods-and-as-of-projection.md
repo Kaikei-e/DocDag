@@ -276,9 +276,37 @@ rules:
 - **導出 `until` の意味論は「accepted な後継の最小 from」に固定した。** trial の後継は効力を持たないという
   ADR-0001 §3 の設計に依存する。将来 trial に効力を持たせる変更をするなら、本 ADR を supersede する。
 
+## 実装時の逸脱（採択後に追記）
+
+本 ADR は実装済みである。決定のうち、実装が本文と違う形を取った点を記録する。
+
+- **D5「すべての出力に `as_of` を含める」を、JSON は常に・text は `period:` を宣言した corpus に限る、
+  に改めた。** JSON のヘッダ（`validate` / `lint` / `context` / `stats`）は常に `as_of` を、`--at` が
+  与えられていれば `at` を持つ。text 出力は、いずれかの kind が `period:` を宣言している場合にだけ
+  末尾の要約行に `, as of <day>` を足す（error があって要約行が出ない場合は `as of <day>` の 1 行）。
+  理由は 2 つある。`adr` preset は `period:` を持たず、その corpus の答えは日付に依存しないので、
+  日付を印字しても読む人には意味がない。そして text の先頭行を変えると、既存の golden・composite
+  action・problem matcher が一斉に壊れる — R6（既定挙動を変えない）はここにも及ぶ。
+- **`period:` は kind ごとに加えて、トップレベルにも書けるようにした。** D1 は「kind ごと」だが、
+  `adr` preset の corpus は kind を宣言しない（単一 kind）ので、そのままでは D4 の移行手順
+  （`period: {from: date}` を宣言する）が書けない。トップレベルの `period:` は、kind が自分の
+  宣言を持たないときの既定として読む — `status_values` と `fields:` が既にそうしているのと同じ規則である。
+- **D7 の「`in_force` な逸脱だけを数える」を、辺インデックス全体の規則として実装した。** 効力を失った
+  文書が宣言した辺は、次数の閾値・一段隣の節・`excepts` による衝突の抑止から外れる。ただし
+  `supersedes` 系列は除外する：終了日はそこから導出されるので、系列まで落とすと「まだ効力を持たない
+  後継」という `pending_successor` が報告すべき事実そのものが消える。`path_constraints` も除外する：
+  あれは「今何が有効か」ではなく corpus の形についての言明である。
+- **`expired_deviation` の述語を「明示の `until` が過ぎており、かつ status がまだ `accepted`」とした。**
+  D7 は「期限切れ」としか言っていないが、`until` が過ぎた文書には「後継に置き換えられて終わった条項」
+  （`status_drift` / `premature_superseded` の領分）と「まだ有効だと言い張っている期限切れの記録」の
+  2 種類がある。報告に値するのは後者だけである。
+- **`premise` の `status: retired` は status_values に残した。** D7 は「不要になる」としているが、
+  語彙から削ると既存の premise 文書が `unknown_status` になる。規則が読むのは `in_force`（＝日付）で、
+  語は人が読むための prose として残す、という分担にした。
+
 ## 関連ADR
 
-- 0001（`spec` preset、`binding:` 射影、`expires` 辺属性、`stale_premise`）— 本 ADR の採択時に D7 の通り改める
+- 0001（`spec` preset、`binding:` 射影、`expires` 辺属性、`stale_premise`）— 本 ADR の採択時に D7 の通り改める（**反映済み**）
 - 0002（`leaf_of`）— 「現行の葉」を as-of 時点で評価する
 - 0003（`modality_conflict`、`excepts`）— 「両方が binding」と defeater の有効性を as-of 時点で評価する
 - 0004（`lint --corpus`）— 層 2 の評価に `--as-of` を通す

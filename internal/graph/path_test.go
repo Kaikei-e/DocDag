@@ -257,7 +257,7 @@ func TestCheckPathConstraints(t *testing.T) {
 			Equals: config.PathEqualsNone,
 		})
 
-		got := Suggest(Validate(g, cfg, time.Time{}), g, cfg)
+		got := Suggest(Validate(g, cfg, time.Time{}), g, cfg, testAsOf)
 
 		for _, f := range testFindingsFor(got, model.RulePathMismatch) {
 			if f.Fix != "" {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -77,8 +78,8 @@ func (c ModalityConflict) Fix() string {
 // cannot both hold about a subject they share. It answers only for a
 // configuration that declares the `about` edge and the `modality` field: what
 // two clauses are about, and at what strength, is what the check is made of.
-func CheckModalityConflicts(g *model.Graph, cfg config.Config) []model.Finding {
-	conflicts := ModalityConflicts(g, cfg)
+func CheckModalityConflicts(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
+	conflicts := ModalityConflicts(g, cfg, asOf)
 	findings := make([]model.Finding, 0, len(conflicts))
 	for _, c := range conflicts {
 		findings = append(findings, modalityConflict(g, cfg, c))
@@ -136,14 +137,14 @@ func modalityLocation(cfg config.Config, n *model.Node) model.Location {
 // carries a handful of clauses, so the walk is linear in practice. A vault that
 // hangs a hundred clauses off one topic has a topic that says too little, which
 // is a matter for the preset lint rather than for a cleverer algorithm here.
-func ModalityConflicts(g *model.Graph, cfg config.Config) []ModalityConflict {
+func ModalityConflicts(g *model.Graph, cfg config.Config, asOf time.Time) []ModalityConflict {
 	conflicts := []ModalityConflict{}
 	about, declared := cfg.Edge(config.EdgeAbout)
 	if !declared {
 		return conflicts
 	}
 	binding := make(map[model.ID]bool)
-	for _, id := range BindingSet(g, cfg) {
+	for _, id := range BindingSet(g, cfg, asOf) {
 		binding[id] = true
 	}
 
@@ -174,7 +175,7 @@ func ModalityConflicts(g *model.Graph, cfg config.Config) []ModalityConflict {
 		}
 	}
 
-	defeaters := exceptsIndex(g, cfg)
+	defeaters := exceptsIndex(g, cfg, EvalPeriods(g, cfg, asOf))
 	keys := make([]pair, 0, len(shared))
 	for key := range shared {
 		keys = append(keys, key)
@@ -245,13 +246,19 @@ func incompatible(a, b string) (strong, conflicting bool) {
 // pair can ask for the defeater in either direction without walking the edges
 // again. It is empty for a configuration that declares no excepts edge, which
 // is what "this corpus records no exceptions" is.
-func exceptsIndex(g *model.Graph, cfg config.Config) map[edgeKey]model.Edge {
+func exceptsIndex(g *model.Graph, cfg config.Config, periods Periods) map[edgeKey]model.Edge {
 	index := map[edgeKey]model.Edge{}
 	spec, declared := cfg.Edge(config.EdgeExcepts)
 	if !declared {
 		return index
 	}
 	for _, e := range g.EdgesOfType(model.EdgeType(spec.Name)) {
+		// A defeater is a statement its clause makes, so it defeats nothing once
+		// that clause has left force: the same rule the edge index applies to
+		// every other statement an out-of-force document made.
+		if !carriesWeight(periods, e) {
+			continue
+		}
 		index[edgeKey{from: e.From, to: e.To}] = e
 	}
 	return index

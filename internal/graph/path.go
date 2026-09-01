@@ -17,7 +17,11 @@ func CheckPathConstraints(g *model.Graph, cfg config.Config) []model.Finding {
 	if len(cfg.PathConstraints) == 0 {
 		return findings
 	}
-	ix := newEdgeIndex(g)
+	// A path constraint is about the edges the frontmatter declares rather than
+	// about what is in force today: it says two walks reach the same documents,
+	// which is a statement about the shape of the corpus. So the walk reads
+	// every edge, and the index is built over no periods.
+	ix := newEdgeIndex(g, Periods{})
 	for _, constraint := range cfg.PathConstraints {
 		steps := config.PathSteps(constraint.Path)
 		compare := config.PathSteps(constraint.SubsetOf)

@@ -76,7 +76,15 @@ $ docdag query --binding       # what is in force right now?
 $ docdag query 0001 --ancestors --edge depends-on   # what rests on this decision?
 0003
 0004
+
+$ docdag query --binding --as-of 2027-04-01        # what will be in force then?
+0001
+0005
 ```
+
+Where a corpus declares a `period:`, what is in force is an answer about a day: `--as-of` moves the
+day and `--at <rev>` moves the revision the documents are read from, and the two compose into "what
+the vault at that revision said was in force on that day".
 
 DocDag looks in `docs/adr`, `doc/adr`, `docs/decisions`, `docs/ADR`, `adr` — the first that exists
 and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 to 6 digits; `--dir` overrides it.
@@ -96,6 +104,8 @@ mechanical remedy, and exits 1 if any finding is an error:
 - **Graph** — `cycle`, `cardinality`, `inverse_mismatch`, and, for an edge that declares `target:`
   or a corpus that declares `path_constraints:`, `stale_target` and `path_mismatch`; plus the
   preset's two status rules, `status_drift` and `superseded_orphan`.
+- **Periods** — for a kind that declares `period:`, the two days a document writes are read against
+  the day the run is about: `period_invalid`, `period_conflict`, `expired_deviation`.
 - **Reference layer** — `dangling_reference`, off until `references.dangling` asks for it.
 - **History** — `immutable_violation`, under `--immutable-since <rev>`.
 

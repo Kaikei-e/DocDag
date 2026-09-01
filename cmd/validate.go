@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/spf13/cobra"
 
@@ -38,13 +37,20 @@ func newValidateCmd() *cobra.Command {
 			if err != nil {
 				return usageErr("%v", err)
 			}
-			g, cfg, err := loadGraph(cmd)
+			asOf, err := asOfCommitted(cmd)
 			if err != nil {
 				return err
 			}
+			c, err := loadCorpus(cmd)
+			if err != nil {
+				return err
+			}
+			defer c.close()
+			g, cfg := c.graph, c.cfg
 			// The day is read here rather than inside the checks, so one run
-			// compares every sunset against one date and a test can name it.
-			findings := graph.Validate(g, cfg, time.Now())
+			// compares every sunset and every period against one date and a
+			// test can name it.
+			findings := graph.Validate(g, cfg, asOf)
 			history, err := immutableFindings(cmd, cfg)
 			if err != nil {
 				return err
@@ -53,7 +59,7 @@ func newValidateCmd() *cobra.Command {
 				findings = append(findings, history...)
 				graph.SortFindings(findings)
 			}
-			findings = graph.Suggest(findings, g, cfg)
+			findings = graph.Suggest(findings, g, cfg, asOf)
 			// The exit code answers for the corpus, never for the filter: a
 			// report narrowed to one file must not turn a failure into a pass.
 			// Summarize leaves out the suppressed findings whether or not they
@@ -67,15 +73,17 @@ func newValidateCmd() *cobra.Command {
 				reported = graph.Touching(findings, g, touching)
 			}
 			out := cmd.OutOrStdout()
+			header := render.Header{PresetVersion: cfg.PresetVersion, AsOf: graph.AsOfDay(asOf), At: c.at}
+			day := reportedAsOf(cfg, asOf)
 			switch format {
 			case formatJSON:
-				err = render.FindingsJSON(out, reported, summary, cfg.PresetVersion)
+				err = render.FindingsJSON(out, reported, summary, header)
 			case formatGitHub:
-				err = render.FindingsGitHub(out, reported, summary)
+				err = render.FindingsGitHub(out, reported, summary, day)
 			case formatRDJSON:
 				err = render.FindingsRDJSON(out, reported, summary)
 			default:
-				err = render.FindingsText(out, reported, summary)
+				err = render.FindingsText(out, reported, summary, day)
 			}
 			if err != nil {
 				return ioErr(err)
@@ -90,6 +98,8 @@ func newValidateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringArray(flagTouching, nil, "report only the findings about these files or directories (repeatable)")
+	addAsOfFlag(cmd, "the day HEAD was committed on")
+	addAtFlag(cmd)
 	cmd.Flags().String(flagImmutableSince, "", "check that documents closed at <rev> only grew since")
 	cmd.Flags().Bool(flagShowSuppressed, false, "also report the findings a recorded exception suppresses")
 	return cmd
@@ -127,6 +137,14 @@ func immutableFindings(cmd *cobra.Command, cfg config.Config) ([]model.Finding, 
 	}
 	if rev == "" {
 		return nil, nil
+	}
+	// The history check compares the working tree against a base revision, and
+	// --at replaces the working tree with a revision of its own: asking for both
+	// is asking the check to compare two revisions it never read.
+	if at, err := revision(cmd); err != nil {
+		return nil, err
+	} else if at != "" {
+		return nil, usageErr("--%s reads the working tree, so it takes no --%s", flagImmutableSince, flagAt)
 	}
 	// The history check reads one documents directory under one identity rule.
 	// A multi-kind corpus has neither, and answering over the wrong directory

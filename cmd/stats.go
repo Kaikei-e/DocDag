@@ -24,10 +24,16 @@ func newStatsCmd() *cobra.Command {
 			if err != nil {
 				return usageErr("%v", err)
 			}
-			g, cfg, err := loadGraph(cmd)
+			asOf, err := asOfToday(cmd)
 			if err != nil {
 				return err
 			}
+			c, err := loadCorpus(cmd)
+			if err != nil {
+				return err
+			}
+			defer c.close()
+			g, cfg := c.graph, c.cfg
 			out := cmd.OutOrStdout()
 			if fields {
 				// The field report is about frontmatter rather than degrees, so
@@ -48,12 +54,12 @@ func newStatsCmd() *cobra.Command {
 			if err := requireSupersedes(cfg); err != nil {
 				return err
 			}
-			stats := graph.ComputeStats(g, cfg)
+			stats := graph.ComputeStats(g, cfg, asOf)
 			switch format {
 			case formatJSON:
-				err = render.StatsJSON(out, stats)
+				err = render.StatsJSON(out, stats, render.Header{AsOf: graph.AsOfDay(asOf), At: c.at})
 			default:
-				err = render.StatsText(out, stats)
+				err = render.StatsText(out, stats, reportedAsOf(cfg, asOf))
 			}
 			if err != nil {
 				return ioErr(err)
@@ -62,6 +68,8 @@ func newStatsCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().Bool(flagFields, false, "report frontmatter field usage instead of the degree statistics")
+	addAsOfFlag(cmd, "today")
+	addAtFlag(cmd)
 	return cmd
 }
 

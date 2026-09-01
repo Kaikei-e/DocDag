@@ -146,6 +146,11 @@ func Merge(base, override Config) Config {
 	if override.Fields != nil {
 		merged.Fields = maps.Clone(override.Fields)
 	}
+	// A period is one declaration rather than a set, so writing one replaces
+	// the preset's: a corpus that dates its documents differently says so once.
+	if override.Period != nil {
+		merged.Period = override.Period
+	}
 	if override.Edges != nil {
 		merged.Edges = slices.Clone(override.Edges)
 	}

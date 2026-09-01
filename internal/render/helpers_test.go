@@ -8,12 +8,22 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
 )
 
 var errWriterClosed = errors.New("render: writer is closed")
+
+// testAsOf is the day the reports are written for. It is a fixed day rather
+// than today: a golden file that carries the as-of date has to say the same
+// thing on every run, which is the same reason `validate` pins its default to
+// the committer date.
+var testAsOf = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// testAsOfDay is that day as a report writes it.
+const testAsOfDay = "2026-01-01"
 
 // failingWriter proves renderers surface write failures instead of swallowing
 // them behind a nil error.

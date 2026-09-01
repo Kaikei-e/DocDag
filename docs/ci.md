@@ -94,6 +94,42 @@ does not have. Ask for the full history and name the branch the change is propos
 `github.base_ref` is the branch a pull request targets and is empty on a push, where the default
 branch is the useful comparison.
 
+## Periodic runs
+
+`validate` and `lint --corpus` answer for the day HEAD was committed on, so one commit gates the
+same way however long afterwards the job runs — a corpus that passed yesterday cannot fail today
+because a date rolled over. That is what a gate needs, and it is exactly why an expiry the corpus
+declared is not noticed until the next commit touches the repository.
+
+Where a corpus declares a [`period:`](configuration.md#periods-and-as-of), pair the gate with a
+scheduled run that says out loud that it is asking about today:
+
+```yaml
+name: expiries
+on:
+  schedule:
+    - cron: "0 6 * * 1"          # Mondays, 06:00 UTC
+
+jobs:
+  as-of-today:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Kaikei-e/DocDag@v0.2.0
+        with:
+          args: validate --format github --as-of $(date -I)
+```
+
+`$DOCDAG_AS_OF` does the same for a whole pipeline where several commands run together. The
+scheduled run is what turns `expired_deviation`, a premise past its `retired_on` and a successor
+that has come into force into findings on the day they happen, rather than on the day somebody
+happens to commit.
+
+Reproducing a past answer is the other direction: `--at <rev>` reads every managed document from a
+revision, and the two flags compose — `docdag query --binding --at v1.2.0 --as-of 2026-06-01` is
+what the vault at that release said was in force that day, which is the question an incident review
+asks.
+
 ## Linting the configuration
 
 `docdag lint` answers about `docdag.yaml` rather than about the documents, and `validate` never runs

@@ -17,6 +17,11 @@ whole directory: one command replaces a fan-out of file reads.
 - **binding** — the document is `accepted` and nothing supersedes it. This is
   what "in force right now" means. A `proposed` or `superseded` document is not
   binding, whatever it says.
+- **as-of** — where `docdag.yaml` declares a `period:`, a document is in force
+  between the two days it writes, so what binds is an answer about a day.
+  `--as-of YYYY-MM-DD` asks about another one; `--at <rev>` reads the documents
+  from a revision instead of the working tree. Without a `period:` neither
+  changes anything.
 - **resolve** — walk the `supersedes` chain forward to the documents that stand
   in for a ref today. A document nothing supersedes resolves to itself.
 - **typed edge** — a relation declared in frontmatter (`supersedes:`,
@@ -34,6 +39,7 @@ whole directory: one command replaces a fan-out of file reads.
 | --- | --- |
 | What am I working with here? | `docdag context <ref>` |
 | What is in force right now? | `docdag query --binding` |
+| What will be in force on a day? | `docdag query --binding --as-of 2027-04-01` |
 | What replaced this decision? | `docdag resolve <ref>` |
 | What rests on this decision? | `docdag query <ref> --ancestors` |
 | What does this decision rest on? | `docdag query <ref> --descendants` |

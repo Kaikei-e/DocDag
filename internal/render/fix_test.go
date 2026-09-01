@@ -19,7 +19,7 @@ func TestFindingsTextIndentsTheFixUnderTheFinding(t *testing.T) {
 	}}
 
 	var buf bytes.Buffer
-	if err := FindingsText(&buf, findings, model.Summary{Errors: 1}); err != nil {
+	if err := FindingsText(&buf, findings, model.Summary{Errors: 1}, ""); err != nil {
 		t.Fatalf("FindingsText: %v", err)
 	}
 
@@ -40,7 +40,7 @@ func TestFindingsTextOmitsAnAbsentFix(t *testing.T) {
 	}}
 
 	var buf bytes.Buffer
-	if err := FindingsText(&buf, findings, model.Summary{Errors: 1}); err != nil {
+	if err := FindingsText(&buf, findings, model.Summary{Errors: 1}, ""); err != nil {
 		t.Fatalf("FindingsText: %v", err)
 	}
 

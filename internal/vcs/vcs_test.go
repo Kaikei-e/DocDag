@@ -334,3 +334,111 @@ func TestRepoFiles(t *testing.T) {
 		}
 	})
 }
+
+func TestRepoCommitterDate(t *testing.T) {
+	dir := testRepo(t, map[string]string{"docs/adr/0001-a-decision.md": "# A decision\n"})
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	t.Run("the day a revision was committed on", func(t *testing.T) {
+		got, err := repo.CommitterDate("HEAD")
+		if err != nil {
+			t.Fatalf("CommitterDate: %v", err)
+		}
+
+		want := strings.TrimSpace(testGit(t, dir, "log", "-1", "--format=%cs"))
+		if got != want {
+			t.Errorf("CommitterDate = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("a revision git cannot resolve is an error", func(t *testing.T) {
+		if _, err := repo.CommitterDate("no-such-revision"); err == nil {
+			t.Fatal("CommitterDate succeeded on a revision that does not exist, want an error")
+		}
+	})
+}
+
+func TestRepoCheckout(t *testing.T) {
+	dir := testRepo(t, map[string]string{
+		"spec/clauses/UZ-V-001.md": "# A clause\n",
+		"spec/conform/uz-v-001.md": "# A test\n",
+	})
+	repo, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	head := strings.TrimSpace(testGit(t, dir, "rev-parse", "HEAD"))
+
+	t.Run("every directory the caller named comes back, with the revision's files in it", func(t *testing.T) {
+		// The working tree gains a document the revision does not hold: a
+		// checkout is what the revision says, not what the disk says.
+		testWrite(t, dir, map[string]string{"spec/clauses/UZ-V-002.md": "# A later clause\n"})
+
+		tree, err := repo.Checkout(head, map[string]string{
+			"clause":  filepath.Join(dir, "spec", "clauses"),
+			"conform": filepath.Join(dir, "spec", "conform"),
+			// A kind the revision predates: the directory is there and empty,
+			// so the corpus of that revision simply holds none of them.
+			"measure": filepath.Join(dir, "spec", "measures"),
+		})
+		if err != nil {
+			t.Fatalf("Checkout: %v", err)
+		}
+		defer func() {
+			if err := tree.Close(); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+		}()
+
+		if got := slices.Sorted(maps.Keys(tree.Dirs())); !slices.Equal(got, []string{"clause", "conform", "measure"}) {
+			t.Fatalf("Dirs = %v, want one entry per directory asked for", got)
+		}
+		for name, want := range map[string][]string{
+			"clause":  {"UZ-V-001.md"},
+			"conform": {"uz-v-001.md"},
+			"measure": nil,
+		} {
+			entries, err := os.ReadDir(tree.Dirs()[name])
+			if err != nil {
+				t.Fatalf("read %s: %v", name, err)
+			}
+			got := make([]string, 0, len(entries))
+			for _, entry := range entries {
+				got = append(got, entry.Name())
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("%s holds %v, want %v", name, got, want)
+			}
+		}
+		// The layout below the root is the repository's own, so a report about
+		// the revision names paths a reader can find in it.
+		if rel, err := filepath.Rel(tree.Root(), tree.Dirs()["clause"]); err != nil || filepath.ToSlash(rel) != "spec/clauses" {
+			t.Errorf("clause dir = %q under %q, want the repository's own layout", tree.Dirs()["clause"], tree.Root())
+		}
+	})
+
+	t.Run("closing removes the tree", func(t *testing.T) {
+		tree, err := repo.Checkout(head, map[string]string{"": filepath.Join(dir, "spec", "clauses")})
+		if err != nil {
+			t.Fatalf("Checkout: %v", err)
+		}
+		root := tree.Root()
+
+		if err := tree.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		if _, err := os.Stat(root); !os.IsNotExist(err) {
+			t.Errorf("stat %s = %v, want the tree removed", root, err)
+		}
+	})
+
+	t.Run("a revision git cannot resolve is an error", func(t *testing.T) {
+		if _, err := repo.Checkout("no-such-revision", map[string]string{"": filepath.Join(dir, "spec", "clauses")}); err == nil {
+			t.Fatal("Checkout succeeded on a revision that does not exist, want an error")
+		}
+	})
+}

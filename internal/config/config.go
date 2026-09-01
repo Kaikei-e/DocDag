@@ -112,7 +112,59 @@ type KindSpec struct {
 	// the top-level declarations: a kind naming a field describes that key for
 	// its own documents, not for everybody's.
 	Fields map[string]FieldSpec `yaml:"fields,omitempty"`
+	// Period declares where this kind's documents write the days they are in
+	// force between. A kind that declares none has documents that are always in
+	// force, which is every kind there was before periods existed.
+	Period *PeriodSpec `yaml:"period,omitempty"`
 }
+
+// PeriodSpec names the two frontmatter keys a document's period of force is
+// written under: From the key holding the day it begins and Until the key
+// holding the day it ends. They are key names rather than days — the days are
+// facts about the document, so they live in the document — and the interval
+// they describe is the closed-open [from, until) at day granularity.
+//
+// A kind that names no From reads the date field, and a document that does not
+// write the named key has no beginning to compare a day against: it has always
+// begun. A document that writes no Until either derives one from the successors
+// that replaced it or has none at all, and an open period never ends.
+type PeriodSpec struct {
+	From  string `yaml:"from,omitempty"`
+	Until string `yaml:"until,omitempty"`
+}
+
+// FromField names the frontmatter key a period begins at, which is the date
+// field wherever a kind names none.
+func (p PeriodSpec) FromField() string {
+	if p.From == "" {
+		return KeyDate
+	}
+	return p.From
+}
+
+// Fields returns the frontmatter keys a period declaration names, sorted, so a
+// closed kind admits them and a report can count them.
+func (p PeriodSpec) Fields() []string {
+	keys := make([]string, 0, 2)
+	for _, key := range []string{p.From, p.Until} {
+		if key != "" && !slices.Contains(keys, key) {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+// AttrInForce is the one attribute the engine computes rather than reads: a
+// document is in force on the as-of day when its period has begun and has not
+// ended. It answers exactly as a projection does — the string "true" or "false"
+// — so a rule, a projection or a target condition reads it as
+// attr: {in_force: {eq: "true"}}, and the date comparison behind it stays in
+// the engine rather than entering the vocabulary.
+//
+// A document whose kind declares no period is always in force, which is what
+// keeps a configuration that declares none answering exactly as it did.
+const AttrInForce = "in_force"
 
 // FieldSpec declares one frontmatter field: the vocabulary its value comes
 // from and whether a document has to write it, plus its lifecycle — whether the
@@ -665,13 +717,18 @@ type Config struct {
 	// write: which of them are retired, where their values move and when they
 	// stop being tolerated. A key nobody declares is not unknown, only
 	// undeclared, so a corpus pays for this only where it migrates something.
-	Fields       map[string]FieldSpec `yaml:"fields,omitempty"`
-	StatusField  string               `yaml:"status_field,omitempty"`
-	StatusValues []string             `yaml:"status_values,omitempty"`
-	Edges        []EdgeSpec           `yaml:"edges,omitempty"`
-	DerivedEdges []DerivedEdgeSpec    `yaml:"derived_edges,omitempty"`
-	Rules        []Rule               `yaml:"rules,omitempty"`
-	Projections  []ProjectionSpec     `yaml:"projections,omitempty"`
+	Fields map[string]FieldSpec `yaml:"fields,omitempty"`
+	// Period declares where the documents of a corpus that names no kinds write
+	// the days they are in force between, and the default for the kinds of one
+	// that does — a kind's own declaration wins, the way its status vocabulary
+	// and its field declarations do.
+	Period       *PeriodSpec       `yaml:"period,omitempty"`
+	StatusField  string            `yaml:"status_field,omitempty"`
+	StatusValues []string          `yaml:"status_values,omitempty"`
+	Edges        []EdgeSpec        `yaml:"edges,omitempty"`
+	DerivedEdges []DerivedEdgeSpec `yaml:"derived_edges,omitempty"`
+	Rules        []Rule            `yaml:"rules,omitempty"`
+	Projections  []ProjectionSpec  `yaml:"projections,omitempty"`
 	// PathConstraints declares the invariants over two composed edges that an
 	// edge's own target condition cannot state. Neither preset declares any, so
 	// a corpus pays for them only where it writes one down.
@@ -756,6 +813,11 @@ var structuralSeverities = map[string]model.Severity{
 	// the check speaks at error whatever is written here: the day is the
 	// corpus's own deadline, and structural: raises the form before it.
 	model.RuleDeprecatedField: model.SeverityWarn,
+	// The three a period: declaration turns on. A corpus whose kinds declare
+	// none never sees them: there is no day to read and nothing to end.
+	model.RulePeriodInvalid:    model.SeverityError,
+	model.RulePeriodConflict:   model.SeverityError,
+	model.RuleExpiredDeviation: model.SeverityWarn,
 }
 
 // Severity reports the severity a structural check speaks at, after whatever
@@ -783,6 +845,72 @@ func (c Config) Kind(name string) (KindSpec, bool) {
 // from the kinds — which one resolves a reference, which directory is read
 // first — has to be the same on every run.
 func (c Config) KindNames() []string { return slices.Sorted(maps.Keys(c.Kinds)) }
+
+// KindPeriod returns the period declaration a kind's documents answer to — its
+// own where it declares one, the top-level one otherwise — and whether there is
+// one at all. A kind without a period has documents that are in force whatever
+// day is asked about.
+func (c Config) KindPeriod(kind string) (PeriodSpec, bool) {
+	if spec, ok := c.Kinds[kind]; ok && spec.Period != nil {
+		return *spec.Period, true
+	}
+	if c.Period != nil {
+		return *c.Period, true
+	}
+	return PeriodSpec{}, false
+}
+
+// Periods reports whether anything declares a period, which is what makes an
+// answer about this corpus depend on the day it is asked on. A configuration
+// that declares none answers the same on every day, and says so by leaving the
+// as-of date out of the reports a person reads.
+func (c Config) Periods() bool {
+	if c.Period != nil {
+		return true
+	}
+	for _, spec := range c.Kinds {
+		if spec.Period != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// DocumentDirs names the directories a configuration reads documents from,
+// keyed by kind — the empty key being the one directory a single-kind corpus
+// has. It is what a revision's tree and a fixture's tree are laid out against,
+// so the three callers that read a corpus from somewhere else agree on what
+// "somewhere else" has to hold.
+func (c Config) DocumentDirs() map[string]string {
+	if !c.Multikind() {
+		return map[string]string{"": c.Dir}
+	}
+	dirs := make(map[string]string, len(c.Kinds))
+	for name, spec := range c.Kinds {
+		dirs[name] = spec.Dir
+	}
+	return dirs
+}
+
+// Reroot returns the configuration reading its documents from the given
+// directories instead of its own. It is how one configuration is evaluated
+// against a second corpus — a revision's, or a fixture's — without any of the
+// checks knowing there is more than one.
+func (c Config) Reroot(dirs map[string]string) Config {
+	if !c.Multikind() {
+		c.Dir = dirs[""]
+		return c
+	}
+	kinds := make(map[string]KindSpec, len(c.Kinds))
+	for name, spec := range c.Kinds {
+		if dir, ok := dirs[name]; ok {
+			spec.Dir = dir
+		}
+		kinds[name] = spec
+	}
+	c.Kinds = kinds
+	return c
+}
 
 // KindStatusValues returns the status vocabulary a kind answers to: its own
 // when it declares one, the top-level vocabulary otherwise. A kind that says
@@ -875,6 +1003,13 @@ func (c Config) KnownFrontmatterKeys(kind string) []string {
 	// it as unknown would say the key is a mistake rather than a migration.
 	for name := range c.FieldSpecs(kind) {
 		keys[name] = true
+	}
+	// A period names the keys its documents write their days under, so those
+	// keys are declared by the same act that reads them.
+	if period, ok := c.KindPeriod(kind); ok {
+		for _, name := range period.Fields() {
+			keys[name] = true
+		}
 	}
 	return slices.Sorted(maps.Keys(keys))
 }
@@ -1027,7 +1162,7 @@ func (c Config) validateReferences() error {
 // first, so the directories have to be distinct.
 func (c Config) validateKinds() error {
 	if !c.Multikind() {
-		return nil
+		return c.validatePeriod("configuration", c.Period)
 	}
 	// A corpus whose kinds declare their own directories has nothing for a
 	// top-level dir to describe, and one written anyway — in the file or as
@@ -1035,6 +1170,9 @@ func (c Config) validateKinds() error {
 	if c.Dir != "" {
 		return fmt.Errorf("dir %q describes nothing beside kinds, which declare their own directories: %w",
 			c.Dir, model.ErrInvalidConfig)
+	}
+	if err := c.validatePeriod("configuration", c.Period); err != nil {
+		return err
 	}
 	dirs := make(map[string]string, len(c.Kinds))
 	for _, name := range c.KindNames() {
@@ -1050,11 +1188,41 @@ func (c Config) validateKinds() error {
 			return fmt.Errorf("kind %q: dir %q already holds kind %q: %w", name, spec.Dir, owner, model.ErrInvalidConfig)
 		}
 		dirs[dir] = name
+		if err := c.validatePeriod(fmt.Sprintf("kind %q", name), spec.Period); err != nil {
+			return err
+		}
 		if spec.ID == "" {
 			continue
 		}
 		if _, err := IDPattern(spec.ID); err != nil {
 			return fmt.Errorf("kind %q: id %q: %v: %w", name, spec.ID, err, model.ErrInvalidConfig)
+		}
+	}
+	return nil
+}
+
+// validatePeriod holds a period declaration to what the engine can read: a key
+// for at least one end of the interval, two different keys where it names both,
+// and neither of them a key that already carries a relation. A period written
+// empty says nothing the corpus did not already say, and one whose two ends are
+// one key describes an interval of no days — both are typos rather than
+// opinions, and neither would ever show its effect.
+func (c Config) validatePeriod(subject string, period *PeriodSpec) error {
+	if period == nil {
+		return nil
+	}
+	switch {
+	case period.From == "" && period.Until == "":
+		return fmt.Errorf("%s: period names no frontmatter key, write from: or until:: %w", subject, model.ErrInvalidConfig)
+	case period.From != "" && period.From == period.Until:
+		return fmt.Errorf("%s: period from and until are both %q, which is an interval of no days: %w",
+			subject, period.From, model.ErrInvalidConfig)
+	}
+	owners := c.edgeKeyOwners()
+	for _, field := range period.Fields() {
+		if owner, taken := owners[field]; taken {
+			return fmt.Errorf("%s: period names %q, which is the frontmatter key of edge %q: %w",
+				subject, field, owner, model.ErrInvalidConfig)
 		}
 	}
 	return nil
@@ -1360,6 +1528,13 @@ func (c Config) validateProjections() error {
 			return fmt.Errorf("projection without a name: %w", model.ErrInvalidConfig)
 		case declared[spec.Name]:
 			return fmt.Errorf("projection %q is declared twice: %w", spec.Name, model.ErrInvalidConfig)
+		case spec.Name == AttrInForce:
+			// A projection shadows the attribute spelled the same way, so one of
+			// this name would mask the very value the engine computes from the
+			// kinds' period: declarations — and every condition reading
+			// in_force would silently be reading the projection instead.
+			return fmt.Errorf("projection %q is reserved: the engine computes it from the kinds' period: declarations: %w",
+				spec.Name, model.ErrInvalidConfig)
 		}
 		declared[spec.Name] = true
 		subject := fmt.Sprintf("projection %q", spec.Name)

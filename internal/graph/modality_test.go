@@ -89,7 +89,7 @@ func TestModalityConflictTable(t *testing.T) {
 			t.Run(modalityA+" against "+modalityB, func(t *testing.T) {
 				g, cfg := testPair(modalityA, modalityB, nil, nil)
 
-				got := CheckModalityConflicts(g, cfg)
+				got := CheckModalityConflicts(g, cfg, testAsOf)
 
 				if cell == '-' {
 					if len(got) != 0 {
@@ -120,7 +120,7 @@ func TestModalityConflictsAreAboutOneSubject(t *testing.T) {
 			testClause("UZ-V-002", config.ModalitySHOULDNOT, []string{testOtherTopic}, nil),
 		}, cfg)
 
-		if got := CheckModalityConflicts(g, cfg); len(got) != 0 {
+		if got := CheckModalityConflicts(g, cfg, testAsOf); len(got) != 0 {
 			t.Fatalf("findings = %+v, want none: a conflict is about one subject", got)
 		}
 	})
@@ -134,7 +134,7 @@ func TestModalityConflictsAreAboutOneSubject(t *testing.T) {
 			testClause("UZ-V-002", config.ModalitySHOULDNOT, []string{testOtherTopic, testTopic}, nil),
 		}, cfg)
 
-		f := testAssertSingleFinding(t, CheckModalityConflicts(g, cfg),
+		f := testAssertSingleFinding(t, CheckModalityConflicts(g, cfg, testAsOf),
 			model.RuleModalityConflict, model.SeverityError, "UZ-V-001")
 		if !strings.HasSuffix(f.Detail, "about "+testTopic+", "+testOtherTopic) {
 			t.Errorf("detail = %q, want both subjects named once", f.Detail)
@@ -159,7 +159,7 @@ func TestModalityConflictsAreAboutOneSubject(t *testing.T) {
 			}),
 		}, cfg)
 
-		if got := CheckModalityConflicts(g, cfg); len(got) != 0 {
+		if got := CheckModalityConflicts(g, cfg, testAsOf); len(got) != 0 {
 			t.Fatalf("findings = %+v, want none: a superseded clause is not in force", got)
 		}
 	})
@@ -195,7 +195,7 @@ func TestModalityConflictSuppression(t *testing.T) {
 	t.Run("an exception from the specific clause suppresses a weak conflict", func(t *testing.T) {
 		g, cfg := testPair(config.ModalityMAY, config.ModalitySHOULDNOT, except("UZ-V-002"), nil)
 
-		f := testAssertSingleFinding(t, CheckModalityConflicts(g, cfg),
+		f := testAssertSingleFinding(t, CheckModalityConflicts(g, cfg, testAsOf),
 			model.RuleModalityConflict, model.SeverityError, "UZ-V-001")
 		if !f.Suppressed {
 			t.Fatalf("finding = %+v, want it suppressed: the corpus records the exception", f)
@@ -209,7 +209,7 @@ func TestModalityConflictSuppression(t *testing.T) {
 	t.Run("the direction of the exception does not matter to the pair", func(t *testing.T) {
 		g, cfg := testPair(config.ModalityMAY, config.ModalitySHOULDNOT, nil, except("UZ-V-001"))
 
-		f := testAssertSingleFinding(t, CheckModalityConflicts(g, cfg),
+		f := testAssertSingleFinding(t, CheckModalityConflicts(g, cfg, testAsOf),
 			model.RuleModalityConflict, model.SeverityError, "UZ-V-001")
 		if !f.Suppressed || !strings.Contains(f.Detail, "excepts UZ-V-002 -> UZ-V-001") {
 			t.Errorf("finding = %+v, want it suppressed by the exception the other clause records", f)
@@ -219,7 +219,7 @@ func TestModalityConflictSuppression(t *testing.T) {
 	t.Run("nothing suppresses a strong conflict", func(t *testing.T) {
 		g, cfg := testPair(config.ModalityMUST, config.ModalityMUSTNOT, except("UZ-V-002"), nil)
 
-		f := testAssertSingleFinding(t, CheckModalityConflicts(g, cfg),
+		f := testAssertSingleFinding(t, CheckModalityConflicts(g, cfg, testAsOf),
 			model.RuleModalityConflict, model.SeverityError, "UZ-V-001")
 		if f.Suppressed {
 			t.Fatalf("finding = %+v, want it standing: a strict rule cannot be defeated", f)
@@ -232,7 +232,7 @@ func TestModalityConflictSuppression(t *testing.T) {
 	t.Run("the weak fix names the exception to record and where to record it", func(t *testing.T) {
 		g, cfg := testPair(config.ModalityMAY, config.ModalitySHOULDNOT, nil, nil)
 
-		f := testAssertSingleFinding(t, CheckModalityConflicts(g, cfg),
+		f := testAssertSingleFinding(t, CheckModalityConflicts(g, cfg, testAsOf),
 			model.RuleModalityConflict, model.SeverityError, "UZ-V-001")
 		want := "declare excepts: UZ-V-002 in UZ-V-001 with scope:, or revise one modality"
 		if f.Fix != want {
@@ -241,7 +241,7 @@ func TestModalityConflictSuppression(t *testing.T) {
 		// Suggest is a pass over a finished report, and the remedy it would
 		// write for a pair — which document is the other one — is not
 		// recoverable from the prose, so the check's own fix stands.
-		if got := Suggest(CheckModalityConflicts(g, cfg), g, cfg); got[0].Fix != want {
+		if got := Suggest(CheckModalityConflicts(g, cfg, testAsOf), g, cfg, testAsOf); got[0].Fix != want {
 			t.Errorf("fix after Suggest = %q, want %q", got[0].Fix, want)
 		}
 	})
@@ -306,7 +306,7 @@ func TestCheckExceptsStrict(t *testing.T) {
 		if got := CheckExceptsStrict(g, cfg); len(got) != 0 {
 			t.Fatalf("findings = %+v, want none", got)
 		}
-		if got := CheckModalityConflicts(g, cfg); len(got) != 0 {
+		if got := CheckModalityConflicts(g, cfg, testAsOf); len(got) != 0 {
 			t.Fatalf("findings = %+v, want none: the adr preset declares no subjects to disagree about", got)
 		}
 	})
@@ -320,7 +320,7 @@ func TestSpecPresetInteropRules(t *testing.T) {
 			testClause("UZ-V-001", config.ModalityMAY, []string{testTopic}, nil),
 		}, cfg)
 
-		f := testAssertSingleFinding(t, EvalRules(g, cfg), model.RuleMayWithoutInterop, model.SeverityWarn, "UZ-V-001")
+		f := testAssertSingleFinding(t, EvalRules(g, cfg, testAsOf), model.RuleMayWithoutInterop, model.SeverityWarn, "UZ-V-001")
 		if !strings.Contains(f.Detail, "MUST clause") {
 			t.Errorf("detail = %q, want it to name what the edge has to point at", f.Detail)
 		}
@@ -336,7 +336,7 @@ func TestSpecPresetInteropRules(t *testing.T) {
 			testClause("UZ-V-002", config.ModalitySHOULD, []string{testTopic}, nil),
 		}, cfg)
 
-		testAssertSingleFinding(t, EvalRules(g, cfg), model.RuleInteropNotMust, model.SeverityError, "UZ-V-001")
+		testAssertSingleFinding(t, EvalRules(g, cfg, testAsOf), model.RuleInteropNotMust, model.SeverityError, "UZ-V-001")
 	})
 
 	t.Run("a MAY leaning on a MUST reports neither", func(t *testing.T) {
@@ -351,7 +351,7 @@ func TestSpecPresetInteropRules(t *testing.T) {
 		}, cfg)
 
 		for _, rule := range []string{model.RuleMayWithoutInterop, model.RuleInteropNotMust} {
-			if got := testFindingsFor(EvalRules(g, cfg), rule); len(got) != 0 {
+			if got := testFindingsFor(EvalRules(g, cfg, testAsOf), rule); len(got) != 0 {
 				t.Errorf("%s = %+v, want none", rule, got)
 			}
 		}
@@ -368,7 +368,7 @@ func TestSuppressedConflictsCarryNoRemedy(t *testing.T) {
 		},
 	}, nil)
 
-	got := Suggest(CheckModalityConflicts(g, cfg), g, cfg)
+	got := Suggest(CheckModalityConflicts(g, cfg, testAsOf), g, cfg, testAsOf)
 
 	if len(got) != 1 || got[0].Fix != "" {
 		t.Fatalf("findings = %+v, want the one suppressed conflict, without a fix", got)

@@ -3,6 +3,8 @@ package graph
 import (
 	"fmt"
 	"slices"
+	"strings"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -16,13 +18,13 @@ import (
 // The check is local: it asks one question about one document, one hop away.
 // Walking the lineage to a replacement is what the fix suggestion does, and
 // keeping the two apart is what keeps transitive reach out of the vocabulary.
-func CheckTargets(g *model.Graph, cfg config.Config) []model.Finding {
+func CheckTargets(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
 	findings := []model.Finding{}
 	specs := targetedEdges(cfg)
 	if len(specs) == 0 {
 		return findings
 	}
-	ctx := newEvalContext(g, cfg)
+	ctx := newEvalContext(g, cfg, asOf)
 	for _, spec := range specs {
 		for _, e := range g.EdgesOfType(model.EdgeType(spec.Name)) {
 			f, violated := staleTarget(g, cfg, ctx, spec, e)
@@ -69,7 +71,7 @@ func staleTarget(g *model.Graph, cfg config.Config, ctx evalContext, spec config
 	if !ownerKnown {
 		return model.Finding{}, false
 	}
-	breakers := leafBreakers(ctx.ix, spec, e.To)
+	breakers := leafBreakers(g, cfg, ctx, spec, e.To)
 	if len(breakers) == 0 && ctx.match(spec.Target.Condition, e.To) {
 		return model.Finding{}, false
 	}
@@ -114,13 +116,40 @@ func declaringDoc(cfg config.Config, spec config.EdgeSpec, e model.Edge) model.I
 // the lineage a `leaf_of` target asks for, sorted. An edge into a document the
 // corpus does not hold counts among them, exactly as it counts for the
 // `not_inbound` this word is sugar for: the sugar has to mean what it spells.
-func leafBreakers(ix edgeIndex, spec config.EdgeSpec, target model.ID) []model.ID {
+//
+// Where the target's kind declares a period, "the current leaf" is read at the
+// day the run is about: a successor that has not begun, or one nobody has
+// accepted yet, leaves its predecessor the current leaf, because that is the
+// document a reader is still bound by. A kind without a period keeps the plain
+// reading — any successor at all breaks the leaf — which is what every corpus
+// answered before periods existed.
+func leafBreakers(g *model.Graph, cfg config.Config, ctx evalContext, spec config.EdgeSpec, target model.ID) []model.ID {
 	if spec.Target.LeafOf == "" {
 		return nil
 	}
-	breakers := slices.Clone(ix.neighbors(target, model.EdgeType(spec.Target.LeafOf), true))
+	breakers := slices.Clone(ctx.ix.neighbors(target, model.EdgeType(spec.Target.LeafOf), true))
+	if n, known := g.Node(target); known && ctx.periods.Declared(n.ID) {
+		breakers = slices.DeleteFunc(breakers, func(id model.ID) bool {
+			return !replaces(g, cfg, ctx.periods, id)
+		})
+	}
 	slices.Sort(breakers)
 	return slices.Compact(breakers)
+}
+
+// replaces reports whether a successor actually stands in for its predecessor
+// on the day being asked about: the corpus holds it, somebody accepted it, and
+// its own period has begun and not ended.
+func replaces(g *model.Graph, cfg config.Config, periods Periods, id model.ID) bool {
+	n, known := g.Node(id)
+	if !known {
+		// A successor the corpus does not hold is a dangling reference, reported
+		// on its own. It says nothing about what replaced anything, but it is
+		// still a declared successor, so it breaks the leaf as it always did.
+		return true
+	}
+	status, ok := canonicalKindStatus(cfg, n.Kind, n.Status)
+	return ok && strings.EqualFold(status, config.StatusAccepted) && periods.InForce(id)
 }
 
 // staleTargetDetail names the edge, the document it points at and why that
@@ -144,8 +173,8 @@ func staleTargetDetail(spec config.EdgeSpec, target model.ID, breakers []model.I
 // been replaced, and the replacement is a walk away. Any other condition is a
 // statement about the target document, and which document satisfies it instead
 // is not a question the graph answers.
-func leafSuggestion(g *model.Graph, cfg config.Config, f model.Finding) string {
-	ix := newEdgeIndex(g)
+func leafSuggestion(g *model.Graph, cfg config.Config, f model.Finding, asOf time.Time) string {
+	ctx := newEvalContext(g, cfg, asOf)
 	for _, spec := range targetedEdges(cfg) {
 		if spec.Target.LeafOf == "" {
 			continue
@@ -154,21 +183,23 @@ func leafSuggestion(g *model.Graph, cfg config.Config, f model.Finding) string {
 			// The finding does not carry the edge it was filed for, so the edge
 			// is recognized by the report it produced: recomputing the detail is
 			// exact, where reading identifiers back out of prose is not.
-			if declaringDoc(cfg, spec, e) != f.ID || staleTargetDetail(spec, e.To, leafBreakers(ix, spec, e.To)) != f.Detail {
+			if declaringDoc(cfg, spec, e) != f.ID || staleTargetDetail(spec, e.To, leafBreakers(g, cfg, ctx, spec, e.To)) != f.Detail {
 				continue
 			}
-			return leafFix(g, e.To, model.EdgeType(spec.Target.LeafOf))
+			return leafFix(g, cfg, e.To, model.EdgeType(spec.Target.LeafOf), asOf)
 		}
 	}
 	return ""
 }
 
-// leafFix names the documents the lineage of a replaced target ends at. A
-// lineage that loops has no leaf to name — Resolve reports the cycle, which is
-// a finding of its own — so the stale target stands and only the suggestion
-// goes.
-func leafFix(g *model.Graph, target model.ID, t model.EdgeType) string {
-	leaves, err := Resolve(g, target, t)
+// leafFix names the documents the lineage of a replaced target ends at, walked
+// the way the check read it: a lineage whose kind declares a period stops at
+// the successor that is in force, because that is the document the reader is
+// being sent to. A lineage that loops has no leaf to name — Resolve reports the
+// cycle, which is a finding of its own — so the stale target stands and only
+// the suggestion goes.
+func leafFix(g *model.Graph, cfg config.Config, target model.ID, t model.EdgeType, asOf time.Time) string {
+	leaves, err := ResolveAt(g, cfg, target, t, asOf)
 	if err != nil || len(leaves) == 0 {
 		return ""
 	}

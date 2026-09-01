@@ -43,7 +43,7 @@ func TestLintText(t *testing.T) {
 	findings := testLintFindings()
 	var out bytes.Buffer
 
-	if err := LintText(&out, findings, lint.Summarize(findings)); err != nil {
+	if err := LintText(&out, findings, lint.Summarize(findings), ""); err != nil {
 		t.Fatalf("LintText: %v", err)
 	}
 
@@ -64,7 +64,7 @@ func TestLintText(t *testing.T) {
 func TestLintTextOnACleanConfiguration(t *testing.T) {
 	var out bytes.Buffer
 
-	if err := LintText(&out, nil, lint.Summary{}); err != nil {
+	if err := LintText(&out, nil, lint.Summary{}, ""); err != nil {
 		t.Fatalf("LintText: %v", err)
 	}
 
@@ -77,7 +77,7 @@ func TestLintJSON(t *testing.T) {
 	findings := testLintFindings()
 	var out bytes.Buffer
 
-	if err := LintJSON(&out, findings, lint.Summarize(findings), 2); err != nil {
+	if err := LintJSON(&out, findings, lint.Summarize(findings), Header{PresetVersion: 2}); err != nil {
 		t.Fatalf("LintJSON: %v", err)
 	}
 
@@ -102,7 +102,7 @@ func TestLintJSON(t *testing.T) {
 func TestLintJSONWritesAnEmptyList(t *testing.T) {
 	var out bytes.Buffer
 
-	if err := LintJSON(&out, nil, lint.Summary{}, 0); err != nil {
+	if err := LintJSON(&out, nil, lint.Summary{}, Header{PresetVersion: 0}); err != nil {
 		t.Fatalf("LintJSON: %v", err)
 	}
 
@@ -120,7 +120,7 @@ func TestLintGitHubLevels(t *testing.T) {
 	findings := testLintFindings()
 	var out bytes.Buffer
 
-	if err := LintGitHub(&out, findings, lint.Summarize(findings)); err != nil {
+	if err := LintGitHub(&out, findings, lint.Summarize(findings), ""); err != nil {
 		t.Fatalf("LintGitHub: %v", err)
 	}
 

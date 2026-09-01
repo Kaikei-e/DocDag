@@ -2,6 +2,7 @@ package brief
 
 import (
 	"slices"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
@@ -115,9 +116,9 @@ func sameTopic(g *model.Graph, cfg config.Config, binding map[model.ID]bool, id 
 // exception defeats, one line each. They are the reading a reader needs to make
 // sense of a permission standing beside a prohibition, and they appear nowhere
 // else: validate leaves them out unless asked.
-func suppressed(g *model.Graph, cfg config.Config, id model.ID) []string {
+func suppressed(g *model.Graph, cfg config.Config, id model.ID, asOf time.Time) []string {
 	lines := []string{}
-	for _, c := range graph.ModalityConflicts(g, cfg) {
+	for _, c := range graph.ModalityConflicts(g, cfg, asOf) {
 		if !c.Suppressed || (c.A != id && c.B != id) {
 			continue
 		}

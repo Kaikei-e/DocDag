@@ -510,6 +510,57 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "a kind that declares where its documents write their period",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Kinds["clause"] = KindSpec{
+					Dir: "spec/clauses", ID: `^UZ-[A-Z]-\d{3}$`,
+					Period: &PeriodSpec{From: "in_force_from", Until: "in_force_until"},
+				}
+			},
+		},
+		{
+			name: "a period that names only an end, and reads date for the start",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Kinds["pm"] = KindSpec{Dir: "spec/pm", Period: &PeriodSpec{Until: "retired_on"}}
+			},
+		},
+		{
+			name: "a period that names no key at all",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Kinds["pm"] = KindSpec{Dir: "spec/pm", Period: &PeriodSpec{}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a period whose two ends are one key",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Kinds["pm"] = KindSpec{Dir: "spec/pm", Period: &PeriodSpec{From: "day", Until: "day"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a period that names an edge's frontmatter key",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Kinds["pm"] = KindSpec{Dir: "spec/pm", Period: &PeriodSpec{Until: EdgeSupersedes.String()}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a projection named after the attribute the engine computes",
+			mutate: func(c *Config) {
+				c.Projections = append(c.Projections, ProjectionSpec{
+					Name: AttrInForce,
+					When: Condition{Attr: map[string]AttrCondition{"status": testEq(StatusAccepted)}},
+				})
+			},
+			wantErr: true,
+		},
+		{
 			name: "an edge constrained to declared kinds",
 			mutate: func(c *Config) {
 				c.Kinds = testKinds()
@@ -1490,6 +1541,46 @@ func TestConfigKnownFrontmatterKeys(t *testing.T) {
 			if !slices.Contains(got, want) {
 				t.Fatalf("KnownFrontmatterKeys = %v, want it to carry the declared field %q", got, want)
 			}
+		}
+	})
+
+	t.Run("the keys a period reads are known to the kind that declares it", func(t *testing.T) {
+		// A closed kind has to admit the days its own period is read from:
+		// declaring the period is what says the key belongs there, so a corpus
+		// does not have to write the same two names twice.
+		cfg := ADRPreset()
+		cfg.Kinds = map[string]KindSpec{
+			"clause": {Dir: "spec/clauses", Closed: true,
+				Period: &PeriodSpec{From: "in_force_from", Until: "in_force_until"}},
+			"conform": {Dir: "spec/conform"},
+		}
+
+		clause, conform := cfg.KnownFrontmatterKeys("clause"), cfg.KnownFrontmatterKeys("conform")
+
+		for _, want := range []string{"in_force_from", "in_force_until"} {
+			if !slices.Contains(clause, want) {
+				t.Fatalf("KnownFrontmatterKeys(clause) = %v, want the period key %q", clause, want)
+			}
+			if slices.Contains(conform, want) {
+				t.Fatalf("KnownFrontmatterKeys(conform) = %v, want another kind's period key left out", conform)
+			}
+		}
+	})
+
+	t.Run("a period that names no start reads the date field, which is known anyway", func(t *testing.T) {
+		cfg := ADRPreset()
+		cfg.Kinds = map[string]KindSpec{"premise": {Dir: "spec/premises", Period: &PeriodSpec{Until: "retired_on"}}}
+
+		period, declared := cfg.KindPeriod("premise")
+
+		switch {
+		case !declared:
+			t.Fatal("Period(premise) reports none, want the one declared")
+		case period.FromField() != KeyDate:
+			t.Errorf("FromField = %q, want %q", period.FromField(), KeyDate)
+		}
+		if got := cfg.KnownFrontmatterKeys("premise"); !slices.Contains(got, "retired_on") {
+			t.Errorf("KnownFrontmatterKeys(premise) = %v, want the end it names", got)
 		}
 	})
 

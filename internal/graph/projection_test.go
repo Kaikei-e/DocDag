@@ -47,7 +47,7 @@ func TestEvalProjections(t *testing.T) {
 	cfg := config.ADRPreset()
 
 	t.Run("the preset's projection holds for the current documents", func(t *testing.T) {
-		got := EvalProjections(g, cfg)
+		got := EvalProjections(g, cfg, testAsOf)
 
 		testAssertIDs(t, "binding projection", got.Set(config.ProjectionAcceptedUnsuperseded), testIDs("0001", "0003", "0004"))
 		if !got.Declares(config.ProjectionAcceptedUnsuperseded) {
@@ -68,7 +68,7 @@ func TestEvalProjections(t *testing.T) {
 			}}),
 		}
 
-		got := EvalProjections(g, chained)
+		got := EvalProjections(g, chained, testAsOf)
 
 		testAssertIDs(t, "effective_must", got.Set("effective_must"), testIDs("0001"))
 	})
@@ -83,7 +83,7 @@ func TestEvalProjections(t *testing.T) {
 			testCurrent(),
 		}
 
-		got := EvalProjections(g, forward)
+		got := EvalProjections(g, forward, testAsOf)
 
 		testAssertIDs(t, "effective_must", got.Set("effective_must"), testIDs("0001"))
 	})
@@ -99,7 +99,7 @@ func TestEvalProjections(t *testing.T) {
 			testCurrent(),
 		}
 
-		got := EvalProjections(g, deep)
+		got := EvalProjections(g, deep, testAsOf)
 
 		testAssertIDs(t, "settled", got.Set("settled"), testIDs("0001"))
 	})
@@ -117,7 +117,7 @@ func TestEvalProjections(t *testing.T) {
 			},
 		}
 
-		got := EvalProjections(g, alternatives)
+		got := EvalProjections(g, alternatives, testAsOf)
 
 		testAssertIDs(t, "levelled", got.Set("levelled"), testIDs("0001", "0002", "0004"))
 	})
@@ -125,7 +125,7 @@ func TestEvalProjections(t *testing.T) {
 	t.Run("names come back in declaration order", func(t *testing.T) {
 		want := []string{config.ProjectionAcceptedUnsuperseded}
 
-		if got := EvalProjections(g, cfg).Names(); !slices.Equal(got, want) {
+		if got := EvalProjections(g, cfg, testAsOf).Names(); !slices.Equal(got, want) {
 			t.Fatalf("Names = %v, want %v", got, want)
 		}
 	})
@@ -134,7 +134,7 @@ func TestEvalProjections(t *testing.T) {
 		bare := cfg
 		bare.Projections, bare.Binding = nil, ""
 
-		got := EvalProjections(g, bare)
+		got := EvalProjections(g, bare, testAsOf)
 
 		if len(got.Names()) != 0 || got.Declares(config.ProjectionAcceptedUnsuperseded) {
 			t.Fatalf("Names = %v, want none", got.Names())
@@ -158,7 +158,7 @@ func TestEvalProjectionsDoesNotLoopOnACycle(t *testing.T) {
 	cfg.Binding = "a"
 
 	var got Projections
-	testMustNotHang(t, time.Second, func() { got = EvalProjections(g, cfg) })
+	testMustNotHang(t, time.Second, func() { got = EvalProjections(g, cfg, testAsOf) })
 
 	for _, name := range []string{"a", "b"} {
 		if !got.Declares(name) {
@@ -186,7 +186,7 @@ func TestProjectionsAreVirtualAttributes(t *testing.T) {
 			config.ProjectionAcceptedUnsuperseded: testAttrEq(ProjectionTrue),
 		}}
 
-		if !MatchCondition(g, cfg, cond, "0001") {
+		if !MatchCondition(g, cfg, cond, "0001", testAsOf) {
 			t.Fatal("the written attribute won, want the projection to shadow it")
 		}
 	})
@@ -199,7 +199,7 @@ func TestProjectionsAreVirtualAttributes(t *testing.T) {
 			config.ProjectionAcceptedUnsuperseded: testAttrNot(ProjectionTrue),
 		}}
 
-		if !MatchCondition(g, cfg, holds, "0002") || !MatchCondition(g, cfg, negated, "0002") {
+		if !MatchCondition(g, cfg, holds, "0002", testAsOf) || !MatchCondition(g, cfg, negated, "0002", testAsOf) {
 			t.Fatal("a projection that does not hold did not read as false")
 		}
 	})
@@ -215,7 +215,7 @@ func TestProjectionsAreVirtualAttributes(t *testing.T) {
 			Message: "is not current",
 		}}
 
-		got := EvalRules(g, cfg)
+		got := EvalRules(g, cfg, testAsOf)
 
 		testAssertIDs(t, "not_current", testFindingIDs(got, "not_current"), testIDs("0002"))
 	})

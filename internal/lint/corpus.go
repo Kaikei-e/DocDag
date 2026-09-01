@@ -3,8 +3,8 @@ package lint
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
@@ -34,12 +34,12 @@ func Corpus(opts Options, firable map[string]bool) ([]model.Finding, error) {
 		if !ok {
 			continue
 		}
-		count := len(firedOn(g, cfg, rule))
+		count := len(firedOn(g, cfg, rule, opts.AsOf))
 		fired[rule.Name] = count
 		findings = append(findings, a.firingFindings(u, loc, count, a.scope(g, u), firable[rule.Name])...)
 	}
 
-	held := graph.EvalProjections(g, cfg)
+	held := graph.EvalProjections(g, cfg, opts.AsOf)
 	for _, spec := range cfg.Projections {
 		u, ok := named(units, SectionProjections, spec.Name)
 		if !ok {
@@ -136,9 +136,9 @@ func (a analyzer) unitKinds(u unit) (kinds []string, narrowed bool) {
 
 // firedOn returns the documents one rule reports, which is what "fired" means:
 // the rule is evaluated exactly as `validate` evaluates it.
-func firedOn(g *model.Graph, cfg config.Config, rule config.Rule) []model.ID {
+func firedOn(g *model.Graph, cfg config.Config, rule config.Rule, asOf time.Time) []model.ID {
 	ids := []model.ID{}
-	for _, f := range graph.EvalRule(g, cfg, rule) {
+	for _, f := range graph.EvalRule(g, cfg, rule, asOf) {
 		if !slices.Contains(ids, f.ID) {
 			ids = append(ids, f.ID)
 		}
@@ -238,7 +238,7 @@ func (a analyzer) sinceFindings(opts Options, fired map[string]int) ([]model.Fin
 	defer cleanup()
 	findings := []model.Finding{}
 	for _, rule := range opts.Config.Rules {
-		before := len(firedOn(base, opts.Config, rule))
+		before := len(firedOn(base, opts.Config, rule, opts.AsOf))
 		now := fired[rule.Name]
 		at := opts.Locator.Locate(SectionRules, rule.Name)
 		switch {
@@ -276,88 +276,24 @@ func documents(n int) string {
 // files are written into a temporary tree and read by the same parser the
 // working tree is read by, so the comparison is between two corpora rather than
 // between a corpus and a guess about one; the caller runs cleanup when it is
-// done with the graph.
+// done with the graph. It is the same tree `--at` reads, which is why the
+// checkout lives in the package that talks to git.
 func baseCorpus(opts Options) (*model.Graph, func(), error) {
 	if opts.Repo == nil {
 		return nil, nil, fmt.Errorf("--since needs a git repository: %w", model.ErrInvalidConfig)
 	}
-	root, err := os.MkdirTemp("", "docdag-lint-")
-	if err != nil {
-		return nil, nil, fmt.Errorf("create a working directory for %s: %w", opts.Since, err)
-	}
-	cleanup := func() { _ = os.RemoveAll(root) }
 	base := opts.Repo.MergeBase(opts.Since)
-	cfg := opts.Config
-	rerooted := map[string]string{}
-	for name, dir := range corpusDirs(cfg) {
-		rel, err := opts.Repo.Rel(dir)
-		if err != nil {
-			cleanup()
-			return nil, nil, err
-		}
-		// Files names the directory the way the caller holds it and relativizes
-		// it itself; rel is what the temporary tree is laid out under.
-		files, err := opts.Repo.Files(base, dir)
-		if err != nil {
-			cleanup()
-			return nil, nil, err
-		}
-		for _, path := range files {
-			content, err := opts.Repo.File(base, path)
-			if err != nil {
-				continue
-			}
-			target := filepath.Join(root, filepath.FromSlash(path))
-			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-				cleanup()
-				return nil, nil, fmt.Errorf("write the corpus at %s: %w", base, err)
-			}
-			if err := os.WriteFile(target, content, 0o644); err != nil {
-				cleanup()
-				return nil, nil, fmt.Errorf("write the corpus at %s: %w", base, err)
-			}
-		}
-		rerooted[name] = filepath.Join(root, filepath.FromSlash(rel))
+	tree, err := opts.Repo.Checkout(base, opts.Config.DocumentDirs())
+	if err != nil {
+		return nil, nil, err
 	}
-	g, err := corpusGraph(rootedConfig(cfg, rerooted))
+	cleanup := func() { _ = tree.Close() }
+	g, err := corpusGraph(opts.Config.Reroot(tree.Dirs()))
 	if err != nil {
 		cleanup()
 		return nil, nil, err
 	}
 	return g, cleanup, nil
-}
-
-// corpusDirs names the directories a configuration reads documents from, keyed
-// by kind — the empty key being the one directory a single-kind corpus has.
-func corpusDirs(cfg config.Config) map[string]string {
-	if !cfg.Multikind() {
-		return map[string]string{"": cfg.Dir}
-	}
-	dirs := make(map[string]string, len(cfg.Kinds))
-	for name, spec := range cfg.Kinds {
-		dirs[name] = spec.Dir
-	}
-	return dirs
-}
-
-// rootedConfig returns the configuration reading its documents from the given
-// directories instead of its own. It is how one configuration is evaluated
-// against a second corpus — a revision's, or a fixture's — without any of the
-// checks knowing there is more than one.
-func rootedConfig(cfg config.Config, dirs map[string]string) config.Config {
-	if !cfg.Multikind() {
-		cfg.Dir = dirs[""]
-		return cfg
-	}
-	kinds := make(map[string]config.KindSpec, len(cfg.Kinds))
-	for name, spec := range cfg.Kinds {
-		if dir, ok := dirs[name]; ok {
-			spec.Dir = dir
-		}
-		kinds[name] = spec
-	}
-	cfg.Kinds = kinds
-	return cfg
 }
 
 // corpusGraph reads the documents a configuration describes and builds the

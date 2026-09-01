@@ -11,6 +11,15 @@ share.
 `validate` and `lint` also answer in `github` and `rdjson`, `context` in `md`, and `export` replaces
 the format flag with its own `mermaid|dot|json`.
 
+Every read-only command takes the two time flags. `--as-of YYYY-MM-DD` (or `$DOCDAG_AS_OF`, which
+the flag beats) names the day the answer is about, and `--at <rev>` reads every managed document
+from a revision instead of from the working tree. They are independent, so writing both asks what
+the vault at that revision said was in force on that day. `export` takes `--at` alone — a drawing of
+the graph does not depend on the day — and `new` takes neither, because it writes. The defaults are
+the day HEAD was committed on for `validate` and `lint --corpus`, and the day the command runs for
+`query`, `resolve`, `context` and `stats`; [configuration.md](configuration.md#the-day-a-command-answers-for)
+says why the two differ.
+
 Without `--dir`, DocDag looks in `docs/adr`, `doc/adr`, `docs/decisions`, `docs/ADR`, `adr` — the
 first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 to 6 digits.
 
@@ -18,14 +27,14 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 
 | Command | What it prints | Notable failures |
 | --- | --- | --- |
-| `docdag validate [--touching <path>]... [--show-suppressed] [--immutable-since <rev>] [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` when nothing errored | exit 1 if any finding is an error, exit 3 if `--immutable-since` is given outside a git repository or without `git` |
-| `docdag lint [--corpus] [--fixtures <dir>] [--all] [--since <rev>] [--strict] [--format text\|json\|github\|rdjson]` | one line per lint finding, then the counts, or `OK: no lint findings` | exit 1 on any error (or on any warning with `--strict`), exit 2 on warnings alone, exit 3 if the configuration does not validate |
-| `docdag resolve <ref> [--fields <list>]` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it | exit 1 on an unknown reference or a supersedes cycle |
-| `docdag query <ref> [--ancestors\|--descendants] [--edge <type>] [--include-refs] [--fields <list>]` | the reachable set over typed edges, descendants by default; reference-layer hits are suffixed ` (reference)` | exit 1 unknown reference, exit 2 unknown edge type or conflicting flags |
-| `docdag query --binding [--fields <list>]` | every binding document, with its `modality` beside it where the configuration declares one | exit 2 if combined with `--ancestors`, `--descendants`, `--edge` or `--include-refs` |
-| `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all]` | the document, what it resolves to and its neighbourhood, each quoting one section | exit 1 unknown reference, exit 2 unknown edge type |
-| `docdag export [--format mermaid\|dot\|json] [--include-refs] [--connected] [--edge <type>]... [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 2 on an unknown edge type, exit 3 if the output file cannot be written |
-| `docdag stats [--fields]` | document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree, and — where the configuration declares them — the modality distribution, the clauses per topic and the suppressed-conflict count; with `--fields`, the frontmatter fields instead | exit 3 without `--fields` if the configuration declares no `supersedes` edge |
+| `docdag validate [--touching <path>]... [--show-suppressed] [--immutable-since <rev>] [--as-of <day>] [--at <rev>] [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` when nothing errored — with `, as of <day>` where a kind declares a `period:` | exit 1 if any finding is an error, exit 3 if `--immutable-since` or `--at` is given outside a git repository or without `git` |
+| `docdag lint [--corpus] [--fixtures <dir>] [--all] [--since <rev>] [--strict] [--as-of <day>] [--at <rev>] [--format text\|json\|github\|rdjson]` | one line per lint finding, then the counts, or `OK: no lint findings` | exit 1 on any error (or on any warning with `--strict`), exit 2 on warnings alone, exit 3 if the configuration does not validate |
+| `docdag resolve <ref> [--as-of <day>] [--at <rev>] [--fields <list>]` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it — a successor nobody has accepted, or one whose period has not begun, has replaced nothing | exit 1 on an unknown reference or a supersedes cycle |
+| `docdag query <ref> [--ancestors\|--descendants] [--edge <type>] [--include-refs] [--as-of <day>] [--at <rev>] [--fields <list>]` | the reachable set over typed edges, descendants by default; reference-layer hits are suffixed ` (reference)` | exit 1 unknown reference, exit 2 unknown edge type or conflicting flags |
+| `docdag query --binding [--as-of <day>] [--at <rev>] [--fields <list>]` | every document binding on the day asked about, with its `modality` beside it where the configuration declares one | exit 2 if combined with `--ancestors`, `--descendants`, `--edge` or `--include-refs` |
+| `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all] [--as-of <day>] [--at <rev>]` | the document, what it resolves to and its neighbourhood, each quoting one section | exit 1 unknown reference, exit 2 unknown edge type |
+| `docdag export [--format mermaid\|dot\|json] [--include-refs] [--connected] [--edge <type>]... [--at <rev>] [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 2 on an unknown edge type, exit 3 if the output file cannot be written |
+| `docdag stats [--fields] [--as-of <day>] [--at <rev>]` | document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree, and — where the configuration declares them — the modality distribution, the clauses per topic and the suppressed-conflict count; with `--fields`, the frontmatter fields instead | exit 3 without `--fields` if the configuration declares no `supersedes` edge |
 | `docdag new <title> [--kind <name>] [--id <ref>] [--supersedes <ref>]... [--depends-on <ref>]... [--dry-run]` | the path of the created document, or the plan under `--dry-run` | exit 1 on an unknown reference, a claimed identifier or a `--kind` the corpus cannot answer, exit 3 on a write error |
 | `docdag new --fixture <rule> [--fixtures <dir>]` | the files of the rule's generated `ruleid/` and `ok/` fixture, one path per line | exit 1 if no such rule is configured or it can never fire, exit 3 on a write error |
 
@@ -361,3 +370,21 @@ The three JSON outputs that are objects — `validate --format json`, `context -
 report at `schema_version: 1` and says so in a `kind` field of its own. The listings are arrays of records rather than objects (`query`, `query
 --fields`, `resolve`), so they carry no header; `preset_version` is read from `validate` beside
 them. The text, `md`, `github` and `rdjson` formats are unversioned: a header is a JSON affair.
+
+Those three and `stats --format json` also carry `as_of`, the day the run was about, and `at`, the
+revision the documents were read from where one was named. They are what makes a report
+reproducible: the same documents, read at the same revision, asked about the same day, answer the
+same way.
+
+```console
+$ docdag validate --format json --at v1.2.0 --as-of 2026-06-01 | head -5
+{
+  "schema_version": 2,
+  "preset_version": 2,
+  "as_of": "2026-06-01",
+  "at": "v1.2.0",
+```
+
+The text reports carry the day only where some kind declares a `period:` — on the `OK:` line, or on
+a closing `as of <day>` line where the corpus failed. A corpus that answers the same on every day
+has no day worth printing, so an `adr` corpus's text output is exactly what it was.

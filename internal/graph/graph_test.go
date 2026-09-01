@@ -865,10 +865,10 @@ func TestKindIsReadableByRulesAndProjections(t *testing.T) {
 	g := Build(docs, cfg)
 
 	t.Run("a projection reads the kind", func(t *testing.T) {
-		testAssertIDs(t, "is_clause", EvalProjections(g, cfg).Set("is_clause"), testIDs("UZ-V-001"))
+		testAssertIDs(t, "is_clause", EvalProjections(g, cfg, testAsOf).Set("is_clause"), testIDs("UZ-V-001"))
 	})
 
 	t.Run("a rule reads the kind", func(t *testing.T) {
-		testAssertSingleFinding(t, EvalRules(g, cfg), "orphan_test", model.SeverityWarn, "conform/check")
+		testAssertSingleFinding(t, EvalRules(g, cfg, testAsOf), "orphan_test", model.SeverityWarn, "conform/check")
 	})
 }

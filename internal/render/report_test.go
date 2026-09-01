@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
@@ -32,21 +31,34 @@ func testReport(t *testing.T, fixture string) ([]model.Finding, model.Summary) {
 	}
 	parse.Localize(docs, root)
 	g := graph.Build(docs, cfg)
-	findings := graph.Suggest(graph.Validate(g, cfg, time.Time{}), g, cfg)
+	findings := graph.Suggest(graph.Validate(g, cfg, testAsOf), g, cfg, testAsOf)
 	return findings, graph.Summarize(g, findings)
 }
 
 // testPresetFindingsJSON writes the report the way the CLI does under the ADR
 // preset, so the golden files pin the header a user actually sees.
 func testPresetFindingsJSON(w io.Writer, findings []model.Finding, summary model.Summary) error {
-	return FindingsJSON(w, findings, summary, config.ADRPreset().PresetVersion)
+	return FindingsJSON(w, findings, summary,
+		Header{PresetVersion: config.ADRPreset().PresetVersion, AsOf: testAsOfDay})
+}
+
+// testPresetFindingsText and testPresetFindingsGitHub write the two reports a
+// person reads. Neither carries an as-of line: the ADR preset declares no
+// period, so its answers do not depend on the day and saying one would be
+// noise.
+func testPresetFindingsText(w io.Writer, findings []model.Finding, summary model.Summary) error {
+	return FindingsText(w, findings, summary, "")
+}
+
+func testPresetFindingsGitHub(w io.Writer, findings []model.Finding, summary model.Summary) error {
+	return FindingsGitHub(w, findings, summary, "")
 }
 
 func TestReportGolden(t *testing.T) {
 	writers := map[string]func(io.Writer, []model.Finding, model.Summary) error{
-		"txt":    FindingsText,
+		"txt":    testPresetFindingsText,
 		"json":   testPresetFindingsJSON,
-		"github": FindingsGitHub,
+		"github": testPresetFindingsGitHub,
 		"rdjson": FindingsRDJSON,
 	}
 	for _, fixture := range []string{"ok-madr", "status-drift"} {
@@ -114,7 +126,7 @@ func TestFindingsTextLineFormat(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := FindingsText(&buf, []model.Finding{tt.finding}, model.Summary{Errors: 1}); err != nil {
+			if err := FindingsText(&buf, []model.Finding{tt.finding}, model.Summary{Errors: 1}, ""); err != nil {
 				t.Fatalf("FindingsText: %v", err)
 			}
 			got := strings.TrimRight(buf.String(), "\n")
@@ -127,7 +139,7 @@ func TestFindingsTextLineFormat(t *testing.T) {
 
 func TestFindingsJSONCarriesTheSchemaVersion(t *testing.T) {
 	var buf bytes.Buffer
-	if err := FindingsJSON(&buf, nil, model.Summary{Documents: 1}, 3); err != nil {
+	if err := FindingsJSON(&buf, nil, model.Summary{Documents: 1}, Header{PresetVersion: 3}); err != nil {
 		t.Fatalf("FindingsJSON: %v", err)
 	}
 	if !strings.HasPrefix(strings.TrimSpace(buf.String()), "{\n  \"schema_version\": 2,\n  \"preset_version\": 3,") {
@@ -152,7 +164,7 @@ func TestFindingsJSONLeavesOutAnUnversionedPreset(t *testing.T) {
 	// A configuration that names no preset version has none to report, and a
 	// consumer pinning one must not read a zero as a revision.
 	var buf bytes.Buffer
-	if err := FindingsJSON(&buf, nil, model.Summary{Documents: 1}, 0); err != nil {
+	if err := FindingsJSON(&buf, nil, model.Summary{Documents: 1}, Header{}); err != nil {
 		t.Fatalf("FindingsJSON: %v", err)
 	}
 	if strings.Contains(buf.String(), "preset_version") {
@@ -214,7 +226,7 @@ func TestFindingsGitHubWorkflowCommands(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := FindingsGitHub(&buf, []model.Finding{tt.finding}, model.Summary{Errors: 1}); err != nil {
+			if err := FindingsGitHub(&buf, []model.Finding{tt.finding}, model.Summary{Errors: 1}, ""); err != nil {
 				t.Fatalf("FindingsGitHub: %v", err)
 			}
 			got := strings.TrimRight(buf.String(), "\n")
@@ -235,10 +247,10 @@ func TestFindingsGitHubEndsWithTheTextSummary(t *testing.T) {
 		Detail:   "nothing supersedes it",
 		Location: model.Location{Path: "0001-a.md", Line: 3},
 	}}
-	if err := FindingsGitHub(&annotations, findings, summary); err != nil {
+	if err := FindingsGitHub(&annotations, findings, summary, ""); err != nil {
 		t.Fatalf("FindingsGitHub: %v", err)
 	}
-	if err := FindingsText(&text, findings, summary); err != nil {
+	if err := FindingsText(&text, findings, summary, ""); err != nil {
 		t.Fatalf("FindingsText: %v", err)
 	}
 	last := func(s string) string {
@@ -343,9 +355,9 @@ func TestFindingsRDJSONSeverityFollowsTheStrongestFinding(t *testing.T) {
 func TestReportRenderersPropagateWriterErrors(t *testing.T) {
 	findings := []model.Finding{{Severity: model.SeverityError, Rule: model.RuleCycle, ID: "0001", Location: model.Location{Path: "0001.md"}}}
 	renderers := map[string]func(io.Writer, []model.Finding, model.Summary) error{
-		"text":   FindingsText,
+		"text":   testPresetFindingsText,
 		"json":   testPresetFindingsJSON,
-		"github": FindingsGitHub,
+		"github": testPresetFindingsGitHub,
 		"rdjson": FindingsRDJSON,
 	}
 	for name, write := range renderers {
@@ -375,12 +387,12 @@ func TestFindingsAboutAFileWithoutAnIdentifier(t *testing.T) {
 	}{
 		{
 			name:  "text",
-			write: FindingsText,
+			write: testPresetFindingsText,
 			want:  `spec/clauses/README.md:1: ERROR id_mismatch: "README" is not an identifier of kind "clause"`,
 		},
 		{
 			name:  "github",
-			write: FindingsGitHub,
+			write: testPresetFindingsGitHub,
 			want:  `title=id_mismatch::"README" is not an identifier of kind "clause"`,
 		},
 		{
