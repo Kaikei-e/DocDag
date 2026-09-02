@@ -257,18 +257,41 @@ func (r *Repo) Rel(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve %s: %w", path, err)
 	}
-	root, err := filepath.EvalSymlinks(r.root)
-	if err != nil {
-		root = r.root
-	}
-	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
-		abs = resolved
-	}
-	rel, err := filepath.Rel(root, abs)
+	// Both sides go through the same resolution, because a difference in
+	// spelling between them is read as distance between them.
+	rel, err := filepath.Rel(resolveExisting(r.root), resolveExisting(abs))
 	if err != nil {
 		return "", fmt.Errorf("%s is outside %s: %w", path, r.root, err)
 	}
 	return filepath.ToSlash(rel), nil
+}
+
+// resolveExisting spells path the way the filesystem does, which is the way git
+// spells the working tree root it prints: symlinks followed, and on Windows 8.3
+// short names like RUNNER~1 written out as runneradmin.
+//
+// It resolves the longest ancestor that exists and puts the rest back on,
+// because filepath.EvalSymlinks answers nothing at all for a path that is not
+// on disk, and a caller may well name one: a kind directory a revision predates
+// is asked about before anything has been written under it. Falling back to the
+// unresolved spelling there is what made a path inside the working tree — a
+// temporary directory under macOS's /var, a symlink to /private/var — come out
+// as a ..-escaping pathspec git rejects as outside the repository.
+func resolveExisting(path string) string {
+	dir, remainder := path, ""
+	for {
+		if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+			return filepath.Join(resolved, remainder)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			// Not even the volume root answered, so there is nothing to resolve
+			// against and the path stands as it was spelled.
+			return path
+		}
+		remainder = filepath.Join(filepath.Base(dir), remainder)
+		dir = parent
+	}
 }
 
 // parseNameStatus reads git's NUL-separated name-status stream, in which each

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -243,6 +244,72 @@ func TestRepoRel(t *testing.T) {
 		}
 		if got != "." {
 			t.Fatalf("Rel = %q, want .", got)
+		}
+	})
+}
+
+// TestRepoRelThroughALinkedRoot pins what happens when the root git reports and
+// the path the caller names are two spellings of the same place: git resolves
+// the root it prints, macOS puts every temporary directory under /var, a
+// symlink to /private/var, and Windows hands out 8.3 short names like RUNNER~1
+// for runneradmin. A directory that is not on disk is the case that used to
+// escape the repository, because there was nothing there to resolve.
+func TestRepoRelThroughALinkedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlinks need a privilege on Windows")
+	}
+	real := testRepo(t, map[string]string{
+		"spec/clauses/UZ-V-001.md": "# A clause\n",
+	})
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	repo, err := Open(link)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	head := strings.TrimSpace(testGit(t, real, "rev-parse", "HEAD"))
+
+	t.Run("a directory that is not on disk is still named relative to the root", func(t *testing.T) {
+		got, err := repo.Rel(filepath.Join(link, "spec", "measures"))
+		if err != nil {
+			t.Fatalf("Rel: %v", err)
+		}
+		if got != "spec/measures" {
+			t.Fatalf("Rel = %q, want spec/measures rather than a path leaving the repository", got)
+		}
+	})
+
+	t.Run("a file that is on disk is named the same way", func(t *testing.T) {
+		got, err := repo.Rel(filepath.Join(link, "spec", "clauses", "UZ-V-001.md"))
+		if err != nil {
+			t.Fatalf("Rel: %v", err)
+		}
+		if got != "spec/clauses/UZ-V-001.md" {
+			t.Fatalf("Rel = %q, want the repository-relative slash-separated path", got)
+		}
+	})
+
+	t.Run("a kind the revision predates checks out as an empty directory", func(t *testing.T) {
+		tree, err := repo.Checkout(head, map[string]string{
+			"clause":  filepath.Join(link, "spec", "clauses"),
+			"measure": filepath.Join(link, "spec", "measures"),
+		})
+		if err != nil {
+			t.Fatalf("Checkout: %v", err)
+		}
+		defer func() {
+			if err := tree.Close(); err != nil {
+				t.Errorf("Close: %v", err)
+			}
+		}()
+
+		for name, want := range map[string]string{"clause": "spec/clauses", "measure": "spec/measures"} {
+			rel, err := filepath.Rel(tree.Root(), tree.Dirs()[name])
+			if err != nil || filepath.ToSlash(rel) != want {
+				t.Errorf("%s dir = %q under %q, want %s", name, tree.Dirs()[name], tree.Root(), want)
+			}
 		}
 	})
 }
