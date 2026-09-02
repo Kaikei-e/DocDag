@@ -4,6 +4,29 @@ Configuration is optional. DocDag reads `docdag.yaml` from the repository root, 
 `--config <path>`, and merges it over the preset; flags win over both. See
 [checks.md](checks.md) for what each check reports and [commands.md](commands.md) for the flags.
 
+The page reads in the order a corpus grows: the default preset, the keys a single-kind corpus adds,
+then the vocabulary a corpus with several sorts of document needs, and last the two presets written
+out in full.
+
+- [The preset](#the-preset) — `adr`, the default, printed whole.
+- [The optional keys](#the-optional-keys) — every key a single-kind corpus may add.
+- [List replacement](#list-replacement) — what writing a list or a map does to the preset's.
+- [Kinds](#kinds) — several sorts of document in one corpus, each with an identity of its own.
+- [Edge attributes](#edge-attributes) — facts an edge entry carries beside the reference.
+- [The rule vocabulary](#the-rule-vocabulary) — the fixed `when` vocabulary, and what it excludes.
+- [Projections and binding](#projections-and-binding) — derived boolean attributes, and which one
+  defines what is in force.
+- [Target conditions](#target-conditions) — what an edge requires of the document it points at.
+- [Path constraints](#path-constraints) — an invariant over two composed edges.
+- [preset_version and fields](#preset_version-and-fields) — the revision a corpus is written
+  against, and the lifecycle of a frontmatter key.
+- [Periods and as-of](#periods-and-as-of) — the days a document is in force between, and the day a
+  command answers for.
+- [The spec preset](#the-spec-preset) — the second preset, printed whole, with its kinds and its
+  operating conventions.
+- [filename and template](#filename-and-template) — what `docdag new` names and writes.
+- [Structural escalation](#structural-escalation) — raising a built-in check.
+
 ## The preset
 
 The file below is the `adr` preset in full — what DocDag applies with no configuration:
@@ -100,6 +123,18 @@ rules:
         attr: { tags: { contains: explained } }
     message: "is retired, nothing supersedes it, and it carries no explained tag"
 ```
+
+## List replacement
+
+The `edges:` and `rules:` lists above show where the new keys go; writing one of them — or
+`derived_edges:`, `projections:`, or the `kinds:` and `fields:` maps the sections below introduce —
+replaces the preset's list rather than adding to it, and writing it as an explicit empty list
+(`derived_edges: []`, `kinds: {}`) clears the preset's without putting anything in its place.
+Writing `edges:` also drops the inherited projections that read an edge type the new list does not
+declare, and the `binding:` that named one of them: a projection over a vocabulary the corpus
+replaced away cannot be evaluated. The two scalars behave as scalars do — writing `preset_version:`
+or `binding:` replaces the preset's value, leaving either out keeps it — which is why every section
+below that adds a key to a list prints the whole list it belongs to.
 
 ## Kinds
 
@@ -226,7 +261,9 @@ and from which template, has no default answer. See [commands.md](commands.md) f
 
 ### What a multi-kind corpus does not do yet
 
-`validate --immutable-since` refuses one: it reads one directory under one identity rule.
+`validate --immutable-since` refuses one — `--immutable-since does not read a multi-kind corpus
+yet`, exit 3 — because the check reads one directory under one identity rule;
+[ci.md](ci.md#append-only-history) covers what it allows on the corpora it does read.
 
 ## Edge attributes
 
@@ -306,10 +343,100 @@ lets a document state a reason where it has one. Adding `required: true` makes e
 an `edge_attr_missing` error, which is the migration: rewrite the entries, then require the
 attribute.
 
+## The rule vocabulary
+
+A rule's `when` block ANDs its top-level clauses. The vocabulary is fixed and complete: `inbound`,
+`not_inbound`, `outbound`, `not_outbound` — each naming a declared edge type — `attr: {<key>:
+{eq|not: <value>}}` on a scalar, `attr: {<key>: {contains|not_contains: <value>}}` and
+`attr: {<key>: {subset_of: [<value>, …]}}` on a list, `via` and `via_inbound` on a neighbour, and
+the two combinators `any_of: [<condition>, …]` and `not: <condition>`, which nest. A scalar read as
+a list is a one-element list; comparison is case-insensitive; a positive clause needs the attribute
+to be there and a negative one is satisfied by its absence. There is no expression language: no
+arithmetic, no string operations, no variables.
+
+An `attr:` key reads a frontmatter key, a declared projection, or `in_force` — the one attribute the
+engine computes rather than reads, from the [`period:`](#periods-and-as-of) a kind declares. The
+date comparison behind it stays in the engine, which is what keeps the vocabulary free of dates.
+
+`inbound` and `outbound` read either as an edge name or as a degree threshold, and the name alone is
+sugar for one edge or more. `via` and `via_inbound` reach exactly one hop: they hold when at least
+one neighbour across the named edge type satisfies every attribute clause they carry. A neighbour
+condition is attributes only — no edge clause, and no `via` inside a `via` — so a condition stays a
+question about a document and its immediate neighbourhood. Transitive reach is what `resolve` is
+for.
+
+The same vocabulary is what an edge spec's [`target:`](#target-conditions) writes, and there it sees
+only the target's own local condition: nesting `via` or another `target` inside it is not allowed,
+so the modal depth stays fixed at two — one edge, then a condition. That is the bar any future
+addition to the vocabulary is reviewed against: a word stays only if it keeps conditions inside the
+bisimulation-invariant fragment, which is what makes a rule a question about a document's
+neighbourhood rather than a query language.
+
+```yaml
+rules:
+  - name: deviation_pressure
+    severity: warn
+    when:
+      inbound: { edge: deviates-from, min: 5 }   # at least five inbound edges
+    message: "has five or more deviations; reconsider the decision"
+  - name: contested
+    severity: warn
+    when:
+      outbound: { edge: depends-on, min: 1, max: 3 }   # max is unbounded unless written
+    message: "depends on between one and three decisions"
+  - name: stale_premise
+    severity: error
+    when:
+      attr: { status: { eq: accepted } }
+      via:                                       # via_inbound reads the other direction
+        edge: premise
+        attr: { status: { eq: retired } }
+    message: "is accepted but one of its premises is retired"
+```
+
+A degree threshold counts the edges of that type at the document, including the ones whose other end
+is a reference no document answers — that is a `dangling_ref` finding of its own. A `min` below 1
+and a `max` of 0 are configuration errors: absence is `not_inbound` and `not_outbound`, which is
+where the vocabulary keeps it. A neighbour the corpus does not hold carries no attributes and
+satisfies no `via` clause.
+
+## Projections and binding
+
+A projection is a derived boolean attribute. It is named, it holds where its condition holds, and it
+is readable as an attribute of that name from rules and from other projections, and as a column of
+`query --fields` and `resolve --fields`:
+
+```yaml
+projections:
+  - name: enforced
+    when: { inbound: enforces }
+  - name: effective_should
+    any_of:                                      # holds when any alternative's when holds
+      - when: { attr: { modality: { eq: SHOULD } } }
+      - when: { attr: { modality: { eq: MUST } }, not_inbound: enforces }
+
+binding: accepted_unsuperseded
+```
+
+A projection writes `when` or `any_of`, one of the two. Its value reads as the string `true` where
+it holds and `false` where it does not, so `attr: {enforced: {eq: "true"}}` and
+`attr: {enforced: {not: "true"}}` both say what they look like. A projection name shadows a
+frontmatter key spelled the same way: the derived value is the configured one, and a document cannot
+take it back by writing the key down.
+
+Projections may read each other, and they are evaluated in dependency order, so the list may be
+written in any order. A reference cycle among them is a configuration error (exit 3), as is a
+duplicate name, a nameless projection and a `binding:` naming a projection nobody declared.
+
+`binding:` names the projection that defines the documents in force — what `query --binding` lists,
+what `stats` counts and what `context` keeps. A configuration that declares no projections at all
+falls back on the built-in definition, accepted and superseded by nothing, which is what the `adr`
+preset's `accepted_unsuperseded` projection writes down.
+
 ## Target conditions
 
-An edge may also declare what it requires of the document it points at. `target:` is the same
-`when` vocabulary a rule writes, evaluated against that document:
+Beside the attributes its entries carry, an edge may declare what it requires of the document it
+points at. `target:` is the rule vocabulary above, evaluated against that document:
 
 ```yaml
 edges:
@@ -401,13 +528,12 @@ P(d) − Q(d).
 
 A path element is a declared edge name, optionally prefixed with `^` to walk that edge backwards:
 `supersedes` steps from a document to the ones it supersedes, and `^supersedes` to the ones that
-supersede it. Both paths are **one or two steps
-long** — zero or three is a configuration error (exit 3), and so is a wildcard, a regular
-expression or a repetition, since none of them is an edge name. Two is the decision rather than a
-limit of the implementation: a longer path is a regular path expression, whose implication problem
-is undecidable, and transitive reach is what `resolve` already answers. Exactly one of `equals:`
-and `subset_of:` is written, `none` is the only set `equals:` accepts, and names must be present and
-distinct.
+supersede it. Both paths are **one or two steps long** — zero or three is a configuration error
+(exit 3), and so is a wildcard, a regular expression or a repetition, since none of them is an edge
+name. Two is the decision rather than a limit of the implementation: a longer path is a regular path
+expression, whose implication problem is undecidable, and transitive reach is what `resolve` already
+answers. Exactly one of `equals:` and `subset_of:` is written, `none` is the only set `equals:`
+accepts, and names must be present and distinct.
 
 Only the typed layer is walked — structured and derived edges, never the reference layer — and only
 documents the corpus holds are reached, so a reference naming none is a `dangling_ref` alone rather
@@ -494,107 +620,6 @@ An unchanged findings set means the revision is compatible — a minor bump. A c
 revision decides something differently about documents nobody edited, which is a major bump, and the
 diff names exactly which documents moved. Bump `preset_version:` accordingly, so a repository
 pinning a revision knows what it pinned.
-
-## List replacement
-
-The `edges:` and `rules:` lists above show where the new keys go; writing one of them — or
-`derived_edges:`, `projections:` or the `kinds:` and `fields:` maps — replaces the preset's rather
-than adding to it, and writing it as an explicit empty list (`derived_edges: []`, `kinds: {}`)
-clears the preset's without putting anything in its place. `preset_version:` is a scalar, so writing
-it replaces the preset's revision and leaving it out keeps it. Writing `edges:` also drops the inherited projections that
-read an edge type the new list does not declare, and the `binding:` that named one of them: a
-projection over a vocabulary the corpus replaced away cannot be evaluated. `binding:` is a scalar,
-so writing it replaces the preset's and leaving it out keeps it.
-
-## The rule vocabulary
-
-A rule's `when` block ANDs its top-level clauses. The vocabulary is fixed and complete: `inbound`,
-`not_inbound`, `outbound`, `not_outbound` — each naming a declared edge type — `attr: {<key>:
-{eq|not: <value>}}` on a scalar, `attr: {<key>: {contains|not_contains: <value>}}` and
-`attr: {<key>: {subset_of: [<value>, …]}}` on a list, `via` and `via_inbound` on a neighbour, and
-the two combinators `any_of: [<condition>, …]` and `not: <condition>`, which nest. A scalar read as
-a list is a one-element list; comparison is case-insensitive; a positive clause needs the attribute
-to be there and a negative one is satisfied by its absence. There is no expression language: no
-arithmetic, no string operations, no variables.
-
-An `attr:` key reads a frontmatter key, a declared projection, or `in_force` — the one attribute the
-engine computes rather than reads, from the [`period:`](#periods-and-as-of) a kind declares. The
-date comparison behind it stays in the engine, which is what keeps the vocabulary free of dates.
-
-`inbound` and `outbound` read either as an edge name or as a degree threshold, and the name alone is
-sugar for one edge or more. `via` and `via_inbound` reach exactly one hop: they hold when at least
-one neighbour across the named edge type satisfies every attribute clause they carry. A neighbour
-condition is attributes only — no edge clause, and no `via` inside a `via` — so a condition stays a
-question about a document and its immediate neighbourhood. Transitive reach is what `resolve` is
-for.
-
-The same vocabulary is what an edge spec's [`target:`](#target-conditions) writes, and there it sees
-only the target's own local condition: nesting `via` or another `target` inside it is not allowed,
-so the modal depth stays fixed at two — one edge, then a condition. That is the bar any future
-addition to the vocabulary is reviewed against: a word stays only if it keeps conditions inside the
-bisimulation-invariant fragment, which is what makes a rule a question about a document's
-neighbourhood rather than a query language.
-
-```yaml
-rules:
-  - name: deviation_pressure
-    severity: warn
-    when:
-      inbound: { edge: deviates-from, min: 5 }   # at least five inbound edges
-    message: "has five or more deviations; reconsider the decision"
-  - name: contested
-    severity: warn
-    when:
-      outbound: { edge: depends-on, min: 1, max: 3 }   # max is unbounded unless written
-    message: "depends on between one and three decisions"
-  - name: stale_premise
-    severity: error
-    when:
-      attr: { status: { eq: accepted } }
-      via:                                       # via_inbound reads the other direction
-        edge: premise
-        attr: { status: { eq: retired } }
-    message: "is accepted but one of its premises is retired"
-```
-
-A degree threshold counts the edges of that type at the document, including the ones whose other end
-is a reference no document answers — that is a `dangling_ref` finding of its own. A `min` below 1
-and a `max` of 0 are configuration errors: absence is `not_inbound` and `not_outbound`, which is
-where the vocabulary keeps it. A neighbour the corpus does not hold carries no attributes and
-satisfies no `via` clause.
-
-## Projections and binding
-
-A projection is a derived boolean attribute. It is named, it holds where its condition holds, and it
-is readable as an attribute of that name from rules and from other projections, and as a column of
-`query --fields` and `resolve --fields`:
-
-```yaml
-projections:
-  - name: enforced
-    when: { inbound: enforces }
-  - name: effective_should
-    any_of:                                      # holds when any alternative's when holds
-      - when: { attr: { modality: { eq: SHOULD } } }
-      - when: { attr: { modality: { eq: MUST } }, not_inbound: enforces }
-
-binding: accepted_unsuperseded
-```
-
-A projection writes `when` or `any_of`, one of the two. Its value reads as the string `true` where
-it holds and `false` where it does not, so `attr: {enforced: {eq: "true"}}` and
-`attr: {enforced: {not: "true"}}` both say what they look like. A projection name shadows a
-frontmatter key spelled the same way: the derived value is the configured one, and a document cannot
-take it back by writing the key down.
-
-Projections may read each other, and they are evaluated in dependency order, so the list may be
-written in any order. A reference cycle among them is a configuration error (exit 3), as is a
-duplicate name, a nameless projection and a `binding:` naming a projection nobody declared.
-
-`binding:` names the projection that defines the documents in force — what `query --binding` lists,
-what `stats` counts and what `context` keeps. A configuration that declares no projections at all
-falls back on the built-in definition, accepted and superseded by nothing, which is what the `adr`
-preset's `accepted_unsuperseded` projection writes down.
 
 ## Periods and as-of
 
