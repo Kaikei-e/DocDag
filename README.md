@@ -12,10 +12,9 @@ line.
 
 DocDag ships two presets. `adr` is the default: one directory of Architecture Decision Records,
 identified by a digit run, superseding one another. `spec` is a normative standard as a graph —
-eight kinds, among them the clauses, the conformance tests that enforce them, the deviations
-recorded against them and the measurements taken of them, each in a directory of its own and with an
-identifier shape of its own — where a `MUST` that no test enforces is a finding rather than a rule.
-Both are plain configuration:
+eight kinds, among them the clauses, the conformance tests that enforce them and the deviations
+recorded against them, each in a directory of its own and with an identifier shape of its own —
+where a `MUST` that no test enforces is a finding rather than a rule. Both are plain configuration:
 [docs/configuration.md](docs/configuration.md) prints each in full, and `docdag.yaml` overrides
 either.
 
@@ -82,14 +81,44 @@ $ docdag query 0001 --ancestors --edge depends-on   # what rests on this decisio
 0004
 ```
 
-Where a corpus declares a `period:`, what is in force is an answer about a day rather than a
-standing fact: `docdag query --binding --as-of 2027-04-01` asks what will be in force then, `--at
-<rev>` moves the revision the documents are read from, and the two compose into "what the vault at
-that revision said was in force on that day". The `adr` preset declares none, so the corpus above
-answers the same way on every day.
-
 DocDag looks in `docs/adr`, `doc/adr`, `docs/decisions`, `docs/ADR`, `adr` — the first that exists
 and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 to 6 digits; `--dir` overrides it.
+
+### The spec preset
+
+One line adopts the second preset whole, and the eight directories it names appear as the corpus
+grows into them. The corpus below holds three clauses, the conformance test enforcing one of them,
+the subject all three speak to and the post-mortem they cite as their counterexample:
+
+```console
+$ cat docdag.yaml
+preset: spec
+
+$ docdag validate
+spec/clauses/UZ-V-002.md:4: ERROR orphan_must UZ-V-002: is MUST or MUST_NOT and accepted but nothing enforces it
+as of 2026-09-02
+
+$ docdag query --binding                      # what is in force, and at what strength
+UZ-V-001	MUST
+UZ-V-002	MUST
+UZ-V-003	SHOULD
+
+$ docdag query --binding --as-of 2027-06-01   # UZ-V-003 runs out on 2027-01-01
+UZ-V-001	MUST
+UZ-V-002	MUST
+
+$ docdag new --kind clause --id UZ-V-004 "A report names its grader"
+spec/clauses/UZ-V-004.md
+```
+
+`UZ-V-002` claims a `MUST` that no conformance test enforces, which is a standard saying one thing
+and checking another; the remedy is the test or a weaker modality, so the finding carries no `fix:`
+line — which of the two is right is a decision rather than an edit. The modality column is there
+because a set spanning permissions and prohibitions cannot be read without it. And the closing
+`as of` line is the `--as-of` run's premise: where a corpus declares a `period:`, what is in force
+is an answer about a day, `--at <rev>` moves the revision the documents are read from, and the two
+compose into "what the vault at that revision said was in force on that day". The `adr` preset
+declares no period, so the corpus above answers the same way on every day.
 
 ## What it checks
 
@@ -110,8 +139,9 @@ mechanical remedy, and exits 1 if any finding is an error:
   `missing_field`, `deprecated_field`.
 - **Graph** — `cycle`, `cardinality`, `inverse_mismatch`, and, for an edge that declares `target:`
   or a corpus that declares `path_constraints:`, `stale_target` and `path_mismatch`; for one that
-  declares a `modality` vocabulary, `modality_conflict` and `excepts_strict`; plus the preset's two
-  status rules, `status_drift` and `superseded_orphan`.
+  declares a `modality` vocabulary, `modality_conflict` and `excepts_strict`; plus the two status
+  rules `adr` ships, `status_drift` and `superseded_orphan`, which `spec` replaces with ten of its
+  own.
 - **Periods** — for a kind that declares `period:`, the two days a document writes are read against
   the day the run is about: `period_invalid`, `period_conflict`, `expired_deviation`.
 - **Reference layer** — `dangling_reference`, off until `references.dangling` asks for it.
@@ -154,8 +184,11 @@ $ claude
 - [docs/ci.md](docs/ci.md) — the composite action, append-only history, linting the configuration
   and the pre-commit hook.
 - [docs/agents.md](docs/agents.md) — `context`, `--fields`, `--touching`, `lint` and the plugin.
-- [docs/adr/](docs/adr/) — the architecture decision records behind the design: the `spec` preset
-  without an expression language, target conditions, modality, `lint` and in-force periods.
+- [docs/adr/](docs/adr/) — the architecture decision records behind the design, indexed and in
+  reading order: the `spec` preset without an expression language, target conditions, modality,
+  `lint` and in-force periods.
+- [CHANGELOG.md](CHANGELOG.md) — what each release changed, including the output formats v0.2.0
+  broke and how to migrate off them.
 
 ## MADR compatibility
 
@@ -172,11 +205,6 @@ A conventional MADR repository needs no changes — the invariants hold as the f
 [docs/checks.md](docs/checks.md) has the rest: how `withdrawn` differs from `superseded`, what makes
 a `supersedes:` entry `invalid_ref` rather than `dangling_ref`, and which links never join the
 reference layer at all.
-
-## Changelog
-
-[CHANGELOG.md](CHANGELOG.md) records what each release changed, including the output formats v0.2.0
-broke and how to migrate off them.
 
 ## License
 

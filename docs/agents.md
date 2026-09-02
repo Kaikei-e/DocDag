@@ -76,24 +76,6 @@ $ docdag query --binding --fields id,title,status
 0003	Store thumbnails in object storage	accepted
 ```
 
-## Asking about another day
-
-Where a corpus declares a [`period:`](configuration.md#periods-and-as-of), what binds is an answer
-about a day, and an agent can name the day: `--as-of YYYY-MM-DD` on `query`, `resolve`, `context`,
-`stats`, `validate` and `lint`. It is how to ask what a change lands into — the binding set on the
-day a revision takes over — before writing anything:
-
-```console
-$ docdag query --binding --as-of 2027-04-01 --fields id,modality
-UZ-V-011	SHOULD
-```
-
-`--at <rev>` is the other axis: every managed document read from a revision rather than from the
-working tree, which is what "what did the standard say then" needs. The two compose. `validate` and
-`lint --corpus` answer for the day HEAD was committed on unless told otherwise, so an agent
-reproducing a CI failure locally gets the same findings the gate did; the JSON reports carry `as_of`
-and `at` so an answer says which corpus at which moment it came from.
-
 ## One edit at a time
 
 `docdag validate --touching <path>` runs the whole corpus and reports only the findings about that
@@ -102,6 +84,38 @@ can break. The flag repeats and accepts a directory. The exit code still answers
 a narrowed report never turns a failing repository into a passing one, and the number of findings
 withheld goes to stderr. The summary line and the `summary` object answer for the corpus too: only
 the list of findings narrows.
+
+## Asking about another day
+
+Where a corpus declares a [`period:`](configuration.md#periods-and-as-of), an answer is about a day
+rather than standing, and an agent names the day: `--as-of YYYY-MM-DD` on `query`, `resolve`,
+`context`, `stats`, `validate` and `lint`. The shipped `spec` vault records a departure that expires
+on 2026-08-01, so the two days either side of it are two reports, narrowed by the `--touching` above
+to the record the question is about:
+
+```console
+$ cd testdata/fixtures/spec-vault
+$ docdag validate --touching spec/deviations/dev-0001.md --as-of 2026-07-31
+spec/clauses/UZ-V-002.md:4: ERROR orphan_must UZ-V-002: is MUST or MUST_NOT and accepted but nothing enforces it
+as of 2026-07-31
+(6 findings hidden)
+
+$ docdag validate --touching spec/deviations/dev-0001.md --as-of 2026-08-02
+spec/clauses/UZ-V-002.md:4: ERROR orphan_must UZ-V-002: is MUST or MUST_NOT and accepted but nothing enforces it
+spec/deviations/dev-0001.md:7: WARN expired_deviation dev-0001: expires 2026-08-01 has passed and the status is still accepted
+as of 2026-08-02
+(6 findings hidden)
+```
+
+`query --binding --as-of <day>` asks the same question of the binding set, which is how to find out
+what a change lands into — what is in force on the day a revision takes over — before writing
+anything.
+
+`--at <rev>` is the other axis: every managed document read from a revision rather than from the
+working tree, which is what "what did the standard say then" needs. The two compose. `validate` and
+`lint --corpus` answer for the day HEAD was committed on unless told otherwise, so an agent
+reproducing a CI failure locally gets the same findings the gate did; the JSON reports carry `as_of`
+and `at` so an answer says which corpus at which moment it came from.
 
 ## Changing the rules
 

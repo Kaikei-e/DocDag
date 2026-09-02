@@ -74,7 +74,9 @@ docs/adr/0001-serve-images-from-the-application.md:11: ERROR immutable_violation
 
 A document that `<rev>` did not hold is new and is always allowed. The check runs `git` from `PATH`
 and is off unless the flag is given; a corpus outside a git repository, or a machine without `git`,
-exits 3.
+exits 3. So does a corpus that declares [`kinds:`](configuration.md#kinds) — the check reads one
+directory under one identity rule, and says `--immutable-since does not read a multi-kind corpus
+yet` rather than comparing the wrong files.
 
 ### Running it in CI
 

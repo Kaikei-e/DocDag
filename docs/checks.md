@@ -1,6 +1,7 @@
 # Checks
 
-Every finding `docdag validate` can report. See [commands.md](commands.md) for the output formats,
+Every finding `docdag validate` can report, and every finding `docdag lint` can report about the
+configuration behind it. See [commands.md](commands.md) for the output formats,
 [configuration.md](configuration.md) for the keys named here, and [ci.md](ci.md) for
 `--immutable-since`.
 
@@ -10,13 +11,39 @@ A finding reads:
 <path>:<line>: <SEVERITY> <rule> <id>: <detail>
 ```
 
-## Three kinds of check
+Two sections frame the rest — what a check's severity comes from, and why a status is a property of
+the graph rather than a fact of its own — and the groups after them hold one entry per finding, in
+the order a corpus is read: its days, the file, its kind, its declared fields, its edge attributes,
+its place in the graph, its body's links, its history, and last the configuration it was all checked
+under. Periods come first among the groups because the checks below read the day they define.
+
+- [Kinds of check](#kinds-of-check) · [Status is a projection](#status-is-a-projection) — the two
+  framing sections
+- [Periods and the day a run is about](#periods-and-the-day-a-run-is-about) — `in_force`, and
+  `period_invalid`, `period_conflict`, `expired_deviation`
+- [Document structure](#document-structure) — `invalid_frontmatter`, `missing_frontmatter`,
+  `id_collision`, `unknown_status`, `empty_edge`, `invalid_ref`, `dangling_ref`
+- [Kinds](#kinds) — `id_mismatch`, `kind_mismatch`, `unknown_field`, `edge_kind_mismatch`
+- [Declared fields](#declared-fields) — `deprecated_field`, `unknown_field_value`, `missing_field`
+- [Edge attributes](#edge-attributes) — `edge_attr_unknown`, `edge_attr_missing`,
+  `edge_attr_invalid`
+- [The graph](#the-graph) — `cycle`, `cardinality`, `inverse_mismatch`, `derived_conflict`,
+  `unstructured_supersedes`, `stale_target`, `path_mismatch`, `modality_conflict`, `excepts_strict`,
+  and the preset rules `status_drift` and `superseded_orphan`
+- [The reference layer](#the-reference-layer) — `dangling_reference`
+- [History](#history) — `immutable_violation`
+- [Lint findings](#lint-findings) — what `docdag lint` raises about the configuration itself
+- [The fixture corpora](#the-fixture-corpora) — the corpus under `testdata/` each finding is
+  exercised by
+
+## Kinds of check
 
 | Kind | Severity comes from | Configurable |
 | --- | --- | --- |
 | **Structural** | a built-in default | `structural:` may raise one to `error`; it can never be lowered or disabled |
-| **Rule** | the rule's own `severity:` | `rules:` defines them; the preset ships two, and a config that writes `rules:` replaces the list |
+| **Rule** | the rule's own `severity:` | `rules:` defines them; `adr` ships two and `spec` ten, and a config that writes `rules:` replaces the list |
 | **Reference and history** | `references.dangling`, or fixed | `dangling_reference` is off by default; `immutable_violation` needs `--immutable-since` |
+| **Lint** | fixed per finding | nothing configures them; `docdag lint` reports them and `validate` never does |
 
 `structural:` accepts exactly these twenty-nine names: `cycle`, `dangling_ref`, `id_collision`,
 `invalid_frontmatter`, `missing_frontmatter`, `unknown_status`, `derived_conflict`,
@@ -24,19 +51,21 @@ A finding reads:
 `edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`, `id_mismatch`, `kind_mismatch`,
 `unknown_field`, `unknown_field_value`, `missing_field`, `edge_kind_mismatch`, `deprecated_field`,
 `stale_target`, `path_mismatch`, `modality_conflict`, `excepts_strict`, `period_invalid`,
-`period_conflict`, `expired_deviation`. Naming anything else — `status_drift` and
-`superseded_orphan` included, since they are rules — is a configuration error and exits 3.
+`period_conflict`, `expired_deviation`. Naming anything else is a configuration error and exits 3 —
+`status_drift` and `superseded_orphan` included, since they are rules a `rules:` list replaces, and
+every lint finding, since `validate` never reports one.
 
 ## Status is a projection
 
-Status is a projection of the graph, not an independent fact. With the ADR preset, an inbound
+Status is a projection of the graph, not an independent fact. Under the `adr` preset, an inbound
 `supersedes` edge and a status other than `superseded` is an error (`status_drift`); `superseded`
 with nothing superseding it is a warning (`superseded_orphan`). A document is *binding* when its
 status is `accepted` and no document supersedes it.
 
-Both are ordinary rules, so a configuration that writes its own `rules:` list replaces them. The
-`fix:` suggestions are keyed on these two names: a rule renamed keeps its check but loses its
-suggestion.
+Both are ordinary rules, so a configuration that writes its own `rules:` list replaces them — which
+is what the `spec` preset does, reading the same two questions against a day rather than against the
+edges alone. The `fix:` suggestions are keyed on these two names: a rule renamed keeps its check but
+loses its suggestion.
 
 ## Periods and the day a run is about
 
@@ -146,8 +175,8 @@ the vocabulary — the vocabulary of the document's own kind, where kinds declar
 binds nothing, and because nothing supersedes it, it raises no `superseded_orphan` warning either.
 
 Unrecognized frontmatter keys are ignored entirely, so another tool's fields raise nothing — unless
-they are in a kind declared `closed: true`, which is `unknown_field` below, or declared under `fields:` and retired, which is
-`deprecated_field`.
+they are in a kind declared `closed: true`, which is `unknown_field` below, or declared under
+`fields:` and retired, which is `deprecated_field`.
 
 ### `empty_edge` — error, structural
 
@@ -421,10 +450,10 @@ the graph answers.
 
 A condition written on an edge spec sees the target's own local condition and nothing further:
 nesting `via` or another `target` inside it is a configuration error, so the depth stays fixed at
-two — one edge, then a condition about what is at the end of it. That is the bar every future
-addition to the vocabulary is reviewed against as well: a word is added only if conditions stay
-inside the bisimulation-invariant fragment, which is what keeps a check a question about a
-document's neighbourhood rather than a query language with an evaluator to reason about.
+two — one edge, then a condition about what is at the end of it. That bound is what keeps the check
+a question about a document's neighbourhood rather than a query language, and
+[configuration.md](configuration.md#the-rule-vocabulary) states the bar every future addition to the
+vocabulary is held to.
 
 ### `path_mismatch` — error, structural
 
@@ -809,8 +838,16 @@ That run exits 1. The other directories are named for the finding or the behavio
 `cycle`, `union-cycle`, `union-cycle-shadowed`, `superseded-orphan`, `id-collision`, `dangling`,
 `dangling-reference`, `empty-edge`, `invalid-yaml`, `inverse-mismatch`, `cardinality`, `withdrawn`,
 `any-of`, `list-attrs`, `fan-in`, `depends-impact`, `projections`, `edge-attrs`, `target`,
-`path-constraints`, `kinds`, `spec-vault`. The last six carry a `docdag.yaml` of their own, so run
-them with `--config <dir>/docdag.yaml`.
+`path-constraints`, `kinds`, `spec-vault`.
+
+Thirteen of them carry a `docdag.yaml` of their own, because the finding they exercise only exists
+where a configuration declares it: `any-of`, `cardinality`, `dangling-reference`, `edge-attrs`,
+`inverse-mismatch`, `kinds`, `list-attrs`, `path-constraints`, `projections`, `spec-vault`,
+`target`, `union-cycle` and `union-cycle-shadowed`. Run one of those with **both** flags —
+`--dir <dir> --config <dir>/docdag.yaml` — since a configuration that names no directory falls back
+on discovery and reads this repository's own decisions instead. The two exceptions are `kinds` and
+`spec-vault`, whose configurations name their directories themselves and are run by `--config`
+alone.
 
 `target` is the corpus whose edges declare what they may point at: a `depends-on` left on a
 replaced decision and an `amends` on a deprecated one, one `stale_target` each. `path-constraints`

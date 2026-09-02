@@ -1,6 +1,6 @@
 {
   "name": "docdag",
-  "description": "The DocDag plugin: decision records as a typed graph, in Claude Code",
+  "description": "The DocDag plugin: decision records and normative clauses as a typed graph, in Claude Code",
   "owner": {
     "name": "Kaikei-e"
   },
@@ -8,7 +8,7 @@
     {
       "name": "docdag",
       "source": "./",
-      "description": "Read, query and validate a repository's decision records as a typed graph"
+      "description": "Read, query and validate a repository's decision records and normative clauses as a typed graph"
     }
   ]
 }

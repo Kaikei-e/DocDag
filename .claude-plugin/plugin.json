@@ -1,7 +1,7 @@
 {
   "name": "docdag",
-  "description": "Read, query and validate a repository's decision records as a typed graph",
-  "version": "0.2.0",
+  "description": "Read, query and validate a repository's decision records and normative clauses as a typed graph",
+  "version": "0.3.0",
   "author": {
     "name": "Kaikei-e",
     "url": "https://github.com/Kaikei-e"
@@ -9,5 +9,5 @@
   "homepage": "https://github.com/Kaikei-e/DocDag#for-agents",
   "repository": "https://github.com/Kaikei-e/DocDag",
   "license": "Apache-2.0",
-  "keywords": ["adr", "decision-records", "documentation", "graph"]
+  "keywords": ["adr", "decision-records", "specification", "documentation", "graph"]
 }
