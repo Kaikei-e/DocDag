@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
@@ -14,8 +15,9 @@ import (
 	"github.com/Kaikei-e/DocDag/internal/parse"
 )
 
-// SchemaVersion is the version of the JSON brief.
-const SchemaVersion = 1
+// SchemaVersion is the version of the JSON brief. Version 2 heads it with the
+// preset revision, as the validation report does.
+const SchemaVersion = 2
 
 // Defaults a caller applies when the user asks for nothing in particular.
 const (
@@ -31,29 +33,45 @@ const charsPerToken = 4
 
 // Options parameterise a brief. A Budget of zero or less is unbounded; a Depth
 // of zero reports the reference and its resolution alone.
+//
+// AsOf is the day the brief is about: what is binding, what a reference
+// resolves to and which conflicts an exception defeats are all answers about a
+// moment wherever a kind declares a period. The zero time means today. At names
+// the revision the documents were read from, empty for the working tree; the
+// brief carries it so a reader knows which vault they are looking at.
 type Options struct {
 	Depth   int
 	Types   []model.EdgeType
 	Budget  int
 	Section string
 	All     bool
+	AsOf    time.Time
+	At      string
 }
 
 // Entry is one document in a brief. Excerpt is the first paragraph of the
 // requested section, empty when the document has no such section or when the
-// budget left no room for it.
+// budget left no room for it. Relation names why a document is in the brief and
+// is written only in the related group, where the walk that found it is not the
+// answer: a clause and its exception are one hop apart the same way a clause
+// and its subject are, and which of the two a reader is looking at matters.
 type Entry struct {
-	ID      model.ID `json:"id"`
-	Title   string   `json:"title"`
-	Status  string   `json:"status"`
-	Path    string   `json:"path"`
-	Excerpt string   `json:"excerpt,omitempty"`
+	ID       model.ID `json:"id"`
+	Title    string   `json:"title"`
+	Status   string   `json:"status"`
+	Path     string   `json:"path"`
+	Relation string   `json:"relation,omitempty"`
+	Excerpt  string   `json:"excerpt,omitempty"`
 }
 
 // Line is the one-line form of an entry: what a reader is left with when the
 // budget has no room for prose.
 func (e Entry) Line() string {
-	return fmt.Sprintf("%s  %s  [%s]  %s", e.ID, e.Title, e.Status, e.Path)
+	line := fmt.Sprintf("%s  %s  [%s]  %s", e.ID, e.Title, e.Status, e.Path)
+	if e.Relation != "" {
+		line += "  (" + e.Relation + ")"
+	}
+	return line
 }
 
 // Budget records what a brief was allowed to cost and what it did cost.
@@ -63,14 +81,28 @@ type Budget struct {
 	Degraded int `json:"degraded"`
 }
 
-// Brief is the assembled context of one document.
+// Brief is the assembled context of one document. PresetVersion is the revision
+// of the preset the corpus is written against, left out where the configuration
+// names none.
+// Related and Suppressed are the normative neighbourhood, and are left out
+// entirely for a configuration that declares none of what they read.
 type Brief struct {
-	SchemaVersion int     `json:"schema_version"`
-	Ref           Entry   `json:"ref"`
-	ResolvesTo    []Entry `json:"resolves_to"`
-	Ancestors     []Entry `json:"ancestors"`
-	Descendants   []Entry `json:"descendants"`
-	Budget        Budget  `json:"budget"`
+	SchemaVersion int `json:"schema_version"`
+	PresetVersion int `json:"preset_version,omitempty"`
+	// AsOf is the day the brief was assembled for and At the revision it was
+	// read from, so a brief says which corpus at which moment it describes.
+	AsOf        string  `json:"as_of,omitempty"`
+	At          string  `json:"at,omitempty"`
+	Ref         Entry   `json:"ref"`
+	ResolvesTo  []Entry `json:"resolves_to"`
+	Related     []Entry `json:"related,omitempty"`
+	Ancestors   []Entry `json:"ancestors"`
+	Descendants []Entry `json:"descendants"`
+	// Suppressed is one line per conflict about this document that a recorded
+	// exception defeats — the reading that says why a permission and a
+	// prohibition are allowed to stand side by side.
+	Suppressed []string `json:"suppressed,omitempty"`
+	Budget     Budget   `json:"budget"`
 }
 
 // entries flattens a brief into the order it is read and the budget is spent in.
@@ -78,6 +110,9 @@ func (b *Brief) entries() []*Entry {
 	out := []*Entry{&b.Ref}
 	for i := range b.ResolvesTo {
 		out = append(out, &b.ResolvesTo[i])
+	}
+	for i := range b.Related {
+		out = append(out, &b.Related[i])
 	}
 	for i := range b.Ancestors {
 		out = append(out, &b.Ancestors[i])
@@ -98,23 +133,45 @@ func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief
 		opts.Section = DefaultSection
 	}
 
-	b := &Brief{SchemaVersion: SchemaVersion, ResolvesTo: []Entry{}, Ancestors: []Entry{}, Descendants: []Entry{}}
+	b := &Brief{
+		SchemaVersion: SchemaVersion,
+		PresetVersion: cfg.PresetVersion,
+		AsOf:          graph.AsOfDay(opts.AsOf),
+		At:            opts.At,
+		ResolvesTo:    []Entry{},
+		Ancestors:     []Entry{},
+		Descendants:   []Entry{},
+	}
 	ref, err := entry(g, opts.Section, id)
 	if err != nil {
 		return nil, err
 	}
 	b.Ref = ref
 
+	// What is binding is a projection over the whole graph, so it is evaluated
+	// once here rather than per candidate document.
+	binding := make(map[model.ID]bool)
+	for _, current := range graph.BindingSet(g, cfg, opts.AsOf) {
+		binding[current] = true
+	}
+
 	taken := map[model.ID]bool{id: true}
-	if b.ResolvesTo, err = entries(g, cfg, opts, taken, resolution(g, cfg, id), true); err != nil {
+	if b.ResolvesTo, err = entries(g, opts, taken, binding, resolution(g, cfg, id, opts.AsOf), true); err != nil {
 		return nil, err
 	}
+	// The normative neighbourhood is claimed before the walks, so a document
+	// that stands in one of these relations is reported as that rather than as
+	// whichever direction happened to reach it first.
+	if b.Related, err = relatedEntries(g, cfg, opts, taken, binding, id); err != nil {
+		return nil, err
+	}
+	b.Suppressed = suppressed(g, cfg, id, opts.AsOf)
 	ancestors := within(g, graph.Reverse(g, opts.Types...), id, opts.Depth)
-	if b.Ancestors, err = entries(g, cfg, opts, taken, ancestors, false); err != nil {
+	if b.Ancestors, err = entries(g, opts, taken, binding, ancestors, false); err != nil {
 		return nil, err
 	}
 	descendants := within(g, graph.Adjacency(g, opts.Types...), id, opts.Depth)
-	if b.Descendants, err = entries(g, cfg, opts, taken, descendants, false); err != nil {
+	if b.Descendants, err = entries(g, opts, taken, binding, descendants, false); err != nil {
 		return nil, err
 	}
 
@@ -124,11 +181,11 @@ func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief
 
 // resolution names the documents that currently stand in for a superseded
 // reference.
-func resolution(g *model.Graph, cfg config.Config, id model.ID) []model.ID {
+func resolution(g *model.Graph, cfg config.Config, id model.ID, asOf time.Time) []model.ID {
 	if _, ok := cfg.Edge(config.EdgeSupersedes); !ok {
 		return nil
 	}
-	resolved, err := graph.Resolve(g, id, config.EdgeSupersedes)
+	resolved, err := graph.ResolveAt(g, cfg, id, config.EdgeSupersedes, asOf)
 	if err != nil {
 		// A supersedes cycle is a validation finding; a brief still reports the
 		// document the caller asked about.
@@ -167,13 +224,13 @@ func within(g *model.Graph, adj map[model.ID][]model.ID, id model.ID, depth int)
 // entries builds the entries of one group, skipping the documents an earlier
 // group already reported. Binding documents alone are kept unless the caller
 // asked for all of them; the resolution is always kept.
-func entries(g *model.Graph, cfg config.Config, opts Options, taken map[model.ID]bool, ids []model.ID, always bool) ([]Entry, error) {
+func entries(g *model.Graph, opts Options, taken, binding map[model.ID]bool, ids []model.ID, always bool) ([]Entry, error) {
 	out := []Entry{}
 	for _, id := range ids {
 		if taken[id] {
 			continue
 		}
-		if !always && !opts.All && !graph.Binding(g, cfg, id) {
+		if !always && !opts.All && !binding[id] {
 			continue
 		}
 		taken[id] = true

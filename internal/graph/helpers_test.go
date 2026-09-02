@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -15,6 +17,12 @@ import (
 )
 
 var errInvalidFixtureFrontmatter = errors.New("yaml: fixture frontmatter does not decode")
+
+// testAsOf is the day the evaluation helpers are given for: none, which the
+// engine reads as today. A configuration whose kinds declare no period answers
+// the same on every day, which is what most of these tests are about; one that
+// is about a period names the day it means.
+var testAsOf = time.Time{}
 
 func testNode(id, status string) *model.Node {
 	return testNodeAttrs(id, status, nil)
@@ -254,4 +262,87 @@ func testMustNotHang(t *testing.T, within time.Duration, fn func()) {
 
 func testChainID(i int) string {
 	return fmt.Sprintf("n%05d", i)
+}
+
+// testFixturesDir is where the repository keeps its document corpora.
+func testFixturesDir() string {
+	return filepath.Join("..", "..", "testdata", "fixtures")
+}
+
+// testFixtureNames lists every corpus the repository carries, sorted, so a
+// property can be checked against all of them rather than a chosen few.
+func testFixtureNames(t *testing.T) []string {
+	t.Helper()
+	entries, err := os.ReadDir(testFixturesDir())
+	if err != nil {
+		t.Fatalf("read fixtures: %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			names = append(names, entry.Name())
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// testFixtureGraph builds one corpus under the ADR preset, the way the CLI
+// does, so a property is checked against documents a reader can open.
+func testFixtureGraph(t *testing.T, name string) (*model.Graph, config.Config) {
+	t.Helper()
+	cfg := config.ADRPreset()
+	cfg.Dir = filepath.Join(testFixturesDir(), name)
+	docs, err := parse.Dir(cfg.Dir, cfg)
+	if err != nil {
+		t.Fatalf("parse %s: %v", cfg.Dir, err)
+	}
+	return Build(docs, cfg), cfg
+}
+
+// testProjection declares one projection holding under a condition.
+func testProjection(name string, when config.Condition) config.ProjectionSpec {
+	return config.ProjectionSpec{Name: name, When: when}
+}
+
+// The kinds the multi-kind tests are written against: clauses whose identifiers
+// a file name can carry and which close their frontmatter, conformance tests
+// whose identifiers carry a slash, and deviations recorded against a clause.
+func testKindsConfig() config.Config {
+	cfg := config.ADRPreset()
+	cfg.Kinds = map[string]config.KindSpec{
+		"clause":    {Dir: "spec/clauses", ID: `^UZ-[A-Z]-\d{3}$`, Closed: true},
+		"conform":   {Dir: "spec/conform", ID: `^conform/[a-z0-9-]+$`},
+		"deviation": {Dir: "spec/deviations", ID: `^dev-\d{4}$`},
+	}
+	cfg.Edges = []config.EdgeSpec{
+		{Name: "supersedes", Key: "supersedes", Acyclic: true, Direction: config.DirectionForward, From: []string{"clause"}, To: []string{"clause"}},
+		{Name: "enforces", Key: "enforces", Direction: config.DirectionForward, From: []string{"conform"}, To: []string{"clause"}},
+	}
+	cfg.DerivedEdges = nil
+	cfg.Projections = nil
+	cfg.Binding = ""
+	cfg.Rules = nil
+	return cfg
+}
+
+// testKindDoc is one document of a multi-kind corpus, as the parser hands it
+// over: its kind is the directory's answer and its identity is already
+// resolved. An empty id is a file that yielded none.
+func testKindDoc(kind, id string, frontmatter map[string]any) *parse.Document {
+	doc := testDoc(id, frontmatter, "")
+	doc.Kind = kind
+	doc.Identity = id
+	doc.Name = id + ".md"
+	doc.Path = "spec/" + kind + "/" + doc.Name
+	return doc
+}
+
+// testKindNode is one node of a multi-kind graph, carrying the kind the way
+// buildNode records it: on the node and as an attribute rules can read.
+func testKindNode(kind, id, status string) *model.Node {
+	n := testNodeAttrs(id, status, map[string]any{config.KeyKind: kind})
+	n.Kind = kind
+	n.Path = "spec/" + kind + "/" + id + ".md"
+	return n
 }

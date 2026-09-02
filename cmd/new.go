@@ -4,9 +4,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/internal/lint"
 	"github.com/Kaikei-e/DocDag/internal/model"
 	"github.com/Kaikei-e/DocDag/internal/newdoc"
 	"github.com/Kaikei-e/DocDag/internal/parse"
@@ -18,20 +21,54 @@ const (
 	flagDependsOn  = "depends-on"
 	flagDryRun     = "dry-run"
 	flagID         = "id"
+	flagKind       = "kind"
+	flagFixture    = "fixture"
 )
 
 func newNewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "new <title>",
 		Short: "Create the next document and mark the ones it supersedes",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runNew,
+		// A title is what a document is created from, and --fixture creates a
+		// rule's fixture instead, whose documents are named after the rule.
+		Args: cobra.MaximumNArgs(1),
+		RunE: runNew,
 	}
 	cmd.Flags().StringArray(flagSupersedes, nil, "reference this document supersedes (repeatable)")
 	cmd.Flags().StringArray(flagDependsOn, nil, "reference this document depends on (repeatable)")
 	cmd.Flags().Bool(flagDryRun, false, "print what would be written and write nothing")
 	cmd.Flags().String(flagID, "", "identifier to create the document under, instead of the next free one")
+	cmd.Flags().String(flagKind, "", "kind of document to create, on a corpus that declares kinds")
+	cmd.Flags().String(flagFixture, "", "create the ruleid/ and ok/ fixture of a rule instead of a document")
+	cmd.Flags().String(flagFixtures, lint.DefaultFixtureDir, "directory --fixture writes the fixture into")
 	return cmd
+}
+
+// checkKind holds --kind to the corpus it was given for. Which kind to create,
+// under which identity rules and from which template, is a question a
+// multi-kind corpus has no default answer to, and guessing one would write a
+// document into the wrong directory; a corpus that declares no kinds has no
+// name to answer with at all.
+func checkKind(cfg config.Config, kind, id string) error {
+	switch {
+	case cfg.Multikind() && kind == "":
+		return domainErr("new requires --kind on a multi-kind corpus, which declares %s",
+			strings.Join(cfg.KindNames(), ", "))
+	case !cfg.Multikind() && kind != "":
+		return domainErr("--kind %q describes nothing on a corpus that declares no kinds", kind)
+	case kind == "":
+		return nil
+	}
+	spec, declared := cfg.Kind(kind)
+	if !declared {
+		return domainErr("unknown kind %q, the configuration declares %s", kind, strings.Join(cfg.KindNames(), ", "))
+	}
+	// A declared identifier pattern is a spelling rather than a sequence, so
+	// there is no next one to take: the caller has to say which.
+	if spec.ID != "" && id == "" {
+		return domainErr("kind %q reads identifiers as %s, which nothing counts up: pass --%s", kind, spec.ID, flagID)
+	}
+	return nil
 }
 
 func runNew(cmd *cobra.Command, args []string) error {
@@ -40,6 +77,16 @@ func runNew(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	flags := cmd.Flags()
+	fixture, err := flags.GetString(flagFixture)
+	if err != nil {
+		return usageErr("%v", err)
+	}
+	if fixture != "" {
+		return runNewFixture(cmd, fixture, format)
+	}
+	if len(args) != 1 {
+		return usageErr("new takes a title, or --%s <rule>", flagFixture)
+	}
 	supersedes, err := flags.GetStringArray(flagSupersedes)
 	if err != nil {
 		return usageErr("%v", err)
@@ -56,15 +103,22 @@ func runNew(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return usageErr("%v", err)
 	}
+	kind, err := flags.GetString(flagKind)
+	if err != nil {
+		return usageErr("%v", err)
+	}
 	g, cfg, err := loadGraph(cmd)
 	if err != nil {
+		return err
+	}
+	if err := checkKind(cfg, kind, id); err != nil {
 		return err
 	}
 	root, err := os.Getwd()
 	if err != nil {
 		return ioErr(fmt.Errorf("working directory: %w", err))
 	}
-	req := newdoc.Request{ID: id, Title: args[0], Supersedes: supersedes, DependsOn: dependsOn}
+	req := newdoc.Request{ID: id, Kind: kind, Title: args[0], Supersedes: supersedes, DependsOn: dependsOn}
 	plan, err := newdoc.NewPlan(g, cfg, req)
 	if err != nil {
 		return creationErr(err)

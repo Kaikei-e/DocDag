@@ -322,7 +322,7 @@ func TestReferenceOverlayIsDistinctFromTypedEdges(t *testing.T) {
 			{Source: "0002", Target: "0001", Type: config.EdgeSupersedes, Origin: model.OriginStructured},
 			{Source: "0002", Target: "0001", Type: "", Origin: model.OriginReference},
 		}
-		if !slices.Equal(doc.Links, want) {
+		if !slices.EqualFunc(doc.Links, want, testEqualLinks) {
 			t.Errorf("links = %+v, want %+v", doc.Links, want)
 		}
 	})
@@ -394,7 +394,7 @@ func TestEdgeFilterNarrowsTheConnectedSet(t *testing.T) {
 		{Source: "0002", Target: "0001", Type: config.EdgeSupersedes, Origin: model.OriginStructured},
 		{Source: "0004", Target: "0002", Type: config.EdgeSupersedes, Origin: model.OriginStructured},
 	}
-	if !slices.Equal(doc.Links, want) {
+	if !slices.EqualFunc(doc.Links, want, testEqualLinks) {
 		t.Errorf("links = %+v, want %+v", doc.Links, want)
 	}
 }

@@ -420,26 +420,26 @@ func TestBinding(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Binding(g, cfg, model.ID(tt.id)); got != tt.want {
+			if got := Binding(g, cfg, model.ID(tt.id), testAsOf); got != tt.want {
 				t.Fatalf("Binding(%s) = %v, want %v", tt.id, got, tt.want)
 			}
 		})
 	}
 
 	t.Run("BindingSet lists every binding document sorted", func(t *testing.T) {
-		testAssertIDs(t, "BindingSet", BindingSet(g, cfg), testIDs("0002", "0004"))
+		testAssertIDs(t, "BindingSet", BindingSet(g, cfg, testAsOf), testIDs("0002", "0004"))
 	})
 
 	t.Run("BindingSet is empty when nothing is accepted", func(t *testing.T) {
 		none := testGraph([]*model.Node{testNode("0001", config.StatusProposed)}, nil, nil)
 
-		testAssertIDs(t, "BindingSet", BindingSet(none, cfg), nil)
+		testAssertIDs(t, "BindingSet", BindingSet(none, cfg, testAsOf), nil)
 	})
 
 	t.Run("a status that only opens with a vocabulary word is not binding", func(t *testing.T) {
 		prose := testGraph([]*model.Node{testNode("0001", "accepted by the architecture board")}, nil, nil)
 
-		testAssertIDs(t, "BindingSet", BindingSet(prose, cfg), nil)
+		testAssertIDs(t, "BindingSet", BindingSet(prose, cfg, testAsOf), nil)
 	})
 }
 
@@ -565,4 +565,95 @@ func testDeepChainGraph(n int) *model.Graph {
 		edges = append(edges, testEdge(testChainID(i+1), testChainID(i), config.EdgeSupersedes))
 	}
 	return testGraph(nodes, edges, nil)
+}
+
+func TestBindingSetAnswersTheBuiltInDefinition(t *testing.T) {
+	// The binding set moved from code into the ADR preset's projection. The two
+	// have to agree on every corpus the repository carries, or a preset change
+	// nobody asked for went out with it.
+	cfg := config.ADRPreset()
+	for _, name := range testFixtureNames(t) {
+		t.Run(name, func(t *testing.T) {
+			g, _ := testFixtureGraph(t, name)
+
+			written := bindingByStatus(g, cfg)
+			want := []model.ID{}
+			for _, id := range g.NodeIDs() {
+				if written[id] {
+					want = append(want, id)
+				}
+			}
+
+			testAssertIDs(t, "BindingSet", BindingSet(g, cfg, testAsOf), want)
+			for _, id := range g.NodeIDs() {
+				if got := Binding(g, cfg, id, testAsOf); got != written[id] {
+					t.Fatalf("Binding(%s) = %v, want %v", id, got, written[id])
+				}
+			}
+		})
+	}
+}
+
+func TestBindingWithoutABindingProjection(t *testing.T) {
+	g := testGraph(
+		[]*model.Node{
+			testNode("0001", config.StatusSuperseded),
+			testNode("0002", config.StatusAccepted),
+			testNode("0003", config.StatusProposed),
+		},
+		[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+		nil,
+	)
+
+	t.Run("a configuration that cleared its projections falls back", func(t *testing.T) {
+		cleared := config.ADRPreset()
+		cleared.Projections = []config.ProjectionSpec{}
+
+		testAssertIDs(t, "BindingSet", BindingSet(g, cleared, testAsOf), testIDs("0002"))
+		if !Binding(g, cleared, "0002", testAsOf) || Binding(g, cleared, "0001", testAsOf) {
+			t.Fatal("Binding disagrees with the built-in definition")
+		}
+	})
+
+	t.Run("a configuration naming no binding falls back", func(t *testing.T) {
+		unnamed := config.ADRPreset()
+		unnamed.Binding = ""
+
+		testAssertIDs(t, "BindingSet", BindingSet(g, unnamed, testAsOf), testIDs("0002"))
+	})
+
+	t.Run("a projection of its own replaces the definition", func(t *testing.T) {
+		own := config.ADRPreset()
+		own.Projections = []config.ProjectionSpec{{
+			Name: "proposed_only",
+			When: config.Condition{Attr: map[string]config.AttrCondition{
+				config.DefaultStatusField: testAttrEq(config.StatusProposed),
+			}},
+		}}
+		own.Binding = "proposed_only"
+
+		testAssertIDs(t, "BindingSet", BindingSet(g, own, testAsOf), testIDs("0003"))
+		if !Binding(g, own, "0003", testAsOf) || Binding(g, own, "0002", testAsOf) {
+			t.Fatal("Binding does not follow the configured projection")
+		}
+	})
+}
+
+func TestBindingCountsAnInboundEdgeFromAnUnknownDocument(t *testing.T) {
+	// A "superseded by 0099" status derives an inbound supersedes edge from a
+	// document nobody wrote. The dangling reference is a finding of its own;
+	// what the edge says about this document stands either way.
+	g := testGraph(
+		[]*model.Node{testNode("0001", config.StatusAccepted)},
+		[]model.Edge{testDerivedEdge("0099", "0001", config.EdgeSupersedes)},
+		nil,
+	)
+	cfg := config.ADRPreset()
+
+	if Binding(g, cfg, "0001", testAsOf) {
+		t.Fatal("Binding = true, want an inbound supersedes from an unknown document to un-bind it")
+	}
+	if got := BindingSet(g, cfg, testAsOf); len(got) != 0 {
+		t.Fatalf("BindingSet = %v, want none", got)
+	}
 }

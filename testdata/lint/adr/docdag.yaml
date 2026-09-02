@@ -1,0 +1,4 @@
+# The configuration the shipped adr fixtures are evaluated under. A corpus that
+# declares no kinds reads one directory of documents, so each ruleid/ and ok/
+# directory is that corpus.
+preset: adr

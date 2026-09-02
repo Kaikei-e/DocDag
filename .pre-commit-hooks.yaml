@@ -6,3 +6,11 @@
   pass_filenames: false
   always_run: false
   files: '\.md$|docdag\.ya?ml$'
+- id: docdag-lint
+  name: docdag lint
+  description: Report contradictions, vacuity and untested rules in docdag.yaml.
+  entry: docdag lint
+  language: golang
+  pass_filenames: false
+  always_run: false
+  files: 'docdag\.ya?ml$'

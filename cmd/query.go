@@ -27,16 +27,14 @@ func newQueryCmd() *cobra.Command {
 	cmd.Flags().String(flagEdge, "", "restrict the walk to one edge type")
 	cmd.Flags().Bool(flagIncludeRefs, false, "overlay reference-layer neighbours")
 	cmd.Flags().Bool(flagBinding, false, "list every binding document")
+	addAsOfFlag(cmd, "today")
+	addAtFlag(cmd)
 	addFieldsFlag(cmd)
 	return cmd
 }
 
 func runQuery(cmd *cobra.Command, args []string) error {
 	format, err := outputFormat(cmd, formatText, formatJSON)
-	if err != nil {
-		return err
-	}
-	fields, err := recordFields(cmd)
 	if err != nil {
 		return err
 	}
@@ -77,7 +75,17 @@ func runQuery(cmd *cobra.Command, args []string) error {
 			flagBinding, flagAncestors, flagDescendants, flagEdge, flagIncludeRefs)
 	}
 
-	g, cfg, err := loadGraph(cmd)
+	asOf, err := asOfToday(cmd)
+	if err != nil {
+		return err
+	}
+	c, err := loadCorpus(cmd)
+	if err != nil {
+		return err
+	}
+	defer c.close()
+	g, cfg := c.graph, c.cfg
+	fields, err := recordFields(cmd, cfg)
 	if err != nil {
 		return err
 	}
@@ -87,7 +95,12 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		if err := requireSupersedes(cfg); err != nil {
 			return err
 		}
-		records := render.Records(g, graph.BindingSet(g, cfg))
+		// The binding set has a default column set of its own, which a caller
+		// naming columns replaces like any other default.
+		if !flags.Changed(flagFields) {
+			fields = bindingColumns(cfg)
+		}
+		records := withColumns(g, cfg, render.Records(g, graph.BindingSet(g, cfg, asOf)), fields, asOf)
 		if format == formatJSON {
 			err = render.RecordsJSON(out, records)
 		} else {
@@ -117,7 +130,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return domainErr("query %s: %v", id, err)
 	}
-	records := render.QueryRecords(g, results)
+	records := withColumns(g, cfg, render.QueryRecords(g, results), fields, asOf)
 	if format == formatJSON {
 		err = render.RecordsJSON(out, records)
 	} else {

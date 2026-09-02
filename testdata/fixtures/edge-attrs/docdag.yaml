@@ -1,0 +1,22 @@
+# A corpus whose edges carry attributes: supersedes states a reason from a
+# closed vocabulary, measures records how a run scored a decision, and
+# depends-on declares no attributes at all, so it still takes plain references
+# alone.
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+    attrs:
+      reason: { required: true, one_of: [recurrence, premise-collapse, conflict, vocabulary] }
+  - name: measures
+    key: measures
+    direction: forward
+    attrs:
+      agreement: { required: true, type: number }
+      model: { required: true, type: string }
+      expires: { required: true, type: date }
+  - name: depends-on
+    key: depends-on
+    acyclic: true
+    direction: forward

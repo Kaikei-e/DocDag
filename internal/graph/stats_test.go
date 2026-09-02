@@ -8,11 +8,12 @@ import (
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/internal/parse"
 )
 
 func TestComputeStats(t *testing.T) {
 	cfg := config.ADRPreset()
-	got := ComputeStats(testStatsFixture(), cfg)
+	got := ComputeStats(testStatsFixture(), cfg, testAsOf)
 
 	t.Run("documents are counted", func(t *testing.T) {
 		if got.Documents != 5 {
@@ -97,7 +98,7 @@ func TestComputeStatsTopReferenced(t *testing.T) {
 			{ID: "0005", Count: 1},
 		}
 
-		if got := ComputeStats(g, cfg).TopReferenced; !slices.Equal(got, want) {
+		if got := ComputeStats(g, cfg, testAsOf).TopReferenced; !slices.Equal(got, want) {
 			t.Fatalf("top referenced = %+v, want %+v (never-referenced documents are omitted)", got, want)
 		}
 	})
@@ -117,7 +118,7 @@ func TestComputeStatsTopReferenced(t *testing.T) {
 		}
 		g := testGraph(nodes, nil, refs)
 
-		got := ComputeStats(g, cfg).TopReferenced
+		got := ComputeStats(g, cfg, testAsOf).TopReferenced
 
 		if len(got) != TopReferencedLimit {
 			t.Fatalf("top referenced has %d entries, want %d", len(got), TopReferencedLimit)
@@ -135,7 +136,7 @@ func TestComputeStatsTopReferenced(t *testing.T) {
 func TestComputeStatsEmptyGraph(t *testing.T) {
 	cfg := config.ADRPreset()
 
-	got := ComputeStats(testGraph(nil, nil, nil), cfg)
+	got := ComputeStats(testGraph(nil, nil, nil), cfg, testAsOf)
 
 	if got.Documents != 0 || got.Binding != 0 || got.Orphans != 0 {
 		t.Fatalf("stats = %+v, want an empty corpus", got)
@@ -159,11 +160,145 @@ func TestComputeStatsOnCyclicGraph(t *testing.T) {
 	cfg := config.ADRPreset()
 
 	var got Statistics
-	testMustNotHang(t, 5*time.Second, func() { got = ComputeStats(testSupersedesCycle(), cfg) })
+	testMustNotHang(t, 5*time.Second, func() { got = ComputeStats(testSupersedesCycle(), cfg, testAsOf) })
 
 	if got.Documents != 3 {
 		t.Fatalf("documents = %d, want 3", got.Documents)
 	}
+}
+
+func TestComputeFieldUsage(t *testing.T) {
+	cfg := config.ADRPreset()
+	cfg.Fields = map[string]config.FieldSpec{
+		"owner": {Deprecated: true, MigrateTo: "owned-by"},
+		"team":  {Deprecated: true},
+	}
+	g := testGraph(
+		[]*model.Node{
+			testNodeAttrs("0001", config.StatusAccepted, map[string]any{"owner": "platform"}),
+			testNodeAttrs("0002", config.StatusAccepted, map[string]any{"owner": "payments", "tags": []any{"legacy"}}),
+			testNodeAttrs("0003", config.StatusAccepted, nil),
+		},
+		nil, nil,
+	)
+	changed := map[string]string{"0001.md": "2026-03-04", "0002.md": "2026-01-02"}
+
+	got := ComputeFieldUsage(g, cfg, changed)
+
+	t.Run("fields count down, ties alphabetically", func(t *testing.T) {
+		want := []string{"status", "owner", "tags", "team"}
+		names := make([]string, 0, len(got))
+		for _, u := range got {
+			names = append(names, u.Field)
+		}
+		if !slices.Equal(names, want) {
+			t.Fatalf("fields = %v, want %v", names, want)
+		}
+	})
+
+	t.Run("a written field carries its count and its latest change", func(t *testing.T) {
+		owner := testFieldUsage(t, got, "owner")
+
+		if owner.Documents != 2 {
+			t.Errorf("documents = %d, want 2", owner.Documents)
+		}
+		if owner.LastChange != "2026-03-04" {
+			t.Errorf("last change = %q, want the most recent of the two", owner.LastChange)
+		}
+		if !owner.Deprecated {
+			t.Error("deprecated = false, want the retirement flagged")
+		}
+	})
+
+	t.Run("a declared field nobody writes is still a row", func(t *testing.T) {
+		// A migration is finished exactly when the count reaches zero, so the
+		// row has to outlive the last document that carried it.
+		team := testFieldUsage(t, got, "team")
+
+		if team.Documents != 0 || team.LastChange != "" {
+			t.Fatalf("team = %+v, want an empty row", team)
+		}
+	})
+
+	t.Run("a field nobody declared is counted and not flagged", func(t *testing.T) {
+		tags := testFieldUsage(t, got, "tags")
+
+		if tags.Documents != 1 || tags.Deprecated {
+			t.Fatalf("tags = %+v, want one document and no retirement", tags)
+		}
+	})
+
+	t.Run("a corpus outside a repository reports counts without dates", func(t *testing.T) {
+		for _, u := range ComputeFieldUsage(g, cfg, nil) {
+			if u.LastChange != "" {
+				t.Fatalf("%s last change = %q, want none where git answered nothing", u.Field, u.LastChange)
+			}
+		}
+	})
+}
+
+// TestComputeStatsOverAStandard covers what a corpus of clauses adds to the
+// degree report: how the subjects are cut, at what strengths the standard
+// speaks, and how many conflicts it is carrying an exception for.
+func TestComputeStatsOverAStandard(t *testing.T) {
+	cfg := config.SpecPreset()
+	g := Build([]*parse.Document{
+		testTopicDoc(testTopic),
+		testTopicDoc(testOtherTopic),
+		testClause("UZ-V-001", config.ModalityMAY, []string{testTopic}, map[string]any{
+			config.EdgeExcepts.String(): []any{
+				map[string]any{"ref": "UZ-V-002", config.AttrScope: "only where the run is calibrated"},
+			},
+		}),
+		testClause("UZ-V-002", config.ModalitySHOULDNOT, []string{testTopic}, nil),
+		testClause("UZ-V-003", config.ModalitySHOULD, []string{testOtherTopic}, nil),
+	}, cfg)
+
+	stats := ComputeStats(g, cfg, testAsOf)
+
+	t.Run("the subjects rank by the clauses hanging off them", func(t *testing.T) {
+		want := []TopicCount{{Topic: testTopic, Clauses: 2}, {Topic: testOtherTopic, Clauses: 1}}
+		if !slices.Equal(stats.Topics, want) {
+			t.Errorf("topics = %+v, want %+v", stats.Topics, want)
+		}
+	})
+
+	t.Run("every declared modality is a row, at zero where nobody states it", func(t *testing.T) {
+		want := []ModalityCount{
+			{Modality: config.ModalityMUST, Count: 0},
+			{Modality: config.ModalityMUSTNOT, Count: 0},
+			{Modality: config.ModalitySHOULD, Count: 1},
+			{Modality: config.ModalitySHOULDNOT, Count: 1},
+			{Modality: config.ModalityMAY, Count: 1},
+		}
+		if !slices.Equal(stats.Modalities, want) {
+			t.Errorf("modalities = %+v, want %+v", stats.Modalities, want)
+		}
+	})
+
+	t.Run("the conflicts an exception answers are counted", func(t *testing.T) {
+		if stats.SuppressedConflicts != 1 {
+			t.Errorf("suppressed conflicts = %d, want the one the excepts edge answers", stats.SuppressedConflicts)
+		}
+	})
+
+	t.Run("a corpus without the vocabulary reports none of it", func(t *testing.T) {
+		adr := ComputeStats(testStatsFixture(), config.ADRPreset(), testAsOf)
+		if len(adr.Topics) != 0 || len(adr.Modalities) != 0 || adr.SuppressedConflicts != 0 {
+			t.Errorf("stats = %+v, want no subject or modality rows: the adr preset declares neither", adr)
+		}
+	})
+}
+
+func testFieldUsage(t *testing.T, usage []FieldUsage, field string) FieldUsage {
+	t.Helper()
+	for _, u := range usage {
+		if u.Field == field {
+			return u
+		}
+	}
+	t.Fatalf("field %q is not in %+v", field, usage)
+	return FieldUsage{}
 }
 
 // testStatsFixture chains 0003 -> 0002 -> 0001 by supersedes, hangs a depends-on

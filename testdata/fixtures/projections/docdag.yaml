@@ -1,0 +1,64 @@
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+  - name: depends-on
+    key: depends-on
+    acyclic: true
+    direction: forward
+  - name: enforces
+    key: enforces
+    direction: forward
+
+projections:
+  - name: enforced
+    when:
+      inbound: enforces
+  - name: current
+    when:
+      not_inbound: supersedes
+      attr:
+        status: { eq: accepted }
+  - name: effective_must
+    when:
+      attr:
+        level: { eq: MUST }
+        current: { eq: "true" }
+        enforced: { eq: "true" }
+  - name: settled
+    any_of:
+      - when:
+          attr:
+            effective_must: { eq: "true" }
+      - when:
+          attr:
+            level: { eq: SHOULD }
+            current: { eq: "true" }
+
+binding: current
+
+rules:
+  - name: heavily_depended_on
+    severity: warn
+    when:
+      inbound: { edge: depends-on, min: 2 }
+    message: "carries two or more dependants; changing it is expensive"
+  - name: orphan_must
+    severity: warn
+    when:
+      attr:
+        level: { eq: MUST }
+        current: { eq: "true" }
+        enforced: { not: "true" }
+    message: "is a current MUST that no conformance test enforces"
+  - name: stale_dependency
+    severity: warn
+    when:
+      attr:
+        status: { eq: accepted }
+      via:
+        edge: depends-on
+        attr:
+          status: { eq: deprecated }
+    message: "is accepted but depends on a deprecated decision"

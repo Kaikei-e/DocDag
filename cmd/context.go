@@ -27,6 +27,8 @@ func newContextCmd() *cobra.Command {
 	cmd.Flags().Int(flagBudget, brief.DefaultBudget, "token budget for the excerpts; 0 is unbounded")
 	cmd.Flags().String(flagSection, brief.DefaultSection, "heading whose first paragraph is quoted")
 	cmd.Flags().Bool(flagAll, false, "include documents that are not binding")
+	addAsOfFlag(cmd, "today")
+	addAtFlag(cmd)
 	return cmd
 }
 
@@ -54,10 +56,16 @@ func runContext(cmd *cobra.Command, args []string) error {
 		return usageErr("%v", err)
 	}
 
-	g, cfg, err := loadGraph(cmd)
+	if opts.AsOf, err = asOfToday(cmd); err != nil {
+		return err
+	}
+	c, err := loadCorpus(cmd)
 	if err != nil {
 		return err
 	}
+	defer c.close()
+	g, cfg := c.graph, c.cfg
+	opts.At = c.at
 	for _, edge := range edges {
 		if _, ok := cfg.Edge(model.EdgeType(edge)); !ok {
 			return usageErr("unknown edge type %q", edge)

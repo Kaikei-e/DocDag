@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -346,7 +347,7 @@ func TestCheckInverse(t *testing.T) {
 		g := Build(docs, cfg)
 
 		want := []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}
-		if !slices.Equal(g.Edges, want) {
+		if !slices.EqualFunc(g.Edges, want, model.Edge.Equal) {
 			t.Fatalf("edges = %+v, want %+v", g.Edges, want)
 		}
 	})
@@ -575,6 +576,27 @@ func TestCheckCardinality(t *testing.T) {
 		}
 	})
 
+	t.Run("an edge that names its endpoint kinds is bounded over those kinds alone", func(t *testing.T) {
+		// A lower bound is the one bound a document with no such key can
+		// violate, so without the scoping min_outbound: 1 on an edge from one
+		// kind would report every document of every other kind — the edge's own
+		// targets included.
+		cfg := testKindsConfig()
+		cfg.Edges[1].MinOutbound = 1
+		g := Build([]*parse.Document{
+			testKindDoc("conform", "conform/uz-v-001", map[string]any{"enforces": []any{"UZ-V-001"}}),
+			testKindDoc("conform", "conform/uz-v-002", nil),
+			testKindDoc("clause", "UZ-V-001", nil),
+		}, cfg)
+
+		got := CheckCardinality(g, cfg)
+
+		f := testAssertSingleFinding(t, got, model.RuleCardinality, model.SeverityError, "conform/uz-v-002")
+		if !strings.Contains(f.Detail, "min_outbound") {
+			t.Errorf("detail = %q, want the bound named", f.Detail)
+		}
+	})
+
 	t.Run("findings are sorted", func(t *testing.T) {
 		cfg := bounded(func(s *config.EdgeSpec) { s.MinOutbound = 1 })
 		g := testGraph(
@@ -709,7 +731,7 @@ func TestCheck(t *testing.T) {
 		nil,
 	)
 
-	got := Check(g, cfg)
+	got := Check(g, cfg, time.Time{})
 
 	t.Run("every built-in check contributes", func(t *testing.T) {
 		for _, rule := range []string{model.RuleCycle, model.RuleDanglingRef, model.RuleUnknownStatus} {
@@ -726,6 +748,7 @@ func TestCheck(t *testing.T) {
 
 func TestMatchCondition(t *testing.T) {
 	g := testRulesFixture()
+	cfg := config.ADRPreset()
 
 	tests := []struct {
 		name string
@@ -735,19 +758,19 @@ func TestMatchCondition(t *testing.T) {
 	}{
 		{
 			name: "inbound matches a document with that inbound edge type",
-			cond: config.Condition{Inbound: config.EdgeSupersedes.String()},
+			cond: config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			id:   "0001",
 			want: true,
 		},
 		{
 			name: "inbound does not match a document without one",
-			cond: config.Condition{Inbound: config.EdgeSupersedes.String()},
+			cond: config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			id:   "0002",
 			want: false,
 		},
 		{
 			name: "inbound is edge-type specific",
-			cond: config.Condition{Inbound: config.EdgeSupersedes.String()},
+			cond: config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			id:   "0003",
 			want: false,
 		},
@@ -765,13 +788,13 @@ func TestMatchCondition(t *testing.T) {
 		},
 		{
 			name: "outbound matches a document with that outbound edge type",
-			cond: config.Condition{Outbound: config.EdgeSupersedes.String()},
+			cond: config.Condition{Outbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			id:   "0002",
 			want: true,
 		},
 		{
 			name: "outbound does not match a sink",
-			cond: config.Condition{Outbound: config.EdgeSupersedes.String()},
+			cond: config.Condition{Outbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			id:   "0001",
 			want: false,
 		},
@@ -841,7 +864,7 @@ func TestMatchCondition(t *testing.T) {
 		{
 			name: "edge and attribute clauses are ANDed",
 			cond: config.Condition{
-				Inbound: config.EdgeSupersedes.String(),
+				Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()},
 				Attr:    map[string]config.AttrCondition{"status": testAttrNot(config.StatusSuperseded)},
 			},
 			id:   "0001",
@@ -850,7 +873,7 @@ func TestMatchCondition(t *testing.T) {
 		{
 			name: "a failing clause fails the whole condition",
 			cond: config.Condition{
-				Inbound: config.EdgeSupersedes.String(),
+				Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()},
 				Attr:    map[string]config.AttrCondition{"status": testAttrNot(config.StatusSuperseded)},
 			},
 			id:   "0003",
@@ -872,7 +895,7 @@ func TestMatchCondition(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := MatchCondition(g, tt.cond, model.ID(tt.id)); got != tt.want {
+			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id), testAsOf); got != tt.want {
 				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
 			}
 		})
@@ -953,9 +976,10 @@ func TestMatchConditionOnListAttributes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			n := testNodeAttrs("0001", config.StatusAccepted, tt.attrs)
 			g := testGraph([]*model.Node{n}, nil, nil)
+			cfg := config.ADRPreset()
 			cond := config.Condition{Attr: map[string]config.AttrCondition{testListAttrsKey: tt.cond}}
 
-			if got := MatchCondition(g, cond, "0001"); got != tt.want {
+			if got := MatchCondition(g, cfg, cond, "0001", testAsOf); got != tt.want {
 				t.Fatalf("MatchCondition = %v, want %v", got, tt.want)
 			}
 		})
@@ -973,6 +997,7 @@ func TestMatchConditionWithAlternativesAndNegation(t *testing.T) {
 		[]model.Edge{testEdge("0003", "0004", config.EdgeSupersedes)},
 		nil,
 	)
+	cfg := config.ADRPreset()
 	retired := config.Condition{
 		AnyOf: []config.Condition{
 			{Attr: map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusDeprecated)}},
@@ -1002,19 +1027,19 @@ func TestMatchConditionWithAlternativesAndNegation(t *testing.T) {
 		{
 			name: "a top-level clause can veto every alternative",
 			cond: config.Condition{
-				Inbound: config.EdgeSupersedes.String(),
+				Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()},
 				AnyOf:   retired.AnyOf,
 			},
 			id: "0001",
 		},
 		{
 			name: "a negation of an edge clause",
-			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeSupersedes.String()}},
+			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}}},
 			id:   "0004",
 		},
 		{
 			name: "a negation that does not hold leaves the condition alone",
-			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeSupersedes.String()}},
+			cond: config.Condition{Not: &config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}}},
 			id:   "0003",
 			want: true,
 		},
@@ -1022,7 +1047,7 @@ func TestMatchConditionWithAlternativesAndNegation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := MatchCondition(g, tt.cond, tt.id); got != tt.want {
+			if got := MatchCondition(g, cfg, tt.cond, tt.id, testAsOf); got != tt.want {
 				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
 			}
 		})
@@ -1042,7 +1067,7 @@ func TestEvalRuleLocatesANestedAttributeClause(t *testing.T) {
 		Message: "is retired without an explanation",
 	}
 
-	f := testAssertSingleFinding(t, EvalRule(g, config.ADRPreset(), rule), rule.Name, model.SeverityWarn, "0001")
+	f := testAssertSingleFinding(t, EvalRule(g, config.ADRPreset(), rule, testAsOf), rule.Name, model.SeverityWarn, "0001")
 	if f.Location != testNodeLocation("0001", testStatusLine) {
 		t.Errorf("location = %+v, want the status line the alternative reads", f.Location)
 	}
@@ -1059,7 +1084,7 @@ func TestEvalRule(t *testing.T) {
 			{Severity: drift.Severity, Rule: drift.Name, ID: "0004", Detail: drift.Message, Location: testNodeLocation("0004", testStatusLine)},
 		}
 
-		testAssertFindings(t, "EvalRule", EvalRule(g, cfg, drift), want)
+		testAssertFindings(t, "EvalRule", EvalRule(g, cfg, drift, testAsOf), want)
 	})
 
 	t.Run("a rule matching nothing reports nothing", func(t *testing.T) {
@@ -1070,7 +1095,7 @@ func TestEvalRule(t *testing.T) {
 			Message:  "no document has this status",
 		}
 
-		if got := EvalRule(g, cfg, unmatched); len(got) != 0 {
+		if got := EvalRule(g, cfg, unmatched, testAsOf); len(got) != 0 {
 			t.Fatalf("EvalRule = %+v, want none", got)
 		}
 	})
@@ -1088,7 +1113,7 @@ func TestEvalRules(t *testing.T) {
 			{Severity: orphan.Severity, Rule: orphan.Name, ID: "0003", Detail: orphan.Message, Location: testNodeLocation("0003", testStatusLine)},
 		}
 
-		testAssertFindings(t, "EvalRules", EvalRules(g, cfg), want)
+		testAssertFindings(t, "EvalRules", EvalRules(g, cfg, testAsOf), want)
 	})
 
 	t.Run("configured rules replace the preset rules", func(t *testing.T) {
@@ -1097,7 +1122,7 @@ func TestEvalRules(t *testing.T) {
 			Name:     "accepted_with_dependencies",
 			Severity: model.SeverityWarn,
 			When: config.Condition{
-				Outbound: config.EdgeDependsOn.String(),
+				Outbound: config.EdgeCondition{Edge: config.EdgeDependsOn.String()},
 				Attr:     map[string]config.AttrCondition{"status": testAttrEq(config.StatusAccepted)},
 			},
 			Message: "an accepted decision still depends on another",
@@ -1110,14 +1135,14 @@ func TestEvalRules(t *testing.T) {
 			Location: testNodeLocation("0002", testStatusLine),
 		}}
 
-		testAssertFindings(t, "EvalRules", EvalRules(g, custom), want)
+		testAssertFindings(t, "EvalRules", EvalRules(g, custom, testAsOf), want)
 	})
 
 	t.Run("no configured rules report nothing", func(t *testing.T) {
 		none := config.ADRPreset()
 		none.Rules = nil
 
-		if got := EvalRules(g, none); len(got) != 0 {
+		if got := EvalRules(g, none, testAsOf); len(got) != 0 {
 			t.Fatalf("EvalRules = %+v, want none", got)
 		}
 	})
@@ -1145,7 +1170,7 @@ func TestValidate(t *testing.T) {
 		Location: testNodeLocation("0004", 2),
 	}}
 
-	got := Validate(g, cfg)
+	got := Validate(g, cfg, time.Time{})
 
 	t.Run("structural checks, rules and build findings all appear", func(t *testing.T) {
 		want := []string{
@@ -1177,7 +1202,7 @@ func TestValidate(t *testing.T) {
 			nil,
 		)
 
-		if findings := Validate(clean, cfg); len(findings) != 0 {
+		if findings := Validate(clean, cfg, time.Time{}); len(findings) != 0 {
 			t.Fatalf("findings = %+v, want none", findings)
 		}
 	})
@@ -1409,7 +1434,7 @@ func TestEvalRuleLocatesTheClauseItRead(t *testing.T) {
 	t.Run("an attribute clause points at its key", func(t *testing.T) {
 		cfg := config.ADRPreset()
 
-		got := EvalRule(g, cfg, cfg.Rules[0])
+		got := EvalRule(g, cfg, cfg.Rules[0], testAsOf)
 
 		if len(got) == 0 {
 			t.Fatal("findings = none, want the drifted documents")
@@ -1423,11 +1448,11 @@ func TestEvalRuleLocatesTheClauseItRead(t *testing.T) {
 		rule := config.Rule{
 			Name:     "superseding",
 			Severity: model.SeverityWarn,
-			When:     config.Condition{Outbound: config.EdgeSupersedes.String()},
+			When:     config.Condition{Outbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String()}},
 			Message:  "supersedes another document",
 		}
 
-		got := EvalRule(g, config.ADRPreset(), rule)
+		got := EvalRule(g, config.ADRPreset(), rule, testAsOf)
 
 		if len(got) == 0 {
 			t.Fatal("findings = none, want the superseding document")
@@ -1458,4 +1483,442 @@ func TestSortFindingsOrdersByPathThenLine(t *testing.T) {
 	SortFindings(got)
 
 	testAssertFindings(t, "SortFindings", got, want)
+}
+
+// testDegreeFixture carries a fan-in of depends-on edges, one of them from a
+// document the corpus does not hold.
+func testDegreeFixture() *model.Graph {
+	return testGraph(
+		[]*model.Node{
+			testNode("0001", config.StatusAccepted),
+			testNode("0002", config.StatusAccepted),
+			testNode("0003", config.StatusAccepted),
+			testNode("0004", config.StatusAccepted),
+		},
+		[]model.Edge{
+			testEdge("0002", "0001", config.EdgeDependsOn),
+			testEdge("0003", "0001", config.EdgeDependsOn),
+			testEdge("0004", "0001", config.EdgeDependsOn),
+			testEdge("0002", "0003", config.EdgeDependsOn),
+			testEdge("0099", "0004", config.EdgeDependsOn),
+		},
+		nil,
+	)
+}
+
+func TestMatchConditionOnDegreeThresholds(t *testing.T) {
+	g := testDegreeFixture()
+	cfg := config.ADRPreset()
+	inbound := func(min, max *int) config.Condition {
+		return config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeDependsOn.String(), Min: min, Max: max}}
+	}
+
+	tests := []struct {
+		name string
+		cond config.Condition
+		id   string
+		want bool
+	}{
+		{name: "the string form is one edge or more", cond: config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeDependsOn.String()}}, id: "0001", want: true},
+		{name: "a minimum met exactly", cond: inbound(testGraphInt(3), nil), id: "0001", want: true},
+		{name: "a minimum missed by one", cond: inbound(testGraphInt(4), nil), id: "0001"},
+		{name: "a minimum on a document with one edge", cond: inbound(testGraphInt(1), nil), id: "0003", want: true},
+		{name: "a minimum on a document with none", cond: inbound(testGraphInt(1), nil), id: "0002"},
+		{name: "a maximum met exactly", cond: inbound(nil, testGraphInt(3)), id: "0001", want: true},
+		{name: "a maximum exceeded", cond: inbound(nil, testGraphInt(2)), id: "0001"},
+		{name: "a maximum still needs one edge", cond: inbound(nil, testGraphInt(3)), id: "0002"},
+		{name: "a window met", cond: inbound(testGraphInt(1), testGraphInt(1)), id: "0003", want: true},
+		{name: "a window missed from above", cond: inbound(testGraphInt(1), testGraphInt(2)), id: "0001"},
+		{
+			name: "an edge from a document the corpus does not hold still counts",
+			cond: inbound(testGraphInt(1), nil),
+			id:   "0004",
+			want: true,
+		},
+		{
+			name: "an outbound threshold counts the other direction",
+			cond: config.Condition{Outbound: config.EdgeCondition{Edge: config.EdgeDependsOn.String(), Min: testGraphInt(2)}},
+			id:   "0002",
+			want: true,
+		},
+		{
+			name: "a threshold is edge-type specific",
+			cond: config.Condition{Inbound: config.EdgeCondition{Edge: config.EdgeSupersedes.String(), Min: testGraphInt(1)}},
+			id:   "0001",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id), testAsOf); got != tt.want {
+				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+// testViaFixture carries one accepted document depending on a deprecated one,
+// one depending only on a current one, and one depending on a document the
+// corpus does not hold.
+func testViaFixture() *model.Graph {
+	return testGraph(
+		[]*model.Node{
+			testNode("0001", config.StatusAccepted),
+			testNode("0002", config.StatusDeprecated),
+			testNodeAttrs("0003", config.StatusAccepted, map[string]any{"owner": "platform"}),
+			testNode("0004", config.StatusAccepted),
+			testNode("0005", config.StatusAccepted),
+		},
+		[]model.Edge{
+			testEdge("0001", "0002", config.EdgeDependsOn),
+			testEdge("0001", "0003", config.EdgeDependsOn),
+			testEdge("0004", "0003", config.EdgeDependsOn),
+			testEdge("0005", "0099", config.EdgeDependsOn),
+		},
+		nil,
+	)
+}
+
+func TestMatchConditionOnOneHopClauses(t *testing.T) {
+	g := testViaFixture()
+	cfg := config.ADRPreset()
+	via := func(attr map[string]config.AttrCondition) config.Condition {
+		return config.Condition{Via: &config.ViaCondition{Edge: config.EdgeDependsOn.String(), Attr: attr}}
+	}
+	viaInbound := func(attr map[string]config.AttrCondition) config.Condition {
+		return config.Condition{ViaInbound: &config.ViaCondition{Edge: config.EdgeDependsOn.String(), Attr: attr}}
+	}
+	deprecated := map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusDeprecated)}
+	accepted := map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusAccepted)}
+
+	tests := []struct {
+		name string
+		cond config.Condition
+		id   string
+		want bool
+	}{
+		{name: "one neighbour satisfying the clause is enough", cond: via(deprecated), id: "0001", want: true},
+		{name: "no neighbour satisfying the clause", cond: via(deprecated), id: "0004"},
+		{name: "a document with no such edge at all", cond: via(deprecated), id: "0002"},
+		{
+			name: "a neighbour the corpus does not hold is not a witness",
+			cond: via(deprecated),
+			id:   "0005",
+		},
+		{name: "the inbound direction reads the other way", cond: viaInbound(accepted), id: "0003", want: true},
+		{name: "the inbound direction does not read the outbound edges", cond: viaInbound(accepted), id: "0001"},
+		{
+			name: "every attribute of the clause has to hold on one neighbour",
+			cond: via(map[string]config.AttrCondition{
+				config.DefaultStatusField: testAttrEq(config.StatusAccepted),
+				"owner":                   testAttrEq("platform"),
+			}),
+			id:   "0001",
+			want: true,
+		},
+		{
+			name: "no single neighbour holds every attribute",
+			cond: via(map[string]config.AttrCondition{
+				config.DefaultStatusField: testAttrEq(config.StatusDeprecated),
+				"owner":                   testAttrEq("platform"),
+			}),
+			id: "0001",
+		},
+		{
+			name: "an attribute the neighbour does not carry",
+			cond: via(map[string]config.AttrCondition{"owner": testAttrEq("storage")}),
+			id:   "0001",
+		},
+		{
+			name: "a negative clause is satisfied by a neighbour without the attribute",
+			cond: via(map[string]config.AttrCondition{"owner": testAttrNot("platform")}),
+			id:   "0001",
+			want: true,
+		},
+		{
+			name: "a clause without attributes asks only that a neighbour exists",
+			cond: via(nil),
+			id:   "0004",
+			want: true,
+		},
+		{name: "an unknown document matches nothing", cond: via(deprecated), id: "0099"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := MatchCondition(g, cfg, tt.cond, model.ID(tt.id), testAsOf); got != tt.want {
+				t.Fatalf("MatchCondition(%s) = %v, want %v", tt.id, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvalRuleLocatesAOneHopClauseAtTheEdgeKey(t *testing.T) {
+	g := testViaFixture()
+	cfg := config.ADRPreset()
+	rule := config.Rule{
+		Name:     "stale_dependency",
+		Severity: model.SeverityWarn,
+		When: config.Condition{Via: &config.ViaCondition{
+			Edge: config.EdgeDependsOn.String(),
+			Attr: map[string]config.AttrCondition{config.DefaultStatusField: testAttrEq(config.StatusDeprecated)},
+		}},
+		Message: "depends on a deprecated decision",
+	}
+
+	f := testAssertSingleFinding(t, EvalRule(g, cfg, rule, testAsOf), rule.Name, model.SeverityWarn, "0001")
+
+	if want := testNodeLocation("0001", testDependsOnLine); f.Location != want {
+		t.Fatalf("location = %+v, want %+v (the edge the reader can change)", f.Location, want)
+	}
+}
+
+func testGraphInt(v int) *int { return &v }
+
+func TestCheckDocumentsAcrossKinds(t *testing.T) {
+	cfg := testKindsConfig()
+
+	t.Run("a document takes the kind of its directory", func(t *testing.T) {
+		docs := []*parse.Document{testKindDoc("clause", "UZ-V-001", map[string]any{"kind": "clause", "status": "accepted"})}
+
+		if got := CheckDocuments(docs, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a written kind the directory disagrees with is an error", func(t *testing.T) {
+		docs := []*parse.Document{testKindDoc("clause", "UZ-V-001", map[string]any{"kind": "conform", "status": "accepted"})}
+
+		f := testAssertSingleFinding(t, CheckDocuments(docs, cfg), model.RuleKindMismatch, model.SeverityError, "UZ-V-001")
+		if want := `frontmatter kind "conform" disagrees with directory kind "clause"`; f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		if f.Location.Line != docs[0].KeyLines["kind"] {
+			t.Errorf("location = %+v, want the kind key on line %d", f.Location, docs[0].KeyLines["kind"])
+		}
+	})
+
+	t.Run("a document that writes no kind agrees with its directory", func(t *testing.T) {
+		docs := []*parse.Document{testKindDoc("clause", "UZ-V-001", map[string]any{"status": "accepted"})}
+
+		if got := CheckDocuments(docs, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a closed kind reports every key nobody declared, on its own line", func(t *testing.T) {
+		docs := []*parse.Document{
+			testKindDoc("clause", "UZ-V-001", map[string]any{"status": "accepted", "owner": "platform", "reviewer": "ana"}),
+		}
+
+		findings := testFindingsFor(CheckDocuments(docs, cfg), model.RuleUnknownField)
+
+		if len(findings) != 2 {
+			t.Fatalf("findings = %+v, want one per unknown key", findings)
+		}
+		for i, key := range []string{"owner", "reviewer"} {
+			if !strings.Contains(findings[i].Detail, `"`+key+`"`) {
+				t.Errorf("detail = %q, want it to name %q", findings[i].Detail, key)
+			}
+			if findings[i].Location.Line != docs[0].KeyLines[key] {
+				t.Errorf("%s location = %+v, want line %d", key, findings[i].Location, docs[0].KeyLines[key])
+			}
+		}
+		if want := "declared: date, enforces, id, kind, status, supersedes, title"; !strings.HasSuffix(findings[0].Detail, want) {
+			t.Errorf("detail = %q, want it to end with %q", findings[0].Detail, want)
+		}
+	})
+
+	t.Run("an open kind ignores the keys nobody declared", func(t *testing.T) {
+		docs := []*parse.Document{
+			testKindDoc("conform", "conform/check", map[string]any{"status": "accepted", "owner": "platform"}),
+		}
+
+		if got := CheckDocuments(docs, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none: the kind is open", got)
+		}
+	})
+
+	t.Run("a file that yields no identity is reported rather than skipped", func(t *testing.T) {
+		stray := testKindDoc("clause", "", nil)
+		stray.Identity = "README"
+		stray.Path = "spec/clauses/README.md"
+
+		findings := CheckDocuments([]*parse.Document{stray}, cfg)
+
+		f := testAssertSingleFinding(t, findings, model.RuleIDMismatch, model.SeverityError, "")
+		want := `"README" is not an identifier of kind "clause", which reads ^UZ-[A-Z]-\d{3}$`
+		if f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		if f.Location.Path != "spec/clauses/README.md" {
+			t.Errorf("location = %+v, want the file it is about", f.Location)
+		}
+	})
+
+	t.Run("a written id the kind's pattern rejects is the same finding", func(t *testing.T) {
+		wrong := testKindDoc("clause", "", map[string]any{"id": "uz-v-001", "status": "accepted"})
+		wrong.Identity = "uz-v-001"
+
+		f := testAssertSingleFinding(t, CheckDocuments([]*parse.Document{wrong}, cfg), model.RuleIDMismatch, model.SeverityError, "")
+		if f.Location.Line != wrong.KeyLines["id"] {
+			t.Errorf("location = %+v, want the id key on line %d", f.Location, wrong.KeyLines["id"])
+		}
+	})
+
+	t.Run("frontmatter that does not decode is reported as the cause it is", func(t *testing.T) {
+		// The identity could not be read because the block did not parse, so
+		// the decode failure is the finding rather than the missing identifier.
+		broken := testKindDoc("conform", "", nil)
+		broken.Identity = "check"
+		broken.Err = errInvalidFixtureFrontmatter
+
+		findings := CheckDocuments([]*parse.Document{broken}, cfg)
+
+		testAssertSingleFinding(t, findings, model.RuleInvalidFrontmatter, model.SeverityError, "")
+		if got := testFindingsFor(findings, model.RuleIDMismatch); len(got) != 0 {
+			t.Fatalf("findings = %+v, want the decode failure alone", got)
+		}
+	})
+
+	t.Run("two files without an identity do not collide", func(t *testing.T) {
+		// Neither carries an identifier, so they share nothing to collide over.
+		strays := []*parse.Document{testKindDoc("clause", "", nil), testKindDoc("conform", "", nil)}
+
+		findings := CheckDocuments(strays, cfg)
+
+		if got := testFindingsFor(findings, model.RuleIDCollision); len(got) != 0 {
+			t.Fatalf("findings = %+v, want no collision between two files without an identity", got)
+		}
+		if got := testFindingsFor(findings, model.RuleIDMismatch); len(got) != 2 {
+			t.Fatalf("findings = %+v, want one id_mismatch each", got)
+		}
+	})
+
+	t.Run("two kinds normalizing to one identifier collide", func(t *testing.T) {
+		docs := []*parse.Document{
+			testKindDoc("clause", "UZ-V-001", map[string]any{"status": "accepted"}),
+			testKindDoc("conform", "UZ-V-001", map[string]any{"status": "accepted"}),
+		}
+
+		f := testAssertSingleFinding(t, CheckDocuments(docs, cfg), model.RuleIDCollision, model.SeverityError, "UZ-V-001")
+		if !strings.Contains(f.Detail, "spec/conform/UZ-V-001.md") {
+			t.Errorf("detail = %q, want it to name the document of the other kind", f.Detail)
+		}
+	})
+}
+
+func TestCheckEdgeKinds(t *testing.T) {
+	cfg := testKindsConfig()
+
+	t.Run("an edge between the declared kinds reports nothing", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testKindNode("conform", "conform/check", "accepted"), testKindNode("clause", "UZ-V-001", "accepted")},
+			[]model.Edge{testEdge("conform/check", "UZ-V-001", "enforces")},
+			nil,
+		)
+
+		if got := CheckEdgeKinds(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a source of the wrong kind is an error against the document that declared it", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testKindNode("clause", "UZ-V-002", "accepted"), testKindNode("clause", "UZ-V-001", "accepted")},
+			[]model.Edge{testEdge("UZ-V-002", "UZ-V-001", "enforces")},
+			nil,
+		)
+
+		f := testAssertSingleFinding(t, CheckEdgeKinds(g, cfg), model.RuleEdgeKindMismatch, model.SeverityError, "UZ-V-002")
+		if want := `enforces source UZ-V-002 is kind "clause", want one of: conform`; f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		// The finding points at the declaring document's own frontmatter; the
+		// test nodes carry no enforces key, so it falls back on the status
+		// field the way every edge finding does.
+		if f.Location.Path != "spec/clause/UZ-V-002.md" || f.Location.Line != testStatusLine {
+			t.Errorf("location = %+v, want the declaring document's key line", f.Location)
+		}
+	})
+
+	t.Run("a target of the wrong kind is an error", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testKindNode("conform", "conform/check", "accepted"), testKindNode("deviation", "dev-0001", "accepted")},
+			[]model.Edge{testEdge("conform/check", "dev-0001", "enforces")},
+			nil,
+		)
+
+		f := testAssertSingleFinding(t, CheckEdgeKinds(g, cfg), model.RuleEdgeKindMismatch, model.SeverityError, "conform/check")
+		if want := `enforces target dev-0001 is kind "deviation", want one of: clause`; f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		if len(f.Related) != 1 || f.Related[0].Path != "spec/deviation/dev-0001.md" {
+			t.Errorf("related = %+v, want the endpoint of the wrong kind", f.Related)
+		}
+	})
+
+	t.Run("both endpoints of the wrong kind are two findings", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testKindNode("deviation", "dev-0001", "accepted"), testKindNode("deviation", "dev-0002", "accepted")},
+			[]model.Edge{testEdge("dev-0001", "dev-0002", "enforces")},
+			nil,
+		)
+
+		if got := testFindingsFor(CheckEdgeKinds(g, cfg), model.RuleEdgeKindMismatch); len(got) != 2 {
+			t.Fatalf("findings = %+v, want one per endpoint", got)
+		}
+	})
+
+	t.Run("an endpoint the corpus does not hold has no kind to be wrong about", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testKindNode("conform", "conform/check", "accepted")},
+			[]model.Edge{testEdge("conform/check", "UZ-V-404", "enforces")},
+			nil,
+		)
+
+		if got := CheckEdgeKinds(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none: a dangling reference is its own finding", got)
+		}
+	})
+
+	t.Run("an edge that constrains nothing reports nothing", func(t *testing.T) {
+		unconstrained := testKindsConfig()
+		unconstrained.Edges[1].From, unconstrained.Edges[1].To = nil, nil
+		g := testGraph(
+			[]*model.Node{testKindNode("deviation", "dev-0001", "accepted"), testKindNode("deviation", "dev-0002", "accepted")},
+			[]model.Edge{testEdge("dev-0001", "dev-0002", "enforces")},
+			nil,
+		)
+
+		if got := CheckEdgeKinds(g, unconstrained); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a corpus without kinds is unconstrained", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{testNode("0001", "accepted"), testNode("0002", "accepted")},
+			[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			nil,
+		)
+
+		if got := CheckEdgeKinds(g, config.ADRPreset()); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a reverse edge is filed against the document whose key declared it", func(t *testing.T) {
+		reversed := testKindsConfig()
+		reversed.Edges[1].Direction = config.DirectionReverse
+		g := testGraph(
+			[]*model.Node{testKindNode("clause", "UZ-V-001", "accepted"), testKindNode("deviation", "dev-0001", "accepted")},
+			[]model.Edge{testEdge("dev-0001", "UZ-V-001", "enforces")},
+			nil,
+		)
+
+		// The key lives on the target of a reverse edge, so that is the
+		// document a reader has to open.
+		testAssertSingleFinding(t, CheckEdgeKinds(g, reversed), model.RuleEdgeKindMismatch, model.SeverityError, "UZ-V-001")
+	})
 }

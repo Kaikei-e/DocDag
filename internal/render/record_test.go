@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
 	"github.com/Kaikei-e/DocDag/internal/model"
 )
@@ -106,5 +107,53 @@ func TestRecordRenderersPropagateWriterErrors(t *testing.T) {
 	}
 	if err := RecordsJSON(failingWriter{}, testRecords()); err == nil {
 		t.Error("RecordsJSON err = nil, want the write failure surfaced")
+	}
+}
+
+func TestWithProjectionsAddsTheDerivedColumns(t *testing.T) {
+	g := testOKBasicGraph()
+	cfg := config.ADRPreset()
+	records := Records(g, []model.ID{"0002", "0003"})
+
+	got := WithProjections(records, []string{config.ProjectionAcceptedUnsuperseded}, graph.EvalProjections(g, cfg, testAsOf))
+
+	var buf bytes.Buffer
+	if err := RecordsText(&buf, got, []string{FieldID, config.ProjectionAcceptedUnsuperseded}); err != nil {
+		t.Fatalf("RecordsText: %v", err)
+	}
+	want := "0002\tfalse\n0003\ttrue\n"
+	if buf.String() != want {
+		t.Fatalf("records = %q, want %q", buf.String(), want)
+	}
+}
+
+func TestWithProjectionsLeavesAListingThatAskedForNoneAlone(t *testing.T) {
+	g := testOKBasicGraph()
+	records := Records(g, []model.ID{"0002"})
+
+	got := WithProjections(records, nil, graph.EvalProjections(g, config.ADRPreset(), testAsOf))
+
+	if got[0].Projections != nil {
+		t.Fatalf("projections = %v, want none", got[0].Projections)
+	}
+}
+
+func TestWithFieldsReadsTheDeclaredKeys(t *testing.T) {
+	g := &model.Graph{Nodes: map[model.ID]*model.Node{
+		"0001": {ID: "0001", Attrs: map[string]any{"modality": "MUST"}},
+		"0002": {ID: "0002", Attrs: map[string]any{"modality": []any{"MUST", "MAY"}}},
+	}}
+	records := WithFields([]Record{{ID: "0001"}, {ID: "0002"}, {ID: "0003"}}, []string{"modality"}, g)
+
+	var buf bytes.Buffer
+	if err := RecordsText(&buf, records, []string{FieldID, "modality"}); err != nil {
+		t.Fatalf("RecordsText: %v", err)
+	}
+
+	// A key written as a list has no scalar to show, and a document the corpus
+	// does not hold has nothing at all: both keep the row's shape.
+	want := "0001\tMUST\n0002\t-\n0003\t-\n"
+	if buf.String() != want {
+		t.Errorf("records = %q, want %q", buf.String(), want)
 	}
 }

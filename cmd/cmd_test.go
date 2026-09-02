@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/Kaikei-e/DocDag/internal/vcs"
 )
 
 // fixturesRoot is resolved before any test changes the working directory.
@@ -36,6 +38,27 @@ func run(t *testing.T, args ...string) runResult {
 	var out, errOut bytes.Buffer
 	code := executeWith(args, &out, &errOut)
 	return runResult{code: code, stdout: out.String(), stderr: errOut.String()}
+}
+
+// headCommitterDay is the day this repository's HEAD was committed on, which
+// is what `validate` and `lint` answer for when nobody names a day. A test
+// asserting on the as-of date asks git rather than the clock, for the reason
+// the default exists: the answer belongs to the commit.
+func headCommitterDay(t *testing.T) string {
+	t.Helper()
+	root, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("working directory: %v", err)
+	}
+	repo, err := vcs.Open(root)
+	if err != nil {
+		t.Skipf("not inside a git repository: %v", err)
+	}
+	day, err := repo.CommitterDate("HEAD")
+	if err != nil {
+		t.Fatalf("committer date of HEAD: %v", err)
+	}
+	return day
 }
 
 func fixture(t *testing.T, name string) string {
@@ -157,6 +180,17 @@ func copyFixture(t *testing.T, name string) string {
 	return dst
 }
 
+// copyFixtureTree copies a whole fixture, subdirectories included, so a test
+// may write into a multi-kind corpus without touching the checkout.
+func copyFixtureTree(t *testing.T, name string) string {
+	t.Helper()
+	dst := t.TempDir()
+	if err := os.CopyFS(dst, os.DirFS(fixture(t, name))); err != nil {
+		t.Fatalf("copy fixture %s: %v", name, err)
+	}
+	return dst
+}
+
 // docPath names a file the way docdag prints one, whatever separator the
 // platform joins paths with.
 func docPath(elem ...string) string { return filepath.ToSlash(filepath.Join(elem...)) }
@@ -260,7 +294,7 @@ func TestConfigFileOverridesThePreset(t *testing.T) {
 }
 
 func TestTheCommandSetIsExactlyTheDocumentedOne(t *testing.T) {
-	want := []string{"validate", "resolve", "query", "context", "export", "stats", "new", "help"}
+	want := []string{"validate", "lint", "resolve", "query", "context", "export", "stats", "new", "help"}
 
 	// The help command is registered lazily, so ask for it before counting.
 	root := newRootCmd()

@@ -4,6 +4,7 @@ package model
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 )
 
@@ -33,13 +34,20 @@ const (
 // Severity ranks a finding.
 type Severity string
 
-// Finding severities.
+// Finding severities. Info is what `docdag lint` says a fact in: it never
+// fails a build and never raises an exit code, so a check that reports one is
+// telling the reader something about the corpus rather than about a mistake.
+// No structural check speaks at it — `structural:` cannot lower a check to
+// info, because the checks are the contract.
 const (
 	SeverityError Severity = "error"
 	SeverityWarn  Severity = "warn"
+	SeverityInfo  Severity = "info"
 )
 
-// Rank orders severities for deterministic output, errors first.
+// Rank orders severities for deterministic output, errors first. Info sorts
+// last, where an unrecognized severity already sorted: both are things a
+// report ends with, and a finding is ordered by its position after that.
 func (s Severity) Rank() int {
 	switch s {
 	case SeverityError:
@@ -67,17 +75,46 @@ const (
 	RuleEmptyEdge              = "empty_edge"
 	RuleInverseMismatch        = "inverse_mismatch"
 	RuleCardinality            = "cardinality"
+	RuleEdgeAttrUnknown        = "edge_attr_unknown"
+	RuleEdgeAttrMissing        = "edge_attr_missing"
+	RuleEdgeAttrInvalid        = "edge_attr_invalid"
+	RuleIDMismatch             = "id_mismatch"
+	RuleKindMismatch           = "kind_mismatch"
+	RuleUnknownField           = "unknown_field"
+	RuleEdgeKindMismatch       = "edge_kind_mismatch"
+	RuleDeprecatedField        = "deprecated_field"
+	RuleUnknownFieldValue      = "unknown_field_value"
+	RuleMissingField           = "missing_field"
+	RuleStaleTarget            = "stale_target"
+	RulePeriodInvalid          = "period_invalid"
+	RulePeriodConflict         = "period_conflict"
+	RuleExpiredDeviation       = "expired_deviation"
+	RulePathMismatch           = "path_mismatch"
+	RuleModalityConflict       = "modality_conflict"
+	RuleExceptsStrict          = "excepts_strict"
 	RuleImmutableViolation     = "immutable_violation"
+	RuleOrphanMust             = "orphan_must"
+	RuleOrphanTest             = "orphan_test"
+	RuleStalePremise           = "stale_premise"
+	RulePendingSuccessor       = "pending_successor"
+	RulePrematureSuperseded    = "premature_superseded"
+	RuleDeviationPressure      = "deviation_pressure"
+	RuleNoCounterexample       = "no_counterexample"
+	RuleMayWithoutInterop      = "may_without_interop"
+	RuleInteropNotMust         = "interop_not_must"
 )
 
 // Node is one managed document. Line and KeyLines are the frontmatter
 // positions the parser recorded, so a finding can point at the key it is about.
+// Kind names the document kind the corpus declares it under, and is empty on a
+// single-kind corpus, which is every corpus that declares no kinds at all.
 type Node struct {
 	ID       ID             `json:"id"`
 	Path     string         `json:"path"`
 	Title    string         `json:"title"`
 	Status   string         `json:"status"`
 	Date     string         `json:"date"`
+	Kind     string         `json:"kind,omitempty"`
 	Attrs    map[string]any `json:"-"`
 	Line     int            `json:"-"`
 	KeyLines map[string]int `json:"-"`
@@ -149,12 +186,32 @@ func scalar(raw any) (string, bool) {
 }
 
 // Edge is one directed relation between two nodes. Reference-layer edges carry
-// an empty Type and OriginReference.
+// an empty Type and OriginReference. Attrs holds the attributes the edge was
+// declared with, normalized to the canonical string form of the value written
+// down, and is empty for an edge whose spec declares none — which every derived
+// and every reference edge is.
 type Edge struct {
-	From   ID       `json:"from"`
-	To     ID       `json:"to"`
-	Type   EdgeType `json:"type"`
-	Origin Origin   `json:"origin"`
+	From   ID                `json:"from"`
+	To     ID                `json:"to"`
+	Type   EdgeType          `json:"type"`
+	Origin Origin            `json:"origin"`
+	Attrs  map[string]string `json:"attrs,omitempty"`
+}
+
+// Equal compares two edges by value. Attributes make an Edge uncomparable with
+// ==, so every comparison goes through this method, and an absent attribute set
+// equals an empty one: an edge carrying no attributes was written the same way
+// whichever of the two the builder happened to record.
+func (e Edge) Equal(other Edge) bool {
+	return e.From == other.From && e.To == other.To &&
+		e.Type == other.Type && e.Origin == other.Origin &&
+		maps.Equal(e.Attrs, other.Attrs)
+}
+
+// Attr reports the value of one edge attribute.
+func (e Edge) Attr(key string) (string, bool) {
+	value, ok := e.Attrs[key]
+	return value, ok
 }
 
 // Location is a position in a file. Line and Column are 1-based; zero means
@@ -167,14 +224,22 @@ type Location struct {
 
 // Finding is one validation result. Location is where the reader should look;
 // Related names the other files the finding involves.
+//
+// Suppressed marks a finding the corpus has already answered — today only a
+// modality_conflict a recorded exception defeats. It is reported rather than
+// dropped at the source, so `validate --show-suppressed` can show what the
+// exception is holding down, and its Detail says which edge does the holding.
+// A suppressed finding is out of the summary counts and therefore out of the
+// exit code: it is a record of a decision, not an open failure.
 type Finding struct {
-	Severity Severity   `json:"severity"`
-	Rule     string     `json:"rule"`
-	ID       ID         `json:"id"`
-	Detail   string     `json:"detail"`
-	Location Location   `json:"location"`
-	Related  []Location `json:"related,omitempty"`
-	Fix      string     `json:"fix,omitempty"`
+	Severity   Severity   `json:"severity"`
+	Rule       string     `json:"rule"`
+	ID         ID         `json:"id"`
+	Detail     string     `json:"detail"`
+	Location   Location   `json:"location"`
+	Related    []Location `json:"related,omitempty"`
+	Fix        string     `json:"fix,omitempty"`
+	Suppressed bool       `json:"suppressed,omitempty"`
 }
 
 // Summary is the aggregate reported alongside validation findings.

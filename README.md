@@ -8,7 +8,16 @@ graph** from it, enforces DAG invariants on that graph, and answers queries abou
 records rot in ways review does not catch: a decision superseded twice with the status never
 updated, a supersession cycle, a `supersedes: 0042` pointing at a file nobody wrote. Those are graph
 properties, so a graph check can enforce them, and `docdag validate` exits 1 on any error, in one CI
-line. DocDag ships one preset, `adr`, for Architecture Decision Records.
+line.
+
+DocDag ships two presets. `adr` is the default: one directory of Architecture Decision Records,
+identified by a digit run, superseding one another. `spec` is a normative standard as a graph —
+eight kinds, among them the clauses, the conformance tests that enforce them, the deviations
+recorded against them and the measurements taken of them, each in a directory of its own and with an
+identifier shape of its own — where a `MUST` that no test enforces is a finding rather than a rule.
+Both are plain configuration:
+[docs/configuration.md](docs/configuration.md) prints each in full, and `docdag.yaml` overrides
+either.
 
 ## The model
 
@@ -21,17 +30,20 @@ asks for it.
 
 A document's identity is its digit run, so `339`, `ADR-339`, `000339` and `0339-use-postgres.md` all
 name the same node, displayed zero-padded to `id_width`; renaming a file's title suffix therefore
-does not change what it is, and two files that normalize alike are an `id_collision` error. Status
-is a projection of that graph rather than an independent fact: a document is *binding* when its
-status is `accepted` and nothing supersedes it, and a status the edges contradict is a finding
-rather than a matter of opinion.
+does not change what it is, and two files that normalize alike are an `id_collision` error. Where a
+corpus declares `kinds:`, identity is per kind — a pattern of its own, such as `UZ-V-001`, or the
+digit run where a kind declares none — because the directory a document sits in is what chose the
+rules it was read under. Status is a projection of that graph rather than an independent fact: a
+document is *binding* when its status is `accepted`, nothing supersedes it and, where a kind
+declares a `period:`, the day being asked about falls inside it; a status the edges contradict is a
+finding rather than a matter of opinion.
 
 ## Install
 
 Install a pinned version locally:
 
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.2.0
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.3.0
 ```
 
 This installs `docdag` into `$(go env GOPATH)/bin`. Prebuilt binaries for tagged versions, and the
@@ -43,7 +55,7 @@ release's `checksums.txt`, and needs no Go toolchain:
 
 ```yaml
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.2.0
+      - uses: Kaikei-e/DocDag@v0.3.0
         with:
           args: validate --format github   # this is the default
 ```
@@ -70,6 +82,12 @@ $ docdag query 0001 --ancestors --edge depends-on   # what rests on this decisio
 0004
 ```
 
+Where a corpus declares a `period:`, what is in force is an answer about a day rather than a
+standing fact: `docdag query --binding --as-of 2027-04-01` asks what will be in force then, `--at
+<rev>` moves the revision the documents are read from, and the two compose into "what the vault at
+that revision said was in force on that day". The `adr` preset declares none, so the corpus above
+answers the same way on every day.
+
 DocDag looks in `docs/adr`, `doc/adr`, `docs/decisions`, `docs/ADR`, `adr` — the first that exists
 and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 to 6 digits; `--dir` overrides it.
 
@@ -83,13 +101,29 @@ mechanical remedy, and exits 1 if any finding is an error:
 ```
 
 - **Structural** — `invalid_frontmatter`, `missing_frontmatter`, `id_collision`, `unknown_status`,
-  `empty_edge`, `invalid_ref`, `dangling_ref`, `unstructured_supersedes`, `derived_conflict`.
-- **Graph** — `cycle`, `cardinality`, `inverse_mismatch`, and the preset's two status rules,
-  `status_drift` and `superseded_orphan`.
+  `empty_edge`, `invalid_ref`, `dangling_ref`, `unstructured_supersedes`, `derived_conflict`, and,
+  for an edge that declares `attrs:`, `edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`.
+- **Kinds and declared fields** — for a corpus that declares `kinds:` or `fields:`, an identity its
+  kind's pattern rejects, a `kind:` its directory disagrees with, an undeclared key on a closed
+  kind, an endpoint of the wrong kind and a field value the vocabulary does not hold:
+  `id_mismatch`, `kind_mismatch`, `unknown_field`, `edge_kind_mismatch`, `unknown_field_value`,
+  `missing_field`, `deprecated_field`.
+- **Graph** — `cycle`, `cardinality`, `inverse_mismatch`, and, for an edge that declares `target:`
+  or a corpus that declares `path_constraints:`, `stale_target` and `path_mismatch`; for one that
+  declares a `modality` vocabulary, `modality_conflict` and `excepts_strict`; plus the preset's two
+  status rules, `status_drift` and `superseded_orphan`.
+- **Periods** — for a kind that declares `period:`, the two days a document writes are read against
+  the day the run is about: `period_invalid`, `period_conflict`, `expired_deviation`.
 - **Reference layer** — `dangling_reference`, off until `references.dangling` asks for it.
 - **History** — `immutable_violation`, under `--immutable-since <rev>`.
 
 [docs/checks.md](docs/checks.md) gives each finding its severity, its trigger and its remedy.
+
+`docdag lint` asks the other question — whether the rules themselves hold up. It reports a rule that
+can never fire, one that fires on every document, one that says what another rule already says, and,
+with `--corpus` and `--fixtures`, the rules the vault never fires and the rules whose own fixtures
+disagree with them. `validate` never runs it: a configuration's health and a corpus's state have
+different lifecycles.
 
 ## For agents
 
@@ -97,8 +131,10 @@ An agent should ask the graph rather than read the directory: one command replac
 reads. `docdag context <ref>` prints a document, what it resolves to and its neighbourhood, each
 entry quoting the first paragraph of its `Decision` section; `--fields id,title,status,path` gives
 `resolve` and `query` tab-separated columns; `docdag validate --touching <path>` reports only what
-one edit can break. This repository is also a Claude Code plugin, installing a skill and a
-`PostToolUse` hook that validates a decision record as it is written:
+one edit can break; and `docdag lint` answers for an edit to `docdag.yaml` rather than to a
+document. This repository is also a Claude Code plugin, installing a skill and a `PostToolUse` hook
+that validates a decision record as it is written and lints the configuration when that is what
+changed:
 
 ```console
 $ claude
@@ -115,8 +151,11 @@ $ claude
 - [docs/configuration.md](docs/configuration.md) — the `docdag.yaml` reference: the preset in full,
   every optional key, and the rule vocabulary.
 - [docs/checks.md](docs/checks.md) — one entry per finding: what triggers it and what clears it.
-- [docs/ci.md](docs/ci.md) — the composite action, append-only history and the pre-commit hook.
-- [docs/agents.md](docs/agents.md) — `context`, `--fields`, `--touching` and the plugin.
+- [docs/ci.md](docs/ci.md) — the composite action, append-only history, linting the configuration
+  and the pre-commit hook.
+- [docs/agents.md](docs/agents.md) — `context`, `--fields`, `--touching`, `lint` and the plugin.
+- [docs/adr/](docs/adr/) — the architecture decision records behind the design: the `spec` preset
+  without an expression language, target conditions, modality, `lint` and in-force periods.
 
 ## MADR compatibility
 

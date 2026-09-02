@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
 )
 
@@ -89,6 +90,11 @@ func TestBuildReportsTheReferenceItself(t *testing.T) {
 
 	if b.SchemaVersion != SchemaVersion {
 		t.Errorf("schemaVersion = %d, want %d", b.SchemaVersion, SchemaVersion)
+	}
+	// The brief is headed by the revision the corpus was read under, so a
+	// caller can pin what it was handed.
+	if b.PresetVersion != config.ADRPresetVersion {
+		t.Errorf("presetVersion = %d, want the preset's %d", b.PresetVersion, config.ADRPresetVersion)
 	}
 	if b.Ref.ID != model.ID("0002") {
 		t.Errorf("ref = %+v, want 0002", b.Ref)

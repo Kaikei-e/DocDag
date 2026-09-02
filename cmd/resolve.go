@@ -18,11 +18,17 @@ func newResolveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fields, err := recordFields(cmd)
+			asOf, err := asOfToday(cmd)
 			if err != nil {
 				return err
 			}
-			g, cfg, err := loadGraph(cmd)
+			c, err := loadCorpus(cmd)
+			if err != nil {
+				return err
+			}
+			defer c.close()
+			g, cfg := c.graph, c.cfg
+			fields, err := recordFields(cmd, cfg)
 			if err != nil {
 				return err
 			}
@@ -33,12 +39,12 @@ func newResolveCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			ids, err := graph.Resolve(g, id, config.EdgeSupersedes)
+			ids, err := graph.ResolveAt(g, cfg, id, config.EdgeSupersedes, asOf)
 			if err != nil {
 				return domainErr("%v", err)
 			}
 			out := cmd.OutOrStdout()
-			records := render.Records(g, ids)
+			records := withColumns(g, cfg, render.Records(g, ids), fields, asOf)
 			if format == formatJSON {
 				err = render.RecordsJSON(out, records)
 			} else {
@@ -50,6 +56,8 @@ func newResolveCmd() *cobra.Command {
 			return nil
 		},
 	}
+	addAsOfFlag(cmd, "today")
+	addAtFlag(cmd)
 	addFieldsFlag(cmd)
 	return cmd
 }

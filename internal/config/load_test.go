@@ -224,7 +224,7 @@ template: templates/decision.md
 			t.Errorf("template = %q", got.Template)
 		}
 		wantEdges := []EdgeSpec{{Name: "supersedes", Key: "replaces", Acyclic: true, Direction: DirectionReverse}}
-		if !slices.Equal(got.Edges, wantEdges) {
+		if !reflect.DeepEqual(got.Edges, wantEdges) {
 			t.Errorf("edges = %+v, want %+v", got.Edges, wantEdges)
 		}
 		wantDerived := []DerivedEdgeSpec{{Field: "state", Pattern: `(?i)^replaced by (\S+)`, Edge: "supersedes", Direction: DirectionReverse}}
@@ -235,7 +235,7 @@ template: templates/decision.md
 			t.Fatalf("rules = %+v, want one", got.Rules)
 		}
 		rule := got.Rules[0]
-		if rule.Name != "state_drift" || rule.Severity != model.SeverityError || rule.When.Inbound != "supersedes" {
+		if rule.Name != "state_drift" || rule.Severity != model.SeverityError || rule.When.Inbound.Edge != "supersedes" {
 			t.Errorf("rule = %+v", rule)
 		}
 		if got := testDeref(t, "rule attr not", rule.When.Attr["state"].Not); got != "replaced" {
@@ -354,7 +354,7 @@ func TestMerge(t *testing.T) {
 			override: Config{Rules: []Rule{{
 				Name:     "accepted_with_dependencies",
 				Severity: model.SeverityWarn,
-				When:     Condition{Outbound: "depends-on"},
+				When:     Condition{Outbound: EdgeCondition{Edge: "depends-on"}},
 				Message:  "an accepted decision still depends on another",
 			}}},
 			check: func(t *testing.T, got Config) {
@@ -619,6 +619,133 @@ func TestMergeKeepsAnExplicitRuleOverrideOnARenamedStatusField(t *testing.T) {
 	}
 }
 
+func TestMergeProjections(t *testing.T) {
+	t.Run("projections replace the preset's rather than merge", func(t *testing.T) {
+		override := Config{
+			Projections: []ProjectionSpec{{Name: "enforced", When: Condition{Inbound: EdgeCondition{Edge: "depends-on"}}}},
+			Binding:     "enforced",
+		}
+
+		got := Merge(ADRPreset(), override)
+
+		if len(got.Projections) != 1 || got.Projections[0].Name != "enforced" {
+			t.Fatalf("projections = %+v, want exactly the override", got.Projections)
+		}
+		if got.Binding != "enforced" {
+			t.Fatalf("binding = %q, want the override", got.Binding)
+		}
+	})
+
+	t.Run("an explicit empty list clears the preset's projections", func(t *testing.T) {
+		got := Merge(ADRPreset(), Config{Projections: []ProjectionSpec{}})
+
+		if len(got.Projections) != 0 {
+			t.Fatalf("projections = %+v, want them cleared", got.Projections)
+		}
+		if _, ok := got.BindingProjection(); ok {
+			t.Fatal("BindingProjection resolved one, want the built-in definition to stand in")
+		}
+	})
+
+	t.Run("a file that mentions neither keeps the preset's", func(t *testing.T) {
+		got := Merge(ADRPreset(), Config{IDWidth: 6})
+
+		spec, ok := got.BindingProjection()
+		if !ok || spec.Name != ProjectionAcceptedUnsuperseded {
+			t.Fatalf("BindingProjection = %+v, %v, want the preset's", spec, ok)
+		}
+	})
+
+	t.Run("a replaced edge vocabulary drops the projections written against it", func(t *testing.T) {
+		override := Config{
+			Edges:        []EdgeSpec{{Name: "replaces", Key: "replaces", Acyclic: true, Direction: DirectionForward}},
+			Rules:        []Rule{},
+			DerivedEdges: []DerivedEdgeSpec{},
+		}
+
+		got := Merge(ADRPreset(), override)
+
+		if len(got.Projections) != 0 {
+			t.Fatalf("projections = %+v, want the ones reading supersedes dropped", got.Projections)
+		}
+		if got.Binding != "" {
+			t.Fatalf("binding = %q, want it cleared with the projection it named", got.Binding)
+		}
+		if err := got.Validate(); err != nil {
+			t.Fatalf("Validate = %v, want no error on a configuration nobody wrote", err)
+		}
+	})
+
+	t.Run("a replaced edge vocabulary that still declares the edge keeps them", func(t *testing.T) {
+		override := Config{Edges: []EdgeSpec{
+			{Name: "supersedes", Key: "supersedes", Acyclic: true, Direction: DirectionForward},
+			{Name: "amends", Key: "amends", Direction: DirectionForward},
+		}}
+
+		got := Merge(ADRPreset(), override)
+
+		if len(got.Projections) != 1 || got.Binding != ProjectionAcceptedUnsuperseded {
+			t.Fatalf("projections = %+v, binding = %q, want the preset's kept", got.Projections, got.Binding)
+		}
+	})
+}
+
+func TestMergeRetargetsProjectionsOntoARenamedStatusField(t *testing.T) {
+	// The binding projection reads the status field. Left on the preset's key
+	// it would hold for no document at all, and every listing would go empty.
+	got := Merge(ADRPreset(), Config{StatusField: "state"})
+
+	spec, ok := got.BindingProjection()
+	if !ok {
+		t.Fatalf("BindingProjection = %+v, want the preset's", got.Projections)
+	}
+	if _, ok := spec.When.Attr["state"]; !ok {
+		t.Fatalf("projection inspects %v, want the configured status field", spec.When.Attr)
+	}
+	if _, ok := spec.When.Attr[DefaultStatusField]; ok {
+		t.Fatalf("projection still inspects %q", DefaultStatusField)
+	}
+	if base := ADRPreset(); base.Projections[0].When.Attr[DefaultStatusField].Eq == nil {
+		t.Error("Merge rewrote the preset it was given rather than a copy")
+	}
+
+	t.Run("alternatives are retargeted too", func(t *testing.T) {
+		base := ADRPreset()
+		base.Projections = []ProjectionSpec{{
+			Name: ProjectionAcceptedUnsuperseded,
+			AnyOf: []ProjectionAlt{
+				{When: Condition{Attr: map[string]AttrCondition{DefaultStatusField: testEq(StatusAccepted)}}},
+			},
+		}}
+
+		merged := Merge(base, Config{StatusField: "state"})
+
+		if _, ok := merged.Projections[0].AnyOf[0].When.Attr["state"]; !ok {
+			t.Fatalf("alternative inspects %v, want the configured status field", merged.Projections[0].AnyOf[0].When.Attr)
+		}
+	})
+
+	t.Run("a file that writes its own projections keeps them untouched", func(t *testing.T) {
+		override := Config{
+			StatusField: "state",
+			Projections: []ProjectionSpec{{
+				Name: "own",
+				When: Condition{Attr: map[string]AttrCondition{"lifecycle": {Eq: ptr("done")}}},
+			}},
+			Binding: "own",
+		}
+
+		merged := Merge(ADRPreset(), override)
+
+		if len(merged.Projections) != 1 {
+			t.Fatalf("projections = %+v, want only the override", merged.Projections)
+		}
+		if _, ok := merged.Projections[0].When.Attr["lifecycle"]; !ok {
+			t.Fatalf("projection attr = %v, want the override's own key untouched", merged.Projections[0].When.Attr)
+		}
+	})
+}
+
 func ptr(v string) *string { return &v }
 
 func TestDiscoverReportsAnUnreadableCandidate(t *testing.T) {
@@ -683,4 +810,430 @@ func TestMergeOverridesTheFilenameTemplate(t *testing.T) {
 	if kept := Merge(ADRPreset(), Config{}); kept.Filename != ADRPreset().Filename {
 		t.Errorf("Filename = %q, want the base %q", kept.Filename, ADRPreset().Filename)
 	}
+}
+
+func TestLoadEdgeAttributes(t *testing.T) {
+	file := `edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+    attrs:
+      reason: {required: true, one_of: [recurrence, conflict]}
+  - name: measures
+    key: measures
+    direction: forward
+    attrs:
+      agreement: {required: true, type: number}
+      expires: {type: date}
+`
+	root := testTree(t, map[string]string{"docdag.yaml": file})
+
+	got, err := Load(filepath.Join(root, "docdag.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	want := []EdgeSpec{
+		{
+			Name: "supersedes", Key: "supersedes", Acyclic: true, Direction: DirectionForward,
+			Attrs: map[string]EdgeAttrSpec{"reason": {Required: true, OneOf: []string{"recurrence", "conflict"}}},
+		},
+		{
+			Name: "measures", Key: "measures", Direction: DirectionForward,
+			Attrs: map[string]EdgeAttrSpec{
+				"agreement": {Required: true, Type: AttrTypeNumber},
+				"expires":   {Type: AttrTypeDate},
+			},
+		},
+	}
+	if !reflect.DeepEqual(got.Edges, want) {
+		t.Fatalf("edges = %+v, want %+v", got.Edges, want)
+	}
+	if err := Merge(ADRPreset(), got).Validate(); err != nil {
+		t.Fatalf("Validate = %v, want the merged configuration to be valid", err)
+	}
+}
+
+// testKindsFile is a configuration file declaring two kinds, the shape a
+// multi-kind corpus is described in.
+const testKindsFile = `kinds:
+  clause:
+    dir: spec/clauses
+    id: '^UZ-[A-Z]-\d{3}$'
+    closed: true
+  conform:
+    dir: spec/conform
+    id: '^conform/[a-z0-9-]+$'
+`
+
+func TestLoadKinds(t *testing.T) {
+	file := `kinds:
+  clause:
+    dir: spec/clauses
+    id: '^UZ-[A-Z]-\d{3}$'
+    status_values: [trial, accepted]
+    closed: true
+  conform:
+    dir: spec/conform
+edges:
+  - name: enforces
+    key: enforces
+    direction: forward
+    from: [conform]
+    to: [clause]
+`
+	root := testTree(t, map[string]string{"docdag.yaml": file})
+
+	got, err := Load(filepath.Join(root, "docdag.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	wantKinds := map[string]KindSpec{
+		"clause":  {Dir: "spec/clauses", ID: `^UZ-[A-Z]-\d{3}$`, StatusValues: []string{"trial", "accepted"}, Closed: true},
+		"conform": {Dir: "spec/conform"},
+	}
+	if !reflect.DeepEqual(got.Kinds, wantKinds) {
+		t.Errorf("kinds = %+v, want %+v", got.Kinds, wantKinds)
+	}
+	wantEdges := []EdgeSpec{{
+		Name: "enforces", Key: "enforces", Direction: DirectionForward,
+		From: []string{"conform"}, To: []string{"clause"},
+	}}
+	if !reflect.DeepEqual(got.Edges, wantEdges) {
+		t.Errorf("edges = %+v, want %+v", got.Edges, wantEdges)
+	}
+}
+
+func TestLoadFields(t *testing.T) {
+	// The unquoted sunset is how a person writes a date in YAML, and it has to
+	// reach the checker as the day it reads as.
+	file := `preset_version: 3
+fields:
+  owner: {deprecated: true, since: 2, migrate_to: "owned-by", sunset: 2027-01-01}
+  team: {}
+kinds:
+  clause:
+    dir: spec/clauses
+    fields:
+      level: {deprecated: true, migrate_to: modality}
+`
+	root := testTree(t, map[string]string{"docdag.yaml": file})
+
+	got, err := Load(filepath.Join(root, "docdag.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	if got.PresetVersion != 3 {
+		t.Errorf("preset_version = %d, want 3", got.PresetVersion)
+	}
+	want := map[string]FieldSpec{
+		"owner": {Deprecated: true, Since: 2, MigrateTo: "owned-by", Sunset: "2027-01-01"},
+		"team":  {},
+	}
+	if !reflect.DeepEqual(got.Fields, want) {
+		t.Errorf("fields = %+v, want %+v", got.Fields, want)
+	}
+	wantKind := map[string]FieldSpec{"level": {Deprecated: true, MigrateTo: "modality"}}
+	if !reflect.DeepEqual(got.Kinds["clause"].Fields, wantKind) {
+		t.Errorf("kind fields = %+v, want %+v", got.Kinds["clause"].Fields, wantKind)
+	}
+}
+
+func TestMergeFields(t *testing.T) {
+	t.Run("a written fields map replaces the base wholesale", func(t *testing.T) {
+		base := ADRPreset()
+		base.Fields = map[string]FieldSpec{"owner": {Deprecated: true}, "team": {}}
+
+		got := Merge(base, Config{Fields: map[string]FieldSpec{"team": {Deprecated: true}}})
+
+		want := map[string]FieldSpec{"team": {Deprecated: true}}
+		if !reflect.DeepEqual(got.Fields, want) {
+			t.Fatalf("fields = %+v, want exactly the override %+v", got.Fields, want)
+		}
+	})
+
+	t.Run("an empty fields map clears the base", func(t *testing.T) {
+		base := ADRPreset()
+		base.Fields = map[string]FieldSpec{"owner": {Deprecated: true}}
+
+		if got := Merge(base, Config{Fields: map[string]FieldSpec{}}); len(got.Fields) != 0 {
+			t.Fatalf("fields = %+v, want the explicit empty map to clear them", got.Fields)
+		}
+	})
+
+	t.Run("an unwritten fields map keeps the base", func(t *testing.T) {
+		base := ADRPreset()
+		base.Fields = map[string]FieldSpec{"owner": {Deprecated: true}}
+
+		if got := Merge(base, Config{IDWidth: 6}); !reflect.DeepEqual(got.Fields, base.Fields) {
+			t.Fatalf("fields = %+v, want the base %+v", got.Fields, base.Fields)
+		}
+	})
+
+	t.Run("the merged map is a copy of the override", func(t *testing.T) {
+		override := Config{Fields: map[string]FieldSpec{"owner": {Deprecated: true}}}
+
+		got := Merge(ADRPreset(), override)
+		override.Fields["team"] = FieldSpec{}
+
+		if _, leaked := got.Fields["team"]; leaked {
+			t.Fatalf("fields = %+v, want the merge to have copied the map", got.Fields)
+		}
+	})
+
+	t.Run("a written preset version replaces the preset's", func(t *testing.T) {
+		if got := Merge(ADRPreset(), Config{PresetVersion: 3}); got.PresetVersion != 3 {
+			t.Fatalf("preset_version = %d, want the override's 3", got.PresetVersion)
+		}
+	})
+
+	t.Run("an unwritten preset version keeps the preset's", func(t *testing.T) {
+		if got := Merge(ADRPreset(), Config{IDWidth: 6}); got.PresetVersion != ADRPresetVersion {
+			t.Fatalf("preset_version = %d, want the preset's %d", got.PresetVersion, ADRPresetVersion)
+		}
+	})
+}
+
+func TestMergeKinds(t *testing.T) {
+	t.Run("a written kinds map replaces the base wholesale", func(t *testing.T) {
+		base := ADRPreset()
+		base.Kinds = map[string]KindSpec{
+			"clause":  {Dir: "spec/clauses"},
+			"premise": {Dir: "spec/premises"},
+		}
+
+		got := Merge(base, Config{Kinds: map[string]KindSpec{"clause": {Dir: "standard/clauses"}}})
+
+		want := map[string]KindSpec{"clause": {Dir: "standard/clauses"}}
+		if !reflect.DeepEqual(got.Kinds, want) {
+			t.Fatalf("kinds = %+v, want exactly the override %+v", got.Kinds, want)
+		}
+	})
+
+	t.Run("an empty kinds map clears the base", func(t *testing.T) {
+		base := ADRPreset()
+		base.Kinds = map[string]KindSpec{"clause": {Dir: "spec/clauses"}}
+
+		got := Merge(base, Config{Kinds: map[string]KindSpec{}})
+
+		if got.Multikind() {
+			t.Fatalf("kinds = %+v, want the explicit empty map to clear them", got.Kinds)
+		}
+	})
+
+	t.Run("an unwritten kinds map keeps the base", func(t *testing.T) {
+		base := ADRPreset()
+		base.Kinds = map[string]KindSpec{"clause": {Dir: "spec/clauses"}}
+
+		got := Merge(base, Config{IDWidth: 6})
+
+		if !reflect.DeepEqual(got.Kinds, base.Kinds) {
+			t.Fatalf("kinds = %+v, want the base %+v", got.Kinds, base.Kinds)
+		}
+	})
+
+	t.Run("the merged map is a copy of the override", func(t *testing.T) {
+		override := Config{Kinds: map[string]KindSpec{"clause": {Dir: "spec/clauses"}}}
+
+		got := Merge(ADRPreset(), override)
+		override.Kinds["conform"] = KindSpec{Dir: "spec/conform"}
+
+		if _, leaked := got.Kinds["conform"]; leaked {
+			t.Fatalf("kinds = %+v, want the merge to have copied the map", got.Kinds)
+		}
+	})
+}
+
+func TestResolveKinds(t *testing.T) {
+	t.Run("kind directories are read relative to the configuration file", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"standard/docdag.yaml":              testKindsFile,
+			"standard/spec/clauses/UZ-V-001.md": testDocument,
+		})
+
+		got, err := Resolve(Options{Root: root, ConfigPath: filepath.Join(root, "standard", "docdag.yaml")})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if want := filepath.Join(root, "standard", "spec", "clauses"); got.Kinds["clause"].Dir != want {
+			t.Errorf("clause dir = %q, want %q", got.Kinds["clause"].Dir, want)
+		}
+		if got.Dir != "" {
+			t.Errorf("dir = %q, want none: the kinds carry the directories", got.Dir)
+		}
+	})
+
+	t.Run("a configuration file at the root roots the kinds there", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml":              testKindsFile,
+			"spec/clauses/UZ-V-001.md": testDocument,
+		})
+
+		got, err := Resolve(Options{Root: root})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if want := filepath.Join(root, "spec", "conform"); got.Kinds["conform"].Dir != want {
+			t.Errorf("conform dir = %q, want %q", got.Kinds["conform"].Dir, want)
+		}
+	})
+
+	t.Run("an absolute kind directory is left alone", func(t *testing.T) {
+		clauses := testTree(t, map[string]string{"UZ-V-001.md": testDocument})
+		root := testTree(t, map[string]string{
+			"docdag.yaml": "kinds:\n  clause:\n    dir: " + filepath.ToSlash(clauses) + "\n",
+		})
+
+		got, err := Resolve(Options{Root: root})
+		if err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+		if got.Kinds["clause"].Dir != clauses {
+			t.Errorf("clause dir = %q, want the absolute %q", got.Kinds["clause"].Dir, clauses)
+		}
+	})
+
+	t.Run("kinds skip discovery entirely", func(t *testing.T) {
+		// Nothing under a well-known documents directory, which single-kind
+		// discovery would have failed on.
+		root := testTree(t, map[string]string{
+			"docdag.yaml":              testKindsFile,
+			"spec/clauses/UZ-V-001.md": testDocument,
+		})
+
+		if _, err := Resolve(Options{Root: root}); err != nil {
+			t.Fatalf("Resolve: %v", err)
+		}
+	})
+
+	t.Run("a written id_width beside kinds is a configuration error", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docdag.yaml": testKindsFile + "id_width: 6\n"})
+
+		_, err := Resolve(Options{Root: root})
+
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("Resolve = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("a written dir beside kinds is a configuration error", func(t *testing.T) {
+		root := testTree(t, map[string]string{"docdag.yaml": testKindsFile + "dir: docs/adr\n"})
+
+		_, err := Resolve(Options{Root: root})
+
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("Resolve = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("a directory option beside kinds is a configuration error", func(t *testing.T) {
+		docs := testTree(t, map[string]string{"0001-a-decision.md": testDocument})
+		root := testTree(t, map[string]string{"docdag.yaml": testKindsFile})
+
+		_, err := Resolve(Options{Root: root, Dir: docs})
+
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("Resolve = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+}
+
+func TestLoadEdgeTargets(t *testing.T) {
+	file := `edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+  - name: depends-on
+    key: depends-on
+    acyclic: true
+    direction: forward
+    target: {leaf_of: supersedes}
+  - name: amends
+    key: amends
+    direction: forward
+    target:
+      attr: {status: {eq: accepted}}
+      not_inbound: supersedes
+`
+	root := testTree(t, map[string]string{"docdag.yaml": file})
+
+	got, err := Load(filepath.Join(root, "docdag.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// The sugar and the condition share one mapping, so a target reads as the
+	// rule vocabulary with one more word rather than as a shape of its own.
+	want := []*TargetCondition{
+		nil,
+		{LeafOf: "supersedes"},
+		{Condition: Condition{NotInbound: "supersedes", Attr: map[string]AttrCondition{"status": testEq(StatusAccepted)}}},
+	}
+	for i, spec := range got.Edges {
+		if !reflect.DeepEqual(spec.Target, want[i]) {
+			t.Errorf("edge %q target = %+v, want %+v", spec.Name, spec.Target, want[i])
+		}
+	}
+	if err := Merge(ADRPreset(), got).Validate(); err != nil {
+		t.Fatalf("Validate = %v, want the merged configuration to be valid", err)
+	}
+}
+
+func TestLoadPathConstraints(t *testing.T) {
+	file := `path_constraints:
+  - name: amend_targets_current
+    path: [depends-on, ^supersedes]
+    equals: none
+  - name: amend_scope_consistent
+    path: [depends-on, depends-on]
+    subset_of: [depends-on]
+`
+	root := testTree(t, map[string]string{"docdag.yaml": file})
+
+	got, err := Load(filepath.Join(root, "docdag.yaml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	want := []PathConstraint{
+		{Name: "amend_targets_current", Path: []string{"depends-on", "^supersedes"}, Equals: PathEqualsNone},
+		{Name: "amend_scope_consistent", Path: []string{"depends-on", "depends-on"}, SubsetOf: []string{"depends-on"}},
+	}
+	if !reflect.DeepEqual(got.PathConstraints, want) {
+		t.Fatalf("path_constraints = %+v, want %+v", got.PathConstraints, want)
+	}
+	if err := Merge(ADRPreset(), got).Validate(); err != nil {
+		t.Fatalf("Validate = %v, want the merged configuration to be valid", err)
+	}
+}
+
+func TestMergePathConstraints(t *testing.T) {
+	base := ADRPreset()
+	base.PathConstraints = []PathConstraint{{Name: "inherited", Path: []string{"supersedes"}, Equals: PathEqualsNone}}
+
+	t.Run("a written list replaces the base wholesale", func(t *testing.T) {
+		override := Config{PathConstraints: []PathConstraint{{Name: "own", Path: []string{"depends-on"}, Equals: PathEqualsNone}}}
+
+		got := Merge(base, override)
+
+		if !reflect.DeepEqual(got.PathConstraints, override.PathConstraints) {
+			t.Fatalf("path_constraints = %+v, want exactly the override %+v", got.PathConstraints, override.PathConstraints)
+		}
+	})
+
+	t.Run("an empty list clears the base", func(t *testing.T) {
+		if got := Merge(base, Config{PathConstraints: []PathConstraint{}}); len(got.PathConstraints) != 0 {
+			t.Fatalf("path_constraints = %+v, want the explicit empty list to clear them", got.PathConstraints)
+		}
+	})
+
+	t.Run("an unwritten list keeps the base", func(t *testing.T) {
+		if got := Merge(base, Config{IDWidth: 6}); !reflect.DeepEqual(got.PathConstraints, base.PathConstraints) {
+			t.Fatalf("path_constraints = %+v, want the base %+v", got.PathConstraints, base.PathConstraints)
+		}
+	})
 }

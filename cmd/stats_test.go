@@ -3,10 +3,13 @@ package cmd
 import (
 	"math"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
+	"github.com/Kaikei-e/DocDag/internal/render"
 )
 
 func TestStatsJSON(t *testing.T) {
@@ -145,4 +148,181 @@ func TestStatsText(t *testing.T) {
 func TestStatsRejectsAnUnknownFormat(t *testing.T) {
 	got := run(t, "stats", "--format", "mermaid", "--dir", fixture(t, "ok-basic"))
 	assertExit(t, got, 2)
+}
+
+// testFieldDocs is a two-document corpus whose frontmatter carries one retired
+// field and one nobody declared.
+func testFieldDocs() map[string]string {
+	return map[string]string{
+		"docs/adr/0001-name-a-service-owner.md": "---\ntitle: Name a service owner\nstatus: accepted\nowner: platform\ndate: 2025-01-01\n---\n\n# Name a service owner\n",
+		"docs/adr/0002-tag-decisions.md":        "---\ntitle: Tag decisions\nstatus: accepted\nowner: payments\ntags: [legacy]\ndate: 2025-02-01\n---\n\n# Tag decisions\n",
+		"docdag.yaml":                           "preset_version: 3\ndir: docs/adr\nfields:\n  owner: {deprecated: true, since: 2, migrate_to: owned-by}\n  team: {deprecated: true}\n",
+	}
+}
+
+func testStatsFieldsRow(t *testing.T, out, field string) string {
+	t.Helper()
+	for _, line := range lines(out) {
+		if strings.HasPrefix(line, field+" ") || line == field {
+			return line
+		}
+	}
+	t.Fatalf("field %q is not in the report %q", field, out)
+	return ""
+}
+
+func TestStatsFieldsText(t *testing.T) {
+	dir := writeDocs(t, testFieldDocs())
+	t.Chdir(dir)
+
+	got := run(t, "stats", "--fields")
+
+	assertExit(t, got, 0)
+	all := lines(got.stdout)
+	if len(all) == 0 || !strings.HasPrefix(all[0], "field ") {
+		t.Fatalf("report = %q, want a header row naming the columns", got.stdout)
+	}
+	for _, want := range []string{"documents", "last change", "deprecated"} {
+		if !strings.Contains(all[0], want) {
+			t.Errorf("header = %q, want it to name %q", all[0], want)
+		}
+	}
+	owner := testStatsFieldsRow(t, got.stdout, "owner")
+	if !strings.Contains(owner, "2") || !strings.Contains(owner, "yes") {
+		t.Errorf("owner row = %q, want two documents and the retirement flagged", owner)
+	}
+	// Outside a repository there is no day to report, and the report says so
+	// rather than failing.
+	if !strings.Contains(owner, "-") {
+		t.Errorf("owner row = %q, want a dash where git answered nothing", owner)
+	}
+	if row := testStatsFieldsRow(t, got.stdout, "team"); !strings.Contains(row, "0") {
+		t.Errorf("team row = %q, want the declared field nobody writes counted at zero", row)
+	}
+	if row := testStatsFieldsRow(t, got.stdout, "tags"); strings.Contains(row, "yes") {
+		t.Errorf("tags row = %q, want an undeclared field left unflagged", row)
+	}
+}
+
+func TestStatsFieldsJSON(t *testing.T) {
+	dir := writeDocs(t, testFieldDocs())
+	t.Chdir(dir)
+
+	got := run(t, "stats", "--fields", "--format", "json")
+
+	assertExit(t, got, 0)
+	report := decodeJSON[render.FieldUsageReport](t, got.stdout)
+	byName := map[string]graph.FieldUsage{}
+	for _, u := range report.Fields {
+		byName[u.Field] = u
+	}
+	want := map[string]graph.FieldUsage{
+		"owner": {Field: "owner", Documents: 2, Deprecated: true},
+		"tags":  {Field: "tags", Documents: 1},
+		"team":  {Field: "team", Documents: 0, Deprecated: true},
+	}
+	for field, u := range want {
+		if !reflect.DeepEqual(byName[field], u) {
+			t.Errorf("%s = %+v, want %+v", field, byName[field], u)
+		}
+	}
+	if _, listed := byName["title"]; !listed {
+		t.Errorf("fields = %+v, want the keys nobody declared counted too", report.Fields)
+	}
+}
+
+func TestStatsFieldsDatesTheDocumentsFromGit(t *testing.T) {
+	dir := gitRepo(t, testFieldDocs())
+	t.Chdir(dir)
+
+	got := run(t, "stats", "--fields")
+
+	assertExit(t, got, 0)
+	day := time.Now().Format("2006-01-02")
+	owner := testStatsFieldsRow(t, got.stdout, "owner")
+	if !strings.Contains(owner, day) {
+		t.Errorf("owner row = %q, want the commit day %s", owner, day)
+	}
+	if row := testStatsFieldsRow(t, got.stdout, "team"); strings.Contains(row, day) {
+		t.Errorf("team row = %q, want no day for a field no document writes", row)
+	}
+}
+
+func TestStatsFieldsAnswersACorpusWithoutSupersedes(t *testing.T) {
+	// The field report is about frontmatter, not degrees, so the edge type the
+	// degree statistics need is beside the point.
+	files := testFieldDocs()
+	files["docdag.yaml"] = "dir: docs/adr\nedges: []\nrules: []\nderived_edges: []\nfields:\n  owner: {deprecated: true}\n"
+	dir := writeDocs(t, files)
+	t.Chdir(dir)
+
+	assertExit(t, run(t, "stats", "--fields"), 0)
+	assertExit(t, run(t, "stats"), 3)
+}
+
+func TestStatsWithoutFieldsIsUnchanged(t *testing.T) {
+	dir := fixture(t, "ok-basic")
+	plain := run(t, "stats", "--dir", dir)
+	explicit := run(t, "stats", "--fields=false", "--dir", dir)
+
+	assertExit(t, plain, 0)
+	if plain.stdout != explicit.stdout {
+		t.Errorf("stats = %q, want the degree report unchanged by the flag's default", plain.stdout)
+	}
+	if strings.Contains(plain.stdout, "last change") {
+		t.Errorf("stats = %q, want no field report without --fields", plain.stdout)
+	}
+}
+
+// TestStatsOverAStandard is the report a corpus of clauses watches its own
+// granularity with: how the subjects are cut, at what strengths it speaks, and
+// how many conflicts it is carrying an exception for.
+func TestStatsOverAStandard(t *testing.T) {
+	config := specVaultConfig(t)
+
+	t.Run("text carries the subjects, the modalities and the suppressed count", func(t *testing.T) {
+		got := run(t, "stats", "--config", config)
+
+		assertExit(t, got, 0)
+		for _, want := range []string{
+			"modality MUST_NOT", "modality MAY",
+			"clauses about topic/inferential-grader", "suppressed conflicts",
+		} {
+			if !strings.Contains(got.stdout, want) {
+				t.Errorf("stats = %q, want a %q row", got.stdout, want)
+			}
+		}
+	})
+
+	t.Run("json carries the same three", func(t *testing.T) {
+		got := run(t, "stats", "--format", "json", "--config", config)
+
+		assertExit(t, got, 0)
+		stats := decodeJSON[graph.Statistics](t, got.stdout)
+		if stats.SuppressedConflicts != 1 {
+			t.Errorf("suppressed_conflicts = %d, want the one the vault records an exception for", stats.SuppressedConflicts)
+		}
+		if len(stats.Modalities) != 5 {
+			t.Errorf("modalities = %+v, want a row per declared value", stats.Modalities)
+		}
+		// The busiest subject first: three carry two clauses each, and the
+		// vault's fifth topic carries one.
+		if len(stats.Topics) != 5 || stats.Topics[0].Clauses != 2 {
+			t.Errorf("topics = %+v, want the five subjects, busiest first", stats.Topics)
+		}
+		if stats.Binding != 8 {
+			t.Errorf("binding = %d, want every clause in force at any strength", stats.Binding)
+		}
+	})
+
+	t.Run("a corpus without the vocabulary reports none of it", func(t *testing.T) {
+		got := run(t, "stats", "--format", "json", "--dir", fixture(t, "ok-basic"))
+
+		assertExit(t, got, 0)
+		for _, unwanted := range []string{"topics", "modalities", "suppressed_conflicts"} {
+			if strings.Contains(got.stdout, unwanted) {
+				t.Errorf("stats = %q, want no %q: the adr preset declares no clauses", got.stdout, unwanted)
+			}
+		}
+	})
 }

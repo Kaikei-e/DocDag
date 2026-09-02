@@ -17,6 +17,11 @@ whole directory: one command replaces a fan-out of file reads.
 - **binding** — the document is `accepted` and nothing supersedes it. This is
   what "in force right now" means. A `proposed` or `superseded` document is not
   binding, whatever it says.
+- **as-of** — where `docdag.yaml` declares a `period:`, a document is in force
+  between the two days it writes, so what binds is an answer about a day.
+  `--as-of YYYY-MM-DD` asks about another one; `--at <rev>` reads the documents
+  from a revision instead of the working tree. Without a `period:` neither
+  changes anything.
 - **resolve** — walk the `supersedes` chain forward to the documents that stand
   in for a ref today. A document nothing supersedes resolves to itself.
 - **typed edge** — a relation declared in frontmatter (`supersedes:`,
@@ -34,11 +39,13 @@ whole directory: one command replaces a fan-out of file reads.
 | --- | --- |
 | What am I working with here? | `docdag context <ref>` |
 | What is in force right now? | `docdag query --binding` |
+| What will be in force on a day? | `docdag query --binding --as-of 2027-04-01` |
 | What replaced this decision? | `docdag resolve <ref>` |
 | What rests on this decision? | `docdag query <ref> --ancestors` |
 | What does this decision rest on? | `docdag query <ref> --descendants` |
 | Is the corpus sound? | `docdag validate` |
 | Did my edit break anything? | `docdag validate --touching <path>` |
+| Are the rules themselves sound? | `docdag lint` |
 | Shape of the corpus | `docdag stats` |
 
 Start with `docdag context <ref>`. It prints the document, the successor it
@@ -84,7 +91,7 @@ read.
 `docdag` must be on `PATH`:
 
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.2.0
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.3.0
 ```
 
 Add this to the project's `.claude/settings.json` so the commands run without a
@@ -100,5 +107,16 @@ prompt each time:
 
 This plugin also installs a `PostToolUse` hook that runs
 `docdag validate --touching <file>` after every `Edit` or `Write` inside the
-documents directory and reports back when the edit broke an invariant. The hook
-reads its payload with `jq`; without `jq` on `PATH` it does nothing.
+documents directory and reports back when the edit broke an invariant. An edit
+to `docdag.yaml` is linted instead, with `docdag lint`: what breaks when the
+configuration changes is the rules, not the documents. The hook reads its
+payload with `jq`; without `jq` on `PATH` it does nothing.
+
+## Changing docdag.yaml
+
+`docdag lint` reports a rule that can never fire, one that fires on every
+document, and one that says what another rule already says. `--corpus` adds the
+rules the vault never fires and `--fixtures lint/` runs each rule's own
+`ruleid/` and `ok/` corpora. Write a fixture with every rule you add:
+`docdag new --fixture <rule>` generates both corpora from the rule's condition.
+It exits 1 on an error, 2 on warnings alone.

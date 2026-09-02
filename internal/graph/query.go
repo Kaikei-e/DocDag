@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -43,15 +44,47 @@ type QueryResult struct {
 // Resolve walks forward along the reverse edges of t to the current sink
 // documents. A document with no successors resolves to itself. It reports
 // model.ErrUnknownID for an absent id and model.ErrCycle on a cyclic walk.
+//
+// It reads every declared successor. A caller that has a configuration and a
+// day in hand wants ResolveAt, which stops where a period says the replacement
+// has not taken effect yet.
 func Resolve(g *model.Graph, id model.ID, t model.EdgeType) ([]model.ID, error) {
-	if _, ok := g.Nodes[id]; !ok {
-		return nil, fmt.Errorf("resolve %s: %w", id, model.ErrUnknownID)
-	}
-
 	// A successor the corpus does not hold is a dangling reference, reported by
 	// the structural checks: resolution stops there rather than answering with
 	// an identifier that names no document.
+	return resolveOver(g, retainKnown(g, Reverse(g, t)), id)
+}
+
+// ResolveAt walks the lineage to the documents that stand in for a reference on
+// one day. Where the kind being walked declares a period, a successor replaces
+// its predecessor only once somebody has accepted it and its own period has
+// begun: until then the predecessor is what binds, and resolve says so — which
+// is what keeps it answering the same set `--binding` does. A corpus whose
+// kinds declare no period resolves exactly as Resolve does.
+func ResolveAt(g *model.Graph, cfg config.Config, id model.ID, t model.EdgeType, asOf time.Time) ([]model.ID, error) {
+	if !cfg.Periods() {
+		return Resolve(g, id, t)
+	}
+	periods := EvalPeriods(g, cfg, asOf)
 	successors := retainKnown(g, Reverse(g, t))
+	for from, list := range successors {
+		if !periods.Declared(from) {
+			continue
+		}
+		successors[from] = slices.DeleteFunc(list, func(next model.ID) bool {
+			return !replaces(g, cfg, periods, next)
+		})
+	}
+	return resolveOver(g, successors, id)
+}
+
+// resolveOver is the lineage walk both spellings share: an iterative
+// depth-first search that reports the sinks it reaches and refuses a walk that
+// closes a loop.
+func resolveOver(g *model.Graph, successors map[model.ID][]model.ID, id model.ID) ([]model.ID, error) {
+	if _, ok := g.Nodes[id]; !ok {
+		return nil, fmt.Errorf("resolve %s: %w", id, model.ErrUnknownID)
+	}
 	color := make(map[model.ID]int, len(successors))
 	sinks := make(map[model.ID]bool)
 	color[id] = colorGray
@@ -177,40 +210,53 @@ func Query(g *model.Graph, id model.ID, opts QueryOptions) ([]QueryResult, error
 	return results, nil
 }
 
-// Binding reports whether a document is currently binding: its status is the
-// configured accepted value and no document supersedes it.
-func Binding(g *model.Graph, cfg config.Config, id model.ID) bool {
-	n, ok := g.Nodes[id]
+// Binding reports whether a document is binding on the day asked about: it
+// satisfies the projection the configuration names under binding. A caller
+// asking about many documents wants BindingSet, which evaluates the
+// projections once.
+func Binding(g *model.Graph, cfg config.Config, id model.ID, asOf time.Time) bool {
+	spec, ok := cfg.BindingProjection()
 	if !ok {
-		return false
+		return bindingByStatus(g, cfg)[id]
 	}
-	for _, e := range g.EdgesOfType(config.EdgeSupersedes) {
-		if e.To == id {
-			return false
-		}
-	}
-	return isAccepted(cfg, n)
+	return EvalProjections(g, cfg, asOf).Holds(spec.Name, id)
 }
 
-// BindingSet lists every binding document, sorted.
-func BindingSet(g *model.Graph, cfg config.Config) []model.ID {
-	superseded := make(map[model.ID]bool)
-	for _, e := range g.EdgesOfType(config.EdgeSupersedes) {
-		superseded[e.To] = true
+// BindingSet lists every document binding on the day asked about, sorted.
+func BindingSet(g *model.Graph, cfg config.Config, asOf time.Time) []model.ID {
+	spec, ok := cfg.BindingProjection()
+	if ok {
+		return EvalProjections(g, cfg, asOf).Set(spec.Name)
 	}
+	held := bindingByStatus(g, cfg)
 	binding := []model.ID{}
 	for _, id := range g.NodeIDs() {
-		if superseded[id] {
-			continue
-		}
-		if isAccepted(cfg, g.Nodes[id]) {
+		if held[id] {
 			binding = append(binding, id)
 		}
 	}
 	return binding
 }
 
-func isAccepted(cfg config.Config, n *model.Node) bool {
-	status, _ := canonicalStatus(cfg, n.Status)
-	return strings.EqualFold(status, config.StatusAccepted)
+// bindingByStatus is the binding projection written in code: accepted, and
+// superseded by nothing. It answers for a configuration that resolves no
+// binding projection — one that cleared the preset's with an explicit empty
+// list, or that names none — because a corpus still has a current set, and
+// reporting every document as current would be worse than an opinion. Every
+// preset-derived configuration resolves a projection instead: the merge carries
+// the preset's binding down to it.
+func bindingByStatus(g *model.Graph, cfg config.Config) map[model.ID]bool {
+	superseded := make(map[model.ID]bool)
+	for _, e := range g.EdgesOfType(config.EdgeSupersedes) {
+		superseded[e.To] = true
+	}
+	binding := make(map[model.ID]bool, len(g.Nodes))
+	for id, n := range g.Nodes {
+		if superseded[id] {
+			continue
+		}
+		status, _ := canonicalKindStatus(cfg, n.Kind, n.Status)
+		binding[id] = strings.EqualFold(status, config.StatusAccepted)
+	}
+	return binding
 }

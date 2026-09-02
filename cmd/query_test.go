@@ -275,3 +275,173 @@ func TestQueryUnknownReference(t *testing.T) {
 		t.Errorf("stderr = %q, want it to contain %q", got.stderr, "unknown document")
 	}
 }
+
+func TestQueryBindingFollowsTheConfiguredProjection(t *testing.T) {
+	dir := fixture(t, "projections")
+
+	got := run(t, "query", "--binding", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	assertLines(t, "binding", lines(got.stdout), []string{"0001", "0002", "0004", "0005", "0006", "0008"})
+}
+
+func TestQueryFieldsReadTheConfiguredProjections(t *testing.T) {
+	dir := fixture(t, "projections")
+
+	got := run(t, "query", "--binding", "--fields", "id,enforced,effective_must,settled",
+		"--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	assertLines(t, "binding", lines(got.stdout), []string{
+		"0001\ttrue\ttrue\ttrue",
+		"0002\tfalse\tfalse\tfalse",
+		"0004\tfalse\tfalse\tfalse",
+		"0005\tfalse\tfalse\ttrue",
+		"0006\tfalse\tfalse\ttrue",
+		"0008\tfalse\tfalse\tfalse",
+	})
+}
+
+func TestAProjectionIsOnlyAFieldWhereItIsDeclared(t *testing.T) {
+	dir := fixture(t, "projections")
+
+	t.Run("a declared projection is a column", func(t *testing.T) {
+		got := run(t, "resolve", "0007", "--fields", "id,current",
+			"--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+		assertExit(t, got, 0)
+		assertLines(t, "resolve", lines(got.stdout), []string{"0008\ttrue"})
+	})
+
+	t.Run("the same name under the preset is not", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--fields", "id,current", "--dir", fixture(t, "ok-basic"))
+
+		assertExit(t, got, 2)
+		if !strings.Contains(got.stderr, "unknown field") {
+			t.Errorf("stderr = %q, want an unknown field diagnostic", got.stderr)
+		}
+	})
+}
+
+func TestQueryAndResolveReadOneGraphOverEveryKind(t *testing.T) {
+	config := filepath.Join(fixture(t, "kinds"), "docdag.yaml")
+
+	t.Run("the binding set spans the kinds", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "binding", lines(got.stdout), []string{
+			"UZ-V-001", "UZ-V-003", "UZ-V-004", "UZ-V-005", "UZ-V-006",
+			"conform/uz-v-001", "conform/wrong-target", "dev-0001",
+		})
+	})
+
+	t.Run("ancestors cross a kind boundary", func(t *testing.T) {
+		got := run(t, "query", "UZ-V-001", "--ancestors", "--config", config)
+
+		assertExit(t, got, 0)
+		// The conformance test reaching the deviation that deviates from the
+		// clause is two hops of two edge types: one graph, three kinds.
+		assertLines(t, "ancestors", lines(got.stdout), []string{"UZ-V-006", "conform/uz-v-001", "conform/wrong-target", "dev-0001"})
+	})
+
+	t.Run("resolve follows the supersedes chain of one kind", func(t *testing.T) {
+		got := run(t, "resolve", "UZ-V-002", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "resolve", lines(got.stdout), []string{"UZ-V-003"})
+	})
+
+	t.Run("an identifier of another kind resolves to itself", func(t *testing.T) {
+		got := run(t, "resolve", "conform/uz-v-001", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "resolve", lines(got.stdout), []string{"conform/uz-v-001"})
+	})
+
+	t.Run("a reference no kind accepts is unrecognized", func(t *testing.T) {
+		got := run(t, "resolve", "uz-v-002", "--config", config)
+
+		assertExit(t, got, 1)
+		if !strings.Contains(got.stderr, "unrecognized reference") {
+			t.Errorf("stderr = %q, want an unrecognized reference diagnostic", got.stderr)
+		}
+	})
+}
+
+func TestQueryTheBindingSetOfTheSpecPreset(t *testing.T) {
+	config := specVaultConfig(t)
+
+	t.Run("binding is every clause in force, at the strength it is in force at", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--config", config)
+
+		// The modality is a column rather than a thing to read the identifiers
+		// for: a permission and a prohibition are both in force, and the set is
+		// unreadable without it. UZ-V-005 is missing because it is superseded,
+		// and nothing else is: a MUST nothing enforces is still in force, at
+		// the strength of a SHOULD.
+		assertExit(t, got, 0)
+		assertLines(t, "binding", lines(got.stdout), []string{
+			"UZ-V-001\tMUST",
+			"UZ-V-002\tMUST",
+			"UZ-V-003\tSHOULD",
+			"UZ-V-004\tSHOULD",
+			"UZ-V-006\tMAY",
+			"UZ-V-008\tSHOULD_NOT",
+			"UZ-V-009\tMUST",
+			"UZ-V-010\tMUST_NOT",
+		})
+	})
+
+	t.Run("named columns replace the default set", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--fields", "id,effective_must", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "binding", lines(got.stdout), []string{
+			"UZ-V-001\ttrue",
+			"UZ-V-002\tfalse",
+			"UZ-V-003\tfalse",
+			"UZ-V-004\tfalse",
+			"UZ-V-006\tfalse",
+			"UZ-V-008\tfalse",
+			"UZ-V-009\ttrue",
+			"UZ-V-010\ttrue",
+		})
+	})
+
+	t.Run("the projections read as columns", func(t *testing.T) {
+		got := run(t, "query", "UZ-V-001", "--ancestors", "--fields", "id,enforced,effective_must", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "fields", lines(got.stdout), []string{
+			"UZ-V-006\tfalse\tfalse",
+			"conform/uz-v-001\tfalse\tfalse",
+			"interp/UZ-V-001@2026-08-01\tfalse\tfalse",
+		})
+	})
+
+	t.Run("a declared field reads as a column, and a document without it says so", func(t *testing.T) {
+		got := run(t, "query", "UZ-V-001", "--ancestors", "--fields", "id,modality", "--config", config)
+
+		assertExit(t, got, 0)
+		assertLines(t, "fields", lines(got.stdout), []string{
+			"UZ-V-006\tMAY",
+			"conform/uz-v-001\t-",
+			"interp/UZ-V-001@2026-08-01\t-",
+		})
+	})
+}
+
+// TestQueryTheBindingSetOfTheADRPreset pins the other half of the default
+// column set: a corpus that declares no modality is listed exactly as it was
+// before there was one to declare.
+func TestQueryTheBindingSetOfTheADRPreset(t *testing.T) {
+	got := run(t, "query", "--binding", "--dir", fixture(t, "ok-madr"))
+
+	assertExit(t, got, 0)
+	for _, line := range lines(got.stdout) {
+		if strings.Contains(line, "\t") {
+			t.Errorf("binding line = %q, want the identifier alone", line)
+		}
+	}
+}

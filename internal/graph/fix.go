@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
@@ -20,25 +21,37 @@ var quotedRef = regexp.MustCompile(`"([^"]*)"`)
 
 // Suggest fills in the Fix of every finding it recognizes. The checks say what
 // is wrong; this says what to type, as a pass over a finished report so a check
-// never has to carry a remedy.
-func Suggest(findings []model.Finding, g *model.Graph, cfg config.Config) []model.Finding {
+// never has to carry a remedy. asOf is the day the run is about, so a remedy
+// that walks a lineage stops where the check that reported it stopped.
+//
+// A finding that arrives carrying one keeps it: where the remedy names the
+// other document of a pair, only the check that paired them knows which, and
+// recovering that from a finished finding would mean reading identifiers back
+// out of prose.
+func Suggest(findings []model.Finding, g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
 	for i := range findings {
-		findings[i].Fix = suggestion(findings[i], g, cfg)
+		if findings[i].Fix != "" {
+			continue
+		}
+		findings[i].Fix = suggestion(findings[i], g, cfg, asOf)
 	}
 	return findings
 }
 
-func suggestion(f model.Finding, g *model.Graph, cfg config.Config) string {
+func suggestion(f model.Finding, g *model.Graph, cfg config.Config, asOf time.Time) string {
+	field, value, _ := FixSetsField(cfg, f.Rule)
 	switch f.Rule {
 	case model.RuleDanglingRef, model.RuleDanglingReference:
 		return didYouMean(g, f.Detail, f.ID)
 	case model.RuleStatusDrift:
-		return fmt.Sprintf("set %s: %s in %s", statusField(cfg), config.StatusSuperseded, f.Location.Path)
+		return fmt.Sprintf("set %s: %s in %s", field, value, f.Location.Path)
 	case model.RuleSupersededOrphan:
 		return fmt.Sprintf("declare %s: %s in the replacing document, or set %s: %s",
-			supersedesKey(cfg), f.ID, statusField(cfg), config.StatusWithdrawn)
+			supersedesKey(cfg), f.ID, field, value)
 	case model.RuleUnstructuredSupersedes:
 		return declareEdge(g, cfg, f.ID)
+	case model.RuleStaleTarget:
+		return leafSuggestion(g, cfg, f, asOf)
 	case model.RuleUnknownStatus:
 		if len(cfg.StatusValues) == 0 {
 			return ""
@@ -48,8 +61,48 @@ func suggestion(f model.Finding, g *model.Graph, cfg config.Config) string {
 		return "add a YAML frontmatter block with title and " + statusField(cfg)
 	case model.RuleCycle:
 		return "remove one of the listed edges"
+	case model.RuleDeprecatedField:
+		return migrateField(g, cfg, f)
 	}
 	return ""
+}
+
+// FixSetsField reports the frontmatter key and value a rule's built-in remedy
+// tells the reader to write, and whether the rule has such a remedy at all. It
+// is the whole vocabulary of "set <field>: <value>" suggestions DocDag
+// generates — the two status changes below — and it is exported because the
+// preset lint compares those demands against each other: two rules that can
+// both fire on one document and demand two different values for one key are an
+// ambivalent pair, and reading the demand from here is what keeps the check and
+// the suggestion from drifting apart.
+func FixSetsField(cfg config.Config, rule string) (field, value string, ok bool) {
+	switch rule {
+	case model.RuleStatusDrift:
+		return statusField(cfg), config.StatusSuperseded, true
+	case model.RuleSupersededOrphan:
+		return statusField(cfg), config.StatusWithdrawn, true
+	}
+	return "", "", false
+}
+
+// migrateField names the key a retired field's value belongs under, where the
+// declaration says. A field retired without a migrate_to has no mechanical
+// remedy: it is being removed, not moved, and only the author knows what the
+// value was for.
+func migrateField(g *model.Graph, cfg config.Config, f model.Finding) string {
+	match := quotedRef.FindStringSubmatch(f.Detail)
+	if match == nil {
+		return ""
+	}
+	kind := ""
+	if n, ok := g.Node(f.ID); ok {
+		kind = n.Kind
+	}
+	spec, ok := cfg.Field(kind, match[1])
+	if !ok || spec.MigrateTo == "" {
+		return ""
+	}
+	return fmt.Sprintf("migrate %s to %s", match[1], spec.MigrateTo)
 }
 
 // didYouMean names the existing documents closest to the reference that named

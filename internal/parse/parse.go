@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,10 +29,19 @@ const markdownExt = ".md"
 // Document is one Markdown file after parsing and before graph construction.
 // FrontmatterLine, BodyLine and KeyLines are 1-based file lines, zero when
 // unknown, so a finding can name the exact key or body line it is about.
+//
+// Kind is the kind whose directory the file was read from, empty on a
+// single-kind corpus. Identity is the token the identifier was read from: the
+// file name under the single-kind rules, and under a kind the frontmatter id
+// where the document writes one and the name's stem where it does not. A
+// finding quotes it when the token yields no identifier at all, which is the
+// one case where a document exists with an empty ID.
 type Document struct {
 	Path            string
 	Name            string
 	ID              model.ID
+	Kind            string
+	Identity        string
 	Frontmatter     map[string]any
 	Body            string
 	HasFrontmatter  bool
@@ -188,19 +198,58 @@ func recordKeyLine(lines map[string]int, value *ast.MappingValueNode) {
 	}
 }
 
-// File parses one Markdown file. A frontmatter decode failure is recorded on
-// the returned document rather than returned, so later checks still run.
+// File parses one Markdown file under the single-kind identity rules: the file
+// name carries the identity. A frontmatter decode failure is recorded on the
+// returned document rather than returned, so later checks still run.
 func File(path string, cfg config.Config) (*Document, error) {
+	doc, err := readDocument(path)
+	if err != nil {
+		return nil, err
+	}
+	norm := cfg.Normalizer()
+	doc.MatchesPattern = norm.MatchesFilename(doc.Name)
+	doc.Identity = doc.Name
+	if id, ok := norm.Normalize(doc.Name); ok {
+		doc.ID = id
+	}
+	return doc, nil
+}
+
+// KindFile parses one Markdown file as a document of the named kind: the
+// frontmatter id key carries the identity where the document writes one, and
+// the file name's stem otherwise. A file that yields neither is a document
+// without an identity, which CheckDocuments reports rather than skips.
+func KindFile(path string, cfg config.Config, kind string) (*Document, error) {
+	doc, err := readDocument(path)
+	if err != nil {
+		return nil, err
+	}
+	doc.Kind = kind
+	// A kind names a directory of its own, so membership of that directory is
+	// what makes a file one of its documents. There is no file-name pattern to
+	// fall short of, and a file that yields no identity is reported rather than
+	// passed over in silence.
+	doc.MatchesPattern = true
+	norm := cfg.KindNormalizer(kind)
+	doc.Identity = strings.TrimSuffix(doc.Name, markdownExt)
+	if written, ok := Attr(doc.Frontmatter, config.KeyID); ok {
+		doc.Identity = strings.TrimSpace(written)
+	}
+	if id, ok := norm.Normalize(doc.Identity); ok {
+		doc.ID = id
+	}
+	return doc, nil
+}
+
+// readDocument reads one Markdown file into a document: the frontmatter split
+// from the body, decoded, and located. It settles everything but identity,
+// which is the one thing the kinds disagree about.
+func readDocument(path string) (*Document, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read document %s: %w", path, err)
 	}
-	norm := cfg.Normalizer()
-	name := filepath.Base(path)
-	doc := &Document{Path: path, Name: name, MatchesPattern: norm.MatchesFilename(name)}
-	if id, ok := norm.Normalize(name); ok {
-		doc.ID = id
-	}
+	doc := &Document{Path: path, Name: filepath.Base(path)}
 
 	frontmatter, body, ok := SplitFrontmatter(src)
 	doc.Body = string(body)
@@ -253,16 +302,13 @@ func LocalPath(base, path string) string {
 // filename pattern. The name carries the identity, so a file named anything
 // else is not a managed document, whatever its frontmatter says.
 func Dir(dir string, cfg config.Config) ([]*Document, error) {
-	entries, err := os.ReadDir(dir)
+	entries, err := markdownEntries(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read documents directory %s: %w", dir, err)
+		return nil, err
 	}
 	docs := make([]*Document, 0, len(entries))
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != markdownExt {
-			continue
-		}
-		doc, err := File(filepath.Join(dir, entry.Name()), cfg)
+	for _, name := range entries {
+		doc, err := File(filepath.Join(dir, name), cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -274,13 +320,88 @@ func Dir(dir string, cfg config.Config) ([]*Document, error) {
 	return docs, nil
 }
 
+// KindDir parses every Markdown file directly in one kind's directory. Unlike
+// Dir it skips nothing: the directory is what declares a file a document of
+// this kind, so a file that yields no identity is a finding rather than another
+// tool's file.
+func KindDir(dir string, cfg config.Config, kind string) ([]*Document, error) {
+	entries, err := markdownEntries(dir)
+	if err != nil {
+		return nil, err
+	}
+	docs := make([]*Document, 0, len(entries))
+	for _, name := range entries {
+		doc, err := KindFile(filepath.Join(dir, name), cfg, kind)
+		if err != nil {
+			return nil, err
+		}
+		docs = append(docs, doc)
+	}
+	return docs, nil
+}
+
+// Kinds parses every declared kind's directory. The kinds are read in sorted
+// name order and each directory in file-name order, so the corpus is assembled
+// the same way on every run and an identifier collision names the same first
+// document each time.
+//
+// A directory that is not there is a kind with no documents in it, not a
+// failure. A preset declares the whole vocabulary a corpus may grow into —
+// `preset: spec` names eight directories — and a vault adopts it before it has
+// written its first post-mortem or its first deviation. Refusing to read
+// anything until all eight exist would make the one-line adoption the
+// documentation promises impossible. Every other error still propagates: an
+// unreadable directory is a fact about the machine, not about the corpus.
+func Kinds(cfg config.Config) ([]*Document, error) {
+	docs := []*Document{}
+	for _, name := range cfg.KindNames() {
+		dir := cfg.Kinds[name].Dir
+		if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		kindDocs, err := KindDir(dir, cfg, name)
+		if err != nil {
+			return nil, err
+		}
+		docs = append(docs, kindDocs...)
+	}
+	return docs, nil
+}
+
+// Documents parses the corpus a configuration describes: every kind's
+// directory, or the single documents directory of a corpus that declares no
+// kinds.
+func Documents(cfg config.Config) ([]*Document, error) {
+	if cfg.Multikind() {
+		return Kinds(cfg)
+	}
+	return Dir(cfg.Dir, cfg)
+}
+
+// markdownEntries lists the Markdown files directly in dir, in the order
+// os.ReadDir returns them, which is by file name.
+func markdownEntries(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read documents directory %s: %w", dir, err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != markdownExt {
+			continue
+		}
+		names = append(names, entry.Name())
+	}
+	return names, nil
+}
+
 // Attr reads a scalar frontmatter value as a string.
 func Attr(fm map[string]any, key string) (string, bool) {
 	value, ok := fm[key]
 	if !ok {
 		return "", false
 	}
-	return scalar(value)
+	return Scalar(value)
 }
 
 // Refs reads a list-valued frontmatter key as raw, un-normalized references. A
@@ -289,17 +410,13 @@ func Attr(fm map[string]any, key string) (string, bool) {
 // decodes as a nested sequence, and dropping it silently would hide the very
 // link the tool exists to find.
 func Refs(fm map[string]any, key string) (refs, invalid []string) {
-	value, ok := fm[key]
-	if !ok || value == nil {
+	items, ok := listItems(fm, key)
+	if !ok {
 		return nil, nil
-	}
-	items, isList := value.([]any)
-	if !isList {
-		items = []any{value}
 	}
 	refs = make([]string, 0, len(items))
 	for _, item := range items {
-		ref, ok := scalar(item)
+		ref, ok := Scalar(item)
 		if !ok {
 			invalid = append(invalid, fmt.Sprint(item))
 			continue
@@ -312,9 +429,89 @@ func Refs(fm map[string]any, key string) (refs, invalid []string) {
 	return refs, invalid
 }
 
-// scalar renders a decoded YAML scalar as the string it was written as. A
-// zero-padded reference decodes as a number, so numbers must stringify.
-func scalar(value any) (string, bool) {
+// RefEntry is one entry under an edge key: the raw, un-normalized reference it
+// names and the attributes it was written with. Attrs holds the values as YAML
+// decoded them, so the caller can report a value that is not a scalar rather
+// than lose it; a plain reference carries none.
+type RefEntry struct {
+	Ref   string
+	Attrs map[string]any
+}
+
+// RefEntries reads a list-valued frontmatter key as references that may carry
+// attributes: a scalar item is a plain reference, and a mapping item naming a
+// ref key is an attributed one, the remaining keys being its attributes. As in
+// Refs, invalid holds the entries that are neither, rendered as written — a
+// mapping without a ref names no document, and a caller must not drop it in
+// silence. Only an edge whose spec declares attributes reads its key this way;
+// every other edge keeps taking plain references alone.
+func RefEntries(fm map[string]any, key string) (entries []RefEntry, invalid []string) {
+	items, ok := listItems(fm, key)
+	if !ok {
+		return nil, nil
+	}
+	entries = make([]RefEntry, 0, len(items))
+	for _, item := range items {
+		if ref, isScalar := Scalar(item); isScalar {
+			if ref = strings.TrimSpace(ref); ref == "" {
+				continue
+			}
+			entries = append(entries, RefEntry{Ref: ref})
+			continue
+		}
+		entry, ok := attributedEntry(item)
+		if !ok {
+			invalid = append(invalid, fmt.Sprint(item))
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries, invalid
+}
+
+// attributedEntry reads one mapping item as an attributed reference. A mapping
+// whose ref is missing, is not a scalar or is blank names nothing, so it is not
+// an entry at all and the caller reports it the way it reports any other item
+// that is not a reference.
+func attributedEntry(item any) (RefEntry, bool) {
+	mapping, isMapping := item.(map[string]any)
+	if !isMapping {
+		return RefEntry{}, false
+	}
+	ref, isScalar := Scalar(mapping[config.EdgeRefKey])
+	if !isScalar {
+		return RefEntry{}, false
+	}
+	if ref = strings.TrimSpace(ref); ref == "" {
+		return RefEntry{}, false
+	}
+	attrs := make(map[string]any, len(mapping)-1)
+	for name, value := range mapping {
+		if name != config.EdgeRefKey {
+			attrs[name] = value
+		}
+	}
+	return RefEntry{Ref: ref, Attrs: attrs}, true
+}
+
+// listItems renders a frontmatter value as the list it stands for: a scalar is
+// a one-element list, and a key that is absent or empty is no list at all.
+func listItems(fm map[string]any, key string) ([]any, bool) {
+	value, ok := fm[key]
+	if !ok || value == nil {
+		return nil, false
+	}
+	items, isList := value.([]any)
+	if !isList {
+		return []any{value}, true
+	}
+	return items, true
+}
+
+// Scalar renders a decoded YAML scalar as the string it was written as, and
+// reports whether the value is a scalar at all. A zero-padded reference decodes
+// as a number, so numbers must stringify.
+func Scalar(value any) (string, bool) {
 	switch v := value.(type) {
 	case string:
 		return v, true

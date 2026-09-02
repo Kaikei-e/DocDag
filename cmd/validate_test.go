@@ -5,9 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
+	"github.com/Kaikei-e/DocDag/internal/config"
 	"github.com/Kaikei-e/DocDag/internal/model"
 	"github.com/Kaikei-e/DocDag/internal/render"
 )
@@ -239,6 +241,38 @@ func gitRepo(t *testing.T, files map[string]string) string {
 		"-c", "commit.gpgsign=false",
 		"commit", "--quiet", "-m", "the first revision")
 	return dir
+}
+
+// gitRepoAt commits a corpus on a day of the caller's choosing, so a test about
+// the as-of default can tell the committer date from the clock.
+func gitRepoAt(t *testing.T, day string, files map[string]string) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is not on PATH")
+	}
+	dir := writeDocs(t, files)
+	git(t, dir, "init", "--quiet")
+	git(t, dir, "add", "-A")
+	gitCommit(t, dir, day, "the first revision")
+	return dir
+}
+
+// gitCommit writes one commit dated on a day, with an identity of its own so a
+// runner without a git configuration can make one.
+func gitCommit(t *testing.T, dir, day, message string) {
+	t.Helper()
+	stamp := day + "T12:00:00+00:00"
+	cmd := exec.Command("git", "-C", dir,
+		"-c", "user.name=DocDag Test",
+		"-c", "user.email=test@example.test",
+		"-c", "commit.gpgsign=false",
+		"commit", "--quiet", "-m", message)
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, "nonexistent-gitconfig"), "GIT_CONFIG_NOSYSTEM=1",
+		"GIT_AUTHOR_DATE="+stamp, "GIT_COMMITTER_DATE="+stamp)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v: %s", err, out)
+	}
 }
 
 func git(t *testing.T, dir string, args ...string) {
@@ -794,6 +828,9 @@ func TestValidateJSONReportCarriesLocations(t *testing.T) {
 	if report.SchemaVersion != render.ReportSchemaVersion {
 		t.Errorf("schema_version = %d, want %d", report.SchemaVersion, render.ReportSchemaVersion)
 	}
+	if report.PresetVersion != config.ADRPresetVersion {
+		t.Errorf("preset_version = %d, want the preset's %d", report.PresetVersion, config.ADRPresetVersion)
+	}
 	if len(report.Findings) != 1 {
 		t.Fatalf("findings = %+v, want one", report.Findings)
 	}
@@ -943,4 +980,463 @@ func TestTheReportFormatsBelongToValidateAlone(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestValidateProjectionsAndTheExtendedVocabulary(t *testing.T) {
+	dir := fixture(t, "projections")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 0)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0002-rotate-keys-every-quarter.md:3: WARN heavily_depended_on 0002:",
+		"0002-rotate-keys-every-quarter.md:4: WARN orphan_must 0002:",
+		"0005-use-a-managed-secret-store.md:3: WARN stale_dependency 0005:",
+	})
+}
+
+func TestAProjectionReferenceCycleIsAConfigurationError(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"docdag.yaml": "projections:\n" +
+			"  - name: a\n    when: {attr: {b: {eq: \"true\"}}}\n" +
+			"  - name: b\n    when: {attr: {a: {eq: \"true\"}}}\n",
+		"docs/adr/0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n",
+	})
+	t.Chdir(dir)
+
+	got := run(t, "validate")
+
+	assertExit(t, got, 3)
+	if !strings.Contains(got.stderr, "cycle") {
+		t.Errorf("stderr = %q, want it to name the projection cycle", got.stderr)
+	}
+}
+
+func TestValidateEdgeAttributes(t *testing.T) {
+	dir := fixture(t, "edge-attrs")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertLines(t, "findings", findingLines(got.stdout), []string{
+		`0005-retire-the-per-host-log-index.md:4: ERROR edge_attr_invalid 0005: supersedes reference "0006" attribute "reason" is "rewrite", want one of: recurrence, premise-collapse, conflict, vocabulary`,
+		`0005-retire-the-per-host-log-index.md:4: ERROR edge_attr_unknown 0005: supersedes reference "0006" carries unknown attribute "note", declared: reason`,
+		`0007-sample-debug-logs.md:4: ERROR edge_attr_missing 0007: supersedes reference "0008" is missing required attribute "reason"`,
+		`0007-sample-debug-logs.md:6: ERROR dangling_ref 0007: depends-on reference "map[ref:0003]" does not name a document`,
+		`0009-measure-sampling-agreement.md:4: ERROR edge_attr_invalid 0009: measures reference "0007" attribute "agreement" is "high", want a number`,
+		`0009-measure-sampling-agreement.md:4: ERROR edge_attr_invalid 0009: measures reference "0007" attribute "expires" is "soon", want a date as YYYY-MM-DD`,
+	})
+}
+
+func TestValidateRejectsAnEdgeAttributeDeclarationItCannotAnswer(t *testing.T) {
+	tests := []struct {
+		name  string
+		attrs string
+		want  string
+	}{
+		{name: "an unknown type", attrs: "      agreement: {type: float}\n", want: "unknown type"},
+		{name: "a vocabulary on a number", attrs: "      agreement: {type: number, one_of: [high, low]}\n", want: "one_of"},
+		{name: "the reserved reference key", attrs: "      ref: {required: true}\n", want: "reserved"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeDocs(t, map[string]string{
+				"docdag.yaml": "edges:\n" +
+					"  - name: supersedes\n    key: supersedes\n    acyclic: true\n    direction: forward\n" +
+					"    attrs:\n" + tt.attrs,
+				"docs/adr/0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n",
+			})
+			t.Chdir(dir)
+
+			got := run(t, "validate")
+
+			assertExit(t, got, 3)
+			if !strings.Contains(got.stderr, tt.want) {
+				t.Errorf("stderr = %q, want it to name %q", got.stderr, tt.want)
+			}
+		})
+	}
+}
+
+// kindsConfig is the multi-kind corpus's configuration file. Its kind
+// directories are read relative to it, so the fixture is driven by --config
+// alone: there is no single documents directory for --dir to name.
+func kindsConfig(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(fixture(t, "kinds"), "docdag.yaml")
+}
+
+// specVaultConfig is the corpus written under the `spec` preset. Like every
+// multi-kind corpus it is driven by --config alone: the kinds carry the
+// directories, so there is none for --dir to name.
+func specVaultConfig(t *testing.T) string {
+	t.Helper()
+	return filepath.Join(fixture(t, "spec-vault"), "docdag.yaml")
+}
+
+func TestValidateTargetConditions(t *testing.T) {
+	dir := fixture(t, "target")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertLines(t, "findings", findingLines(got.stdout), []string{
+		"0003-expire-sessions-after-a-day.md:4: ERROR stale_target 0003: depends-on targets 0001, which 0002 supersedes",
+		"0005-redact-session-identifiers-from-logs.md:4: ERROR stale_target 0005: amends targets 0006, which does not satisfy the edge's target condition",
+	})
+	// Only the leaf_of failure has a lineage to walk, so only it carries a fix.
+	fixes := []string{}
+	for _, line := range lines(got.stdout) {
+		if strings.HasPrefix(strings.TrimSpace(line), "fix:") {
+			fixes = append(fixes, strings.TrimSpace(line))
+		}
+	}
+	assertLines(t, "fixes", fixes, []string{"fix: did you mean 0002?"})
+}
+
+func TestValidatePathConstraintsCorpus(t *testing.T) {
+	dir := fixture(t, "path-constraints")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertLines(t, "findings", findingLines(got.stdout), []string{
+		"0003-retry-failed-jobs-three-times.md:4: ERROR path_mismatch 0003: amend_targets_current: amends -> ^supersedes reaches 0002, want none",
+		"0004-move-poison-jobs-to-a-dead-letter-queue.md:4: ERROR path_mismatch 0004: amend_scope_consistent: amends -> depends-on reaches 0006, which depends-on does not",
+	})
+	if strings.Contains(got.stdout, "fix:") {
+		t.Errorf("stdout = %q, want no fix: which of the two paths is wrong is not DocDag's guess", got.stdout)
+	}
+}
+
+func TestValidateRejectsATargetOrPathItCannotAnswer(t *testing.T) {
+	tests := []struct {
+		name   string
+		config string
+		want   string
+	}{
+		{
+			name: "a via nested inside a target",
+			config: "edges:\n  - name: supersedes\n    key: supersedes\n    acyclic: true\n    direction: forward\n" +
+				"    target:\n      via: {edge: supersedes, attr: {status: {eq: accepted}}}\n",
+			want: "second hop",
+		},
+		{
+			name: "a leaf_of naming an undeclared edge",
+			config: "edges:\n  - name: supersedes\n    key: supersedes\n    acyclic: true\n    direction: forward\n" +
+				"    target: {leaf_of: relates-to}\n",
+			want: "leaf_of",
+		},
+		{
+			name:   "a path of three steps",
+			config: "path_constraints:\n  - name: too_long\n    path: [supersedes, supersedes, supersedes]\n    equals: none\n",
+			want:   "want 1 or 2",
+		},
+		{
+			name:   "a reversed step naming an undeclared edge",
+			config: "path_constraints:\n  - name: unknown_step\n    path: [^relates-to]\n    equals: none\n",
+			want:   "undeclared edge type",
+		},
+		{
+			name:   "a set the vocabulary does not write",
+			config: "path_constraints:\n  - name: everything\n    path: [supersedes]\n    equals: all\n",
+			want:   "equals",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeDocs(t, map[string]string{
+				"docdag.yaml":                 tt.config,
+				"docs/adr/0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n",
+			})
+			t.Chdir(dir)
+
+			got := run(t, "validate")
+
+			assertExit(t, got, 3)
+			if !strings.Contains(got.stderr, tt.want) {
+				t.Errorf("stderr = %q, want it to name %q", got.stderr, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateACorpusUnderTheSpecPreset(t *testing.T) {
+	got := run(t, "validate", "--config", specVaultConfig(t))
+
+	assertExit(t, got, 1)
+	// Five of the eight findings come from a preset rule — a standard
+	// hardening into dogma, and a revision in flight. The other three are the
+	// structural things wrong with the corpus: a conformance test left
+	// pointing at the clause UZ-V-004 replaced, a MUST standing against a
+	// MUST_NOT about one subject, and a departure recorded until a day that has
+	// passed. The weak conflict between UZ-V-006 and UZ-V-008 is not among
+	// them: the vault records the exception, so the finding is suppressed.
+	//
+	// Three of the eight are the day's own answers, and they hold whatever day
+	// the run is asked about: the premise retired in February, the departure
+	// expired in August, and UZ-V-011 has been in trial since it was written.
+	assertLines(t, "findings", findingLines(got.stdout), []string{
+		"UZ-V-002.md:4: ERROR orphan_must UZ-V-002: is MUST or MUST_NOT and accepted but nothing enforces it",
+		"UZ-V-003.md:5: ERROR stale_premise UZ-V-003: is accepted but a premise is no longer in force",
+		"UZ-V-009.md:4: ERROR modality_conflict UZ-V-009: is MUST and UZ-V-010 is MUST_NOT about topic/seed-recording",
+		"report-states-its-model.md:3: ERROR orphan_test conform/report-states-its-model: enforces no clause",
+		"uz-v-005.md:5: ERROR stale_target conform/uz-v-005: enforces targets UZ-V-005, which UZ-V-004 supersedes",
+		"UZ-V-003.md:5: WARN pending_successor UZ-V-003: a successor is declared but not yet in force; this clause remains binding until then",
+		"UZ-V-004.md:3: WARN no_counterexample UZ-V-004: is accepted without a counterexample",
+		"dev-0001.md:7: WARN expired_deviation dev-0001: expires 2026-08-01 has passed and the status is still accepted",
+	})
+	// The text report of a corpus that declares periods says which day it was
+	// asked about, because the answer above depends on it.
+	if !slices.Contains(lines(got.stdout), "as of "+headCommitterDay(t)) {
+		t.Errorf("stdout = %q, want the as-of line a corpus with periods carries", got.stdout)
+	}
+}
+
+// TestValidateShowsWhatAnExceptionSuppresses drives the defeater end to end: a
+// weak conflict the corpus has answered is out of the report and out of the
+// summary, and the flag shows it with the edge that answers it.
+func TestValidateShowSuppressed(t *testing.T) {
+	config := specVaultConfig(t)
+	suppressed := "UZ-V-006.md:4: ERROR modality_conflict UZ-V-006: is MAY and UZ-V-008 is SHOULD_NOT about topic/inferential-grader, " +
+		"suppressed by excepts UZ-V-006 -> UZ-V-008 (scope: only where the run also records a calibration measure)"
+
+	t.Run("the text report carries the suppressed finding and its exception", func(t *testing.T) {
+		got := run(t, "validate", "--show-suppressed", "--config", config)
+
+		assertExit(t, got, 1)
+		if !slices.Contains(findingLines(got.stdout), suppressed) {
+			t.Errorf("findings = %q, want a line %q", findingLines(got.stdout), suppressed)
+		}
+		// A conflict already answered has nothing to type: the remedy would be
+		// the edge the reader is looking at on the line above.
+		for _, line := range lines(got.stdout) {
+			if strings.HasPrefix(strings.TrimSpace(line), "fix: declare excepts") {
+				t.Errorf("stdout = %q, want no fix on a suppressed conflict", got.stdout)
+			}
+		}
+	})
+
+	t.Run("the default report leaves it out", func(t *testing.T) {
+		got := run(t, "validate", "--config", config)
+
+		assertExit(t, got, 1)
+		if slices.Contains(findingLines(got.stdout), suppressed) {
+			t.Errorf("findings = %q, want the suppressed conflict left out", findingLines(got.stdout))
+		}
+	})
+
+	t.Run("the summary counts the same either way", func(t *testing.T) {
+		shown := decodeJSON[render.Report](t, run(t, "validate", "--show-suppressed", "--format", "json", "--config", config).stdout)
+		hidden := decodeJSON[render.Report](t, run(t, "validate", "--format", "json", "--config", config).stdout)
+
+		if shown.Summary != hidden.Summary {
+			t.Errorf("summary = %+v with --show-suppressed, %+v without: a suppressed finding is not an open failure",
+				shown.Summary, hidden.Summary)
+		}
+		if len(shown.Findings) != len(hidden.Findings)+1 {
+			t.Errorf("findings = %d with --show-suppressed, %d without, want exactly the one suppressed conflict between them",
+				len(shown.Findings), len(hidden.Findings))
+		}
+		for _, f := range hidden.Findings {
+			if f.Suppressed {
+				t.Errorf("default json carries a suppressed finding: %+v", f)
+			}
+		}
+		var carried bool
+		for _, f := range shown.Findings {
+			carried = carried || f.Suppressed
+		}
+		if !carried {
+			t.Error("json under --show-suppressed marks nothing suppressed, want the flag on the finding")
+		}
+	})
+}
+
+// TestValidateSuggestsTheLeafOfAStaleTarget drives the one transitive part of
+// the target check through the CLI: the check itself is local, and the walk to
+// the leaf of the lineage happens only to write the fix line.
+func TestValidateSuggestsTheLeafOfAStaleTarget(t *testing.T) {
+	got := run(t, "validate", "--config", specVaultConfig(t))
+
+	assertExit(t, got, 1)
+	want := "  fix: did you mean UZ-V-004?"
+	if !slices.Contains(lines(got.stdout), want) {
+		t.Errorf("stdout = %q, want a line %q", got.stdout, want)
+	}
+}
+
+func TestValidateReportsTheSpecPresetRevision(t *testing.T) {
+	got := run(t, "validate", "--format", "json", "--config", specVaultConfig(t))
+
+	assertExit(t, got, 1)
+	report := decodeJSON[render.Report](t, got.stdout)
+	if report.PresetVersion != config.SpecPresetVersion {
+		t.Errorf("preset_version = %d, want %d", report.PresetVersion, config.SpecPresetVersion)
+	}
+	if report.Summary.Documents != 26 {
+		t.Errorf("documents = %d, want the twenty-six the eight kinds hold", report.Summary.Documents)
+	}
+	if report.AsOf != headCommitterDay(t) {
+		t.Errorf("as_of = %q, want the day HEAD was committed on", report.AsOf)
+	}
+}
+
+func TestValidateAMultiKindCorpus(t *testing.T) {
+	got := run(t, "validate", "--config", kindsConfig(t))
+
+	assertExit(t, got, 1)
+	assertLines(t, "findings", findingLines(got.stdout), []string{
+		`README.md:1: ERROR id_mismatch: "README" is not an identifier of kind "clause", which reads ^UZ-[A-Z]-\d{3}$`,
+		`UZ-V-004.md:5: ERROR unknown_field UZ-V-004: frontmatter key "owner" is not declared by the closed kind "clause", declared: date, deviates-from, enforces, id, kind, status, supersedes, title`,
+		`UZ-V-005.md:3: ERROR kind_mismatch UZ-V-005: frontmatter kind "conform" disagrees with directory kind "clause"`,
+		`UZ-V-006.md:5: ERROR edge_kind_mismatch UZ-V-006: enforces source UZ-V-006 is kind "clause", want one of: conform`,
+		`missing-id.md:1: ERROR id_mismatch: "missing-id" is not an identifier of kind "conform", which reads ^conform/[a-z0-9-]+$`,
+		`wrong-target.md:6: ERROR edge_kind_mismatch conform/wrong-target: enforces target dev-0001 is kind "deviation", want one of: clause`,
+	})
+}
+
+func TestValidateTouchingReachesEveryKindDirectory(t *testing.T) {
+	kinds := fixture(t, "kinds")
+
+	got := run(t, "validate", "--config", kindsConfig(t), "--touching", filepath.Join(kinds, "spec", "conform"))
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"missing-id.md:1: ERROR id_mismatch:",
+		"wrong-target.md:6: ERROR edge_kind_mismatch conform/wrong-target:",
+	})
+	if !strings.Contains(got.stderr, "(4 findings hidden)") {
+		t.Errorf("stderr = %q, want the findings of the other kinds counted as hidden", got.stderr)
+	}
+}
+
+func TestValidateReportsAMultiKindCorpusAsJSON(t *testing.T) {
+	got := run(t, "validate", "--format", "json", "--config", kindsConfig(t))
+
+	assertExit(t, got, 1)
+	report := decodeJSON[render.Report](t, got.stdout)
+	if report.Summary.Documents != 9 {
+		t.Errorf("documents = %d, want the nine the three kinds hold", report.Summary.Documents)
+	}
+	rules := map[string]bool{}
+	for _, f := range report.Findings {
+		rules[f.Rule] = true
+	}
+	for _, rule := range []string{model.RuleIDMismatch, model.RuleKindMismatch, model.RuleUnknownField, model.RuleEdgeKindMismatch} {
+		if !rules[rule] {
+			t.Errorf("findings = %+v, want a %s among them", report.Findings, rule)
+		}
+	}
+}
+
+func TestValidateRefusesTheHistoryCheckOnAMultiKindCorpus(t *testing.T) {
+	got := run(t, "validate", "--config", kindsConfig(t), "--immutable-since", "HEAD")
+
+	assertExit(t, got, 3)
+	if !strings.Contains(got.stderr, "multi-kind") {
+		t.Errorf("stderr = %q, want it to say the history check does not read a multi-kind corpus", got.stderr)
+	}
+}
+
+func TestValidateRejectsADirectoryBesideKinds(t *testing.T) {
+	got := run(t, "validate", "--config", kindsConfig(t), "--dir", fixture(t, "ok-basic"))
+
+	assertExit(t, got, 3)
+	if !strings.Contains(got.stderr, "kinds") {
+		t.Errorf("stderr = %q, want it to say the kinds carry the directories", got.stderr)
+	}
+}
+
+func TestValidateReportsADeprecatedField(t *testing.T) {
+	docs := map[string]string{
+		"0001-name-a-service-owner.md": "---\ntitle: Name a service owner\nstatus: accepted\nowner: platform\ndate: 2025-01-01\n---\n\n# Name a service owner\n",
+	}
+
+	t.Run("a field still inside its sunset warns and passes", func(t *testing.T) {
+		dir := writeDocs(t, docs)
+		cfg := writeDocs(t, map[string]string{"docdag.yaml": "preset_version: 3\nfields:\n  owner: {deprecated: true, since: 2, migrate_to: owned-by, sunset: 2999-01-01}\n"})
+
+		got := run(t, "validate", "--dir", dir, "--config", filepath.Join(cfg, "docdag.yaml"))
+
+		assertExit(t, got, 0)
+		assertLines(t, "findings", findingLines(got.stdout), []string{
+			`0001-name-a-service-owner.md:4: WARN deprecated_field 0001: frontmatter key "owner" is deprecated since preset version 2, sunset 2999-01-01`,
+		})
+		if !strings.Contains(got.stdout, "fix: migrate owner to owned-by") {
+			t.Errorf("report = %q, want the migration named as the fix", got.stdout)
+		}
+	})
+
+	t.Run("a field past its sunset fails the corpus", func(t *testing.T) {
+		dir := writeDocs(t, docs)
+		cfg := writeDocs(t, map[string]string{"docdag.yaml": "fields:\n  owner: {deprecated: true, sunset: 2000-01-01}\n"})
+
+		got := run(t, "validate", "--dir", dir, "--config", filepath.Join(cfg, "docdag.yaml"))
+
+		assertExit(t, got, 1)
+		assertLines(t, "findings", findingLines(got.stdout), []string{
+			`0001-name-a-service-owner.md:4: ERROR deprecated_field 0001: frontmatter key "owner" is deprecated, past its sunset 2000-01-01`,
+		})
+	})
+
+	t.Run("the preset version heads the JSON report", func(t *testing.T) {
+		dir := writeDocs(t, docs)
+		cfg := writeDocs(t, map[string]string{"docdag.yaml": "preset_version: 3\nfields:\n  owner: {deprecated: true}\n"})
+
+		got := run(t, "validate", "--format", "json", "--dir", dir, "--config", filepath.Join(cfg, "docdag.yaml"))
+
+		assertExit(t, got, 0)
+		report := decodeJSON[render.Report](t, got.stdout)
+		if report.SchemaVersion != 2 {
+			t.Errorf("schema_version = %d, want 2", report.SchemaVersion)
+		}
+		if report.PresetVersion != 3 {
+			t.Errorf("preset_version = %d, want the configured 3", report.PresetVersion)
+		}
+		if len(report.Findings) != 1 || report.Findings[0].Rule != model.RuleDeprecatedField {
+			t.Fatalf("findings = %+v, want the deprecation", report.Findings)
+		}
+	})
+}
+
+// TestValidateACorpusThatHasNotGrownIntoEveryKind covers the other half of
+// adopting a preset with one line: `preset: spec` names eight directories, and
+// a vault that has written clauses and subjects and nothing else has six of
+// them missing. A missing directory is a kind holding no documents, not a
+// corpus the tool refuses to read.
+func TestValidateACorpusThatHasNotGrownIntoEveryKind(t *testing.T) {
+	const clause = "---\ntitle: Every claim carries evidence\nkind: clause\nmodality: SHOULD\nstatus: accepted\nabout:\n  - topic/evidence\ndate: 2026-01-05\n---\n\n# Every claim carries evidence\n"
+
+	t.Run("the six directories it has not written yet are empty kinds", func(t *testing.T) {
+		root := writeDocs(t, map[string]string{
+			"docdag.yaml": "preset: spec\n",
+			docPath("spec", "clauses", "UZ-V-001.md"): clause,
+			docPath("spec", "topics", "evidence.md"):  "---\ntitle: Evidence\nkind: topic\nid: topic/evidence\n---\n\n# Evidence\n",
+		})
+
+		got := run(t, "validate", "--config", filepath.Join(root, "docdag.yaml"))
+
+		assertExit(t, got, 0)
+		assertLines(t, "findings", findingLines(got.stdout), []string{
+			"UZ-V-001.md:3: WARN no_counterexample UZ-V-001: is accepted without a counterexample",
+		})
+	})
+
+	t.Run("the kinds that are there are still checked", func(t *testing.T) {
+		root := writeDocs(t, map[string]string{
+			"docdag.yaml": "preset: spec\n",
+			docPath("spec", "clauses", "UZ-V-001.md"): clause,
+		})
+
+		got := run(t, "validate", "--config", filepath.Join(root, "docdag.yaml"))
+
+		// Exit 1 is the corpus answering: the subject the clause names is not
+		// there. Exit 3 would be the tool refusing to read the corpus at all.
+		assertExit(t, got, 1)
+		assertLines(t, "findings", findingLines(got.stdout), []string{
+			"UZ-V-001.md:6: ERROR dangling_ref UZ-V-001: about reference \"topic/evidence\" does not name a document",
+			"UZ-V-001.md:3: WARN no_counterexample UZ-V-001: is accepted without a counterexample",
+		})
+	})
 }

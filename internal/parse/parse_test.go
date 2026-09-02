@@ -3,8 +3,10 @@ package parse
 import (
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -971,5 +973,364 @@ func TestLocalize(t *testing.T) {
 				t.Fatalf("path = %q, want %q", docs[0].Path, tt.want)
 			}
 		})
+	}
+}
+
+func TestRefEntries(t *testing.T) {
+	tests := []struct {
+		name string
+		fm   map[string]any
+		key  string
+		want []RefEntry
+		bad  []string
+	}{
+		{
+			name: "a list of plain references carries no attributes",
+			fm:   map[string]any{"supersedes": []any{"0001", "ADR-2"}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}, {Ref: "ADR-2"}},
+		},
+		{
+			name: "a mapping naming a ref is an attributed reference",
+			fm: map[string]any{"supersedes": []any{
+				map[string]any{"ref": "0001", "reason": "conflict"},
+			}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001", Attrs: map[string]any{"reason": "conflict"}}},
+		},
+		{
+			name: "a list mixes plain and attributed references",
+			fm: map[string]any{"supersedes": []any{
+				"0001",
+				map[string]any{"ref": "0002", "reason": "vocabulary"},
+			}},
+			key: "supersedes",
+			want: []RefEntry{
+				{Ref: "0001"},
+				{Ref: "0002", Attrs: map[string]any{"reason": "vocabulary"}},
+			},
+		},
+		{
+			name: "attribute values keep the type YAML decoded them as",
+			fm: map[string]any{"measures": []any{
+				map[string]any{"ref": "0001", "agreement": 0.92, "model": "haiku", "expires": "2026-01-01"},
+			}},
+			key: "measures",
+			want: []RefEntry{{Ref: "0001", Attrs: map[string]any{
+				"agreement": 0.92, "model": "haiku", "expires": "2026-01-01",
+			}}},
+		},
+		{
+			name: "a numeric reference is stringified, in a mapping too",
+			fm: map[string]any{"supersedes": []any{
+				uint64(2),
+				map[string]any{"ref": uint64(13), "reason": "conflict"},
+			}},
+			key: "supersedes",
+			want: []RefEntry{
+				{Ref: "2"},
+				{Ref: "13", Attrs: map[string]any{"reason": "conflict"}},
+			},
+		},
+		{
+			name: "a scalar is a single-element list",
+			fm:   map[string]any{"supersedes": "0001"},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}},
+		},
+		{
+			name: "a lone mapping is a single-element list",
+			fm:   map[string]any{"supersedes": map[string]any{"ref": "0001", "reason": "conflict"}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001", Attrs: map[string]any{"reason": "conflict"}}},
+		},
+		{
+			name: "surrounding whitespace is trimmed on both spellings",
+			fm: map[string]any{"supersedes": []any{
+				"  0001  ",
+				map[string]any{"ref": "  0002  "},
+			}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}, {Ref: "0002", Attrs: map[string]any{}}},
+		},
+		{
+			name: "blank entries are dropped",
+			fm:   map[string]any{"supersedes": []any{"0001", "", "   "}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}},
+		},
+		{
+			name: "a mapping without a ref names nothing and is reported",
+			fm: map[string]any{"supersedes": []any{
+				"0001",
+				map[string]any{"reason": "conflict"},
+			}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}},
+			bad:  []string{"map[reason:conflict]"},
+		},
+		{
+			name: "a mapping whose ref is blank names nothing either",
+			fm:   map[string]any{"supersedes": []any{map[string]any{"ref": "   ", "reason": "conflict"}}},
+			key:  "supersedes",
+			want: []RefEntry{},
+			bad:  []string{"map[reason:conflict ref:   ]"},
+		},
+		{
+			name: "a mapping whose ref is not a scalar names nothing either",
+			fm:   map[string]any{"supersedes": []any{map[string]any{"ref": []any{"0001"}}}},
+			key:  "supersedes",
+			want: []RefEntry{},
+			bad:  []string{"map[ref:[0001]]"},
+		},
+		{
+			name: "a nested sequence is not a reference",
+			fm:   map[string]any{"supersedes": []any{"0001", []any{uint64(2)}}},
+			key:  "supersedes",
+			want: []RefEntry{{Ref: "0001"}},
+			bad:  []string{"[2]"},
+		},
+		{
+			name: "an empty list has no entries",
+			fm:   map[string]any{"supersedes": []any{}},
+			key:  "supersedes",
+			want: []RefEntry{},
+		},
+		{name: "a missing key has no entries", fm: map[string]any{"status": "accepted"}, key: "supersedes"},
+		{name: "a nil frontmatter has no entries", key: "supersedes"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, bad := RefEntries(tt.fm, tt.key)
+
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("RefEntries(%q) = %#v, want %#v", tt.key, got, tt.want)
+			}
+			if !slices.Equal(bad, tt.bad) {
+				t.Errorf("RefEntries(%q) invalid = %#v, want %#v", tt.key, bad, tt.bad)
+			}
+		})
+	}
+}
+
+func TestRefEntriesLeavesRefsAlone(t *testing.T) {
+	// An edge that declares no attributes reads its key with Refs, and a mapping
+	// there has to keep meaning what it always meant: an entry that names no
+	// document. The two readings of one list are what makes attributes opt-in.
+	fm := map[string]any{"supersedes": []any{"0001", map[string]any{"ref": "0002", "reason": "conflict"}}}
+
+	refs, invalid := Refs(fm, "supersedes")
+
+	if !slices.Equal(refs, []string{"0001"}) {
+		t.Errorf("refs = %#v, want only the scalar entry", refs)
+	}
+	if !slices.Equal(invalid, []string{"map[reason:conflict ref:0002]"}) {
+		t.Errorf("invalid = %#v, want the mapping rendered as written", invalid)
+	}
+}
+
+func TestFileRecordsKeyLinesWithAttributedEntries(t *testing.T) {
+	// An attributed entry is a mapping inside a list, not a frontmatter key, so
+	// a finding about it still lands on the line the edge key was written on.
+	cfg := config.ADRPreset()
+	content := "---\ntitle: A decision\nstatus: accepted\nsupersedes:\n  - ref: \"0001\"\n    reason: conflict\ndate: 2025-01-01\n---\n\n# A decision\n"
+	dir := testWriteDocs(t, map[string]string{"0002-a-decision.md": content})
+
+	doc, err := File(filepath.Join(dir, "0002-a-decision.md"), cfg)
+	if err != nil {
+		t.Fatalf("File: %v", err)
+	}
+
+	want := map[string]int{"title": 2, "status": 3, "supersedes": 4, "date": 7}
+	if !maps.Equal(doc.KeyLines, want) {
+		t.Fatalf("keyLines = %v, want %v", doc.KeyLines, want)
+	}
+	entries, invalid := RefEntries(doc.Frontmatter, "supersedes")
+	if len(invalid) != 0 {
+		t.Fatalf("invalid = %v, want none", invalid)
+	}
+	if len(entries) != 1 || entries[0].Ref != "0001" || entries[0].Attrs["reason"] != "conflict" {
+		t.Fatalf("entries = %#v, want one attributed reference to 0001", entries)
+	}
+}
+
+// testKindsConfig is the multi-kind configuration the kind tests read: one kind
+// whose identifiers a file name can carry, one whose identifiers carry a slash
+// and cannot, and one keeping the digit-run rules.
+func testKindsConfig(root string) config.Config {
+	cfg := config.ADRPreset()
+	cfg.Kinds = map[string]config.KindSpec{
+		"clause":  {Dir: filepath.Join(root, "clauses"), ID: `^UZ-[A-Z]-\d{3}$`},
+		"conform": {Dir: filepath.Join(root, "conform"), ID: `^conform/[a-z0-9-]+$`},
+		"pm":      {Dir: filepath.Join(root, "pm")},
+	}
+	return cfg
+}
+
+func TestKindFile(t *testing.T) {
+	root := testWriteDocs(t, map[string]string{
+		filepath.Join("clauses", "UZ-V-001.md"): "---\ntitle: Evidence\nkind: clause\nstatus: accepted\n---\n\n# Evidence\n",
+		filepath.Join("clauses", "written.md"):  "---\ntitle: Written\nid: UZ-V-002\n---\n\n# Written\n",
+		filepath.Join("clauses", "README.md"):   "# Clauses\n",
+		filepath.Join("conform", "uz-v-001.md"): "---\ntitle: Check\nid: conform/uz-v-001\n---\n\n# Check\n",
+		filepath.Join("conform", "no-id.md"):    "---\ntitle: No identifier\n---\n\n# No identifier\n",
+		filepath.Join("pm", "0007-outage.md"):   "---\ntitle: Outage\n---\n\n# Outage\n",
+		filepath.Join("clauses", "wrapped.md"):  "---\ntitle: Wrapped\nid: \"[[UZ-V-003]]\"\n---\n\n# Wrapped\n",
+	})
+	cfg := testKindsConfig(root)
+
+	tests := []struct {
+		name     string
+		kind     string
+		file     string
+		wantID   string
+		identity string
+	}{
+		{name: "the file name carries the identity", kind: "clause", file: filepath.Join("clauses", "UZ-V-001.md"), wantID: "UZ-V-001", identity: "UZ-V-001"},
+		{name: "a written id wins over the file name", kind: "clause", file: filepath.Join("clauses", "written.md"), wantID: "UZ-V-002", identity: "UZ-V-002"},
+		{name: "a wikilinked id is unwrapped", kind: "clause", file: filepath.Join("clauses", "wrapped.md"), wantID: "UZ-V-003", identity: "[[UZ-V-003]]"},
+		{name: "an identifier carrying a slash is written down", kind: "conform", file: filepath.Join("conform", "uz-v-001.md"), wantID: "conform/uz-v-001", identity: "conform/uz-v-001"},
+		{name: "a kind without a pattern keeps the digit run", kind: "pm", file: filepath.Join("pm", "0007-outage.md"), wantID: "0007", identity: "0007-outage"},
+		{name: "a name no pattern accepts yields no identity", kind: "clause", file: filepath.Join("clauses", "README.md"), identity: "README"},
+		{name: "a slash pattern without a written id yields no identity", kind: "conform", file: filepath.Join("conform", "no-id.md"), identity: "no-id"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			doc, err := KindFile(filepath.Join(root, tt.file), cfg, tt.kind)
+			if err != nil {
+				t.Fatalf("KindFile: %v", err)
+			}
+
+			if doc.ID.String() != tt.wantID {
+				t.Errorf("id = %q, want %q", doc.ID, tt.wantID)
+			}
+			if doc.Identity != tt.identity {
+				t.Errorf("identity = %q, want %q", doc.Identity, tt.identity)
+			}
+			if doc.Kind != tt.kind {
+				t.Errorf("kind = %q, want %q", doc.Kind, tt.kind)
+			}
+			// Membership of the kind's directory is what makes a file one of
+			// its documents, so nothing is measured against a name pattern.
+			if !doc.MatchesPattern {
+				t.Error("MatchesPattern = false, want every file in a kind's directory to be one of its documents")
+			}
+		})
+	}
+}
+
+func TestKinds(t *testing.T) {
+	root := testWriteDocs(t, map[string]string{
+		filepath.Join("clauses", "UZ-V-002.md"): "---\ntitle: Second\n---\n\n# Second\n",
+		filepath.Join("clauses", "UZ-V-001.md"): "---\ntitle: First\n---\n\n# First\n",
+		filepath.Join("conform", "check.md"):    "---\ntitle: Check\nid: conform/check\n---\n\n# Check\n",
+		filepath.Join("conform", "notes.txt"):   "not markdown\n",
+		filepath.Join("pm", "0007-outage.md"):   "---\ntitle: Outage\n---\n\n# Outage\n",
+	})
+	cfg := testKindsConfig(root)
+
+	t.Run("the kinds are read in sorted order, each directory in name order", func(t *testing.T) {
+		docs, err := Kinds(cfg)
+		if err != nil {
+			t.Fatalf("Kinds: %v", err)
+		}
+
+		wantIDs := []string{"UZ-V-001", "UZ-V-002", "conform/check", "0007"}
+		if got := testIDs(docs); !slices.Equal(got, wantIDs) {
+			t.Fatalf("ids = %v, want %v", got, wantIDs)
+		}
+		wantKinds := []string{"clause", "clause", "conform", "pm"}
+		got := make([]string, 0, len(docs))
+		for _, doc := range docs {
+			got = append(got, doc.Kind)
+		}
+		if !slices.Equal(got, wantKinds) {
+			t.Fatalf("kinds = %v, want %v", got, wantKinds)
+		}
+	})
+
+	// A preset declares the whole vocabulary a corpus may grow into, and a vault
+	// adopts it before it has written its first premise. The declared kind is an
+	// empty one until the directory appears, and the kinds beside it are read.
+	t.Run("a kind directory that does not exist is a kind with no documents", func(t *testing.T) {
+		missing := testKindsConfig(root)
+		missing.Kinds["premise"] = config.KindSpec{Dir: filepath.Join(root, "premises")}
+
+		docs, err := Kinds(missing)
+		if err != nil {
+			t.Fatalf("Kinds: %v, want the missing directory read as an empty kind", err)
+		}
+		wantIDs := []string{"UZ-V-001", "UZ-V-002", "conform/check", "0007"}
+		if got := testIDs(docs); !slices.Equal(got, wantIDs) {
+			t.Fatalf("ids = %v, want the documents the other kinds hold %v", got, wantIDs)
+		}
+	})
+
+	// Every other failure is a fact about the machine rather than about the
+	// corpus, so it still stops the run.
+	t.Run("a kind directory that is a file is still an error", func(t *testing.T) {
+		path := filepath.Join(root, "premises.md")
+		if err := os.WriteFile(path, []byte("not a directory\n"), 0o600); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+		broken := testKindsConfig(root)
+		broken.Kinds["premise"] = config.KindSpec{Dir: path}
+
+		if _, err := Kinds(broken); err == nil {
+			t.Fatal("Kinds = nil, want the unreadable directory reported")
+		}
+	})
+
+	t.Run("Documents reads the kinds when there are kinds", func(t *testing.T) {
+		docs, err := Documents(cfg)
+		if err != nil {
+			t.Fatalf("Documents: %v", err)
+		}
+		if len(docs) != 4 {
+			t.Fatalf("documents = %v, want the four the kinds hold", testIDs(docs))
+		}
+	})
+
+	t.Run("Documents reads the one directory when there are none", func(t *testing.T) {
+		single := config.ADRPreset()
+		single.Dir = testFixture(t, "ok-basic")
+
+		docs, err := Documents(single)
+		if err != nil {
+			t.Fatalf("Documents: %v", err)
+		}
+		if len(docs) != 6 {
+			t.Fatalf("documents = %v, want the six of the corpus", testIDs(docs))
+		}
+		for _, doc := range docs {
+			if doc.Kind != "" {
+				t.Fatalf("%s kind = %q, want none on a single-kind corpus", doc.Name, doc.Kind)
+			}
+		}
+	})
+}
+
+func TestKindDirKeepsWhatDirSkips(t *testing.T) {
+	// The single-kind reader decides by file name and skips what it does not
+	// recognize. A kind's directory is the declaration instead, so nothing is
+	// skipped and a file that yields no identity comes back to be reported.
+	root := testWriteDocs(t, map[string]string{
+		filepath.Join("clauses", "UZ-V-001.md"): "---\ntitle: First\n---\n\n# First\n",
+		filepath.Join("clauses", "README.md"):   "# Clauses\n",
+	})
+	cfg := testKindsConfig(root)
+
+	docs, err := KindDir(cfg.Kinds["clause"].Dir, cfg, "clause")
+	if err != nil {
+		t.Fatalf("KindDir: %v", err)
+	}
+
+	if got := testNames(docs); !slices.Equal(got, []string{"README.md", "UZ-V-001.md"}) {
+		t.Fatalf("names = %v, want the stray file kept beside the document", got)
+	}
+	if docs[0].ID != "" {
+		t.Errorf("README id = %q, want none", docs[0].ID)
 	}
 }
