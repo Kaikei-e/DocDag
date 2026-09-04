@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Kaikei-e/DocDag/internal/brief"
 	"github.com/Kaikei-e/DocDag/config"
+	"github.com/Kaikei-e/DocDag/internal/brief"
 )
 
 func TestContextTextReportsTheReferenceAndItsResolution(t *testing.T) {

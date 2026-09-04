@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/Kaikei-e/DocDag/config"
-	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/newdoc"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // fixtureIDBase is where generated identifiers start on a corpus that counts

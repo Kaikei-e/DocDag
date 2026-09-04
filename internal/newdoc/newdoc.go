@@ -19,8 +19,8 @@ import (
 	"unicode"
 
 	"github.com/Kaikei-e/DocDag/config"
-	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/parse"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // DefaultTemplate is the built-in minimal MADR document template.

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 
 	"github.com/Kaikei-e/DocDag/config"
-	internallint "github.com/Kaikei-e/DocDag/internal/lint"
 	"github.com/Kaikei-e/DocDag/internal/graph"
+	internallint "github.com/Kaikei-e/DocDag/internal/lint"
 	"github.com/Kaikei-e/DocDag/internal/parse"
 	"github.com/Kaikei-e/DocDag/model"
 )

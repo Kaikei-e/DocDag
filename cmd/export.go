@@ -7,8 +7,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/render"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 const (

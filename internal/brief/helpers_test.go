@@ -7,8 +7,8 @@ import (
 
 	"github.com/Kaikei-e/DocDag/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
-	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/parse"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // testCorpus loads a fixture the way the CLI does, so an excerpt comes from the

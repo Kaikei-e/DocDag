@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"github.com/Kaikei-e/DocDag/config"
-	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/vcs"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // testCorpusGraph reads a single-kind corpus out of a directory under one

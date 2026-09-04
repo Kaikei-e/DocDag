@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/render"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // testHit is a query result reduced to what a fixture-independent expectation

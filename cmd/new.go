@@ -10,10 +10,10 @@ import (
 
 	"github.com/Kaikei-e/DocDag/config"
 	"github.com/Kaikei-e/DocDag/internal/lint"
-	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/newdoc"
 	"github.com/Kaikei-e/DocDag/internal/parse"
 	"github.com/Kaikei-e/DocDag/internal/render"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 const (

@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/Kaikei-e/DocDag/config"
-	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/parse"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // testDayOf reads a day the way frontmatter writes one, so a test names the

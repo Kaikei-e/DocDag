@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/Kaikei-e/DocDag/config"
-	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/parse"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 var errInvalidFixtureFrontmatter = errors.New("yaml: fixture frontmatter does not decode")

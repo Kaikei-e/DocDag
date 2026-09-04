@@ -8,8 +8,8 @@ import (
 
 	"github.com/Kaikei-e/DocDag/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
-	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/parse"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // Corpus reports what the current vault says about the configuration: the rules

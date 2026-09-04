@@ -23,8 +23,8 @@ import (
 
 	"github.com/Kaikei-e/DocDag/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
-	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/vcs"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // The findings lint reports. They are not structural checks: `structural:`
