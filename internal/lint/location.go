@@ -6,8 +6,8 @@ import (
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/config"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // The sections of a configuration file a lint finding is located in.

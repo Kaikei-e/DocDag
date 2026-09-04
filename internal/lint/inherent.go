@@ -5,9 +5,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // unit is one thing layer 1 reasons about: a rule, a projection or the target

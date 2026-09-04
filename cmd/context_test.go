@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/Kaikei-e/DocDag/internal/brief"
-	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/config"
 )
 
 func TestContextTextReportsTheReferenceAndItsResolution(t *testing.T) {

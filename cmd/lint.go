@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
 	"github.com/Kaikei-e/DocDag/internal/lint"
 	"github.com/Kaikei-e/DocDag/internal/parse"

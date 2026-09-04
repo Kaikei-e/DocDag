@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 const testDocument = "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n"

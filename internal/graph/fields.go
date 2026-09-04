@@ -6,8 +6,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/config"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // CheckDeprecatedFields reports documents whose frontmatter still writes a key

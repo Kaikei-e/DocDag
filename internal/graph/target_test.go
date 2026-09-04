@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/config"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // testLeafOfConfig puts a leaf_of condition on the preset's depends-on edge: a

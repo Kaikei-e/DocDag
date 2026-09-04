@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/config"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // testProjectionFixture is a corpus with one superseded decision, one accepted

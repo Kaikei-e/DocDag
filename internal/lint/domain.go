@@ -5,8 +5,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/config"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // domain returns the closed vocabulary an attribute takes its values from, and

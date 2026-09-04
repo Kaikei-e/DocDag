@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // DefaultReferencePattern is the shape a body link target must have to be an

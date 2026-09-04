@@ -15,7 +15,7 @@ import (
 
 	"github.com/goccy/go-yaml"
 
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // Preset names.
@@ -108,6 +108,11 @@ type KindSpec struct {
 	ID           string   `yaml:"id,omitempty"`
 	StatusValues []string `yaml:"status_values,omitempty"`
 	Closed       bool     `yaml:"closed,omitempty"`
+	// AppendOnly marks a kind whose closed documents the history check
+	// treats as records: validate --immutable-since reads only those kinds
+	// in a multi-kind corpus. Machine-generated kinds opt in; kinds a person
+	// rewrites do not.
+	AppendOnly bool `yaml:"append_only,omitempty"`
 	// Fields declares the frontmatter lifecycle of this kind's documents, over
 	// the top-level declarations: a kind naming a field describes that key for
 	// its own documents, not for everybody's.
@@ -479,6 +484,28 @@ func (e *EdgeCondition) UnmarshalYAML(src []byte) error {
 	return nil
 }
 
+// MarshalYAML writes the scalar form when the thresholds are the defaults the
+// scalar already means — one edge or more, no upper bound — and the mapping
+// form whenever a written min or max changes that reading. Generated
+// configurations stay readable, and a round trip that began as a scalar stays
+// a scalar.
+func (e EdgeCondition) MarshalYAML() ([]byte, error) {
+	if e.Edge != "" && e.scalarForm() {
+		return yaml.Marshal(e.Edge)
+	}
+	type mapping EdgeCondition
+	return yaml.Marshal(mapping(e))
+}
+
+// scalarForm reports whether the thresholds are what the edge name alone
+// already asks for: at least one edge, and no maximum.
+func (e EdgeCondition) scalarForm() bool {
+	if e.Max != nil {
+		return false
+	}
+	return e.Min == nil || *e.Min == 1
+}
+
 // set reports whether an edge clause was written at all, which a clause naming
 // no edge type still was: an edge-less threshold is a configuration error, not
 // an absent clause.
@@ -833,6 +860,20 @@ func (c Config) Severity(rule string) model.Severity {
 // configuration that declares none is the single-kind corpus DocDag has always
 // managed, and every kind-aware code path falls back on that behaviour.
 func (c Config) Multikind() bool { return len(c.Kinds) > 0 }
+
+// AppendOnlyKinds names the kinds that opt into the append-only history check,
+// sorted. A multi-kind corpus without any is what --immutable-since still
+// refuses: there is nothing for the check to read.
+func (c Config) AppendOnlyKinds() []string {
+	names := make([]string, 0, len(c.Kinds))
+	for name, spec := range c.Kinds {
+		if spec.AppendOnly {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return names
+}
 
 // Kind returns the spec of one declared kind.
 func (c Config) Kind(name string) (KindSpec, bool) {

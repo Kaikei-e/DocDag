@@ -8,10 +8,10 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/config"
 	"github.com/Kaikei-e/DocDag/internal/parse"
 	"github.com/Kaikei-e/DocDag/internal/vcs"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // immutableStatuses are the statuses that close a document to editing: what a
@@ -21,26 +21,53 @@ var immutableStatuses = []string{config.StatusAccepted, config.StatusSuperseded,
 // CheckImmutable reports documents that were closed at rev and have since
 // changed in a way the append-only policy forbids. Paths are reported relative
 // to root. A new document is always allowed.
+//
+// A single-kind corpus is read under its one documents directory. A multi-kind
+// corpus is read only under the kinds that declare append_only: true — the
+// caller refuses a multi-kind configuration that declares none.
 func CheckImmutable(repo *vcs.Repo, cfg config.Config, rev, root string) ([]model.Finding, error) {
 	base := repo.MergeBase(rev)
-	changes, err := repo.Changes(base, cfg.Dir)
+	if !cfg.Multikind() {
+		return checkImmutableDir(repo, cfg, cfg.Dir, cfg.Normalizer(), "", base, root)
+	}
+	findings := []model.Finding{}
+	for _, name := range cfg.AppendOnlyKinds() {
+		spec := cfg.Kinds[name]
+		kindFindings, err := checkImmutableDir(repo, cfg, spec.Dir, cfg.KindNormalizer(name), name, base, root)
+		if err != nil {
+			return nil, err
+		}
+		findings = append(findings, kindFindings...)
+	}
+	SortFindings(findings)
+	return findings, nil
+}
+
+// checkImmutableDir runs the append-only comparison for one documents
+// directory. kind empty is the single-kind path: identity comes from the file
+// name. kind set is a multi-kind append_only directory: identity comes from
+// KindFile, because a pattern that carries a slash never matches a stem.
+func checkImmutableDir(repo *vcs.Repo, cfg config.Config, dir string, normalizer config.IDNormalizer, kind, base, root string) ([]model.Finding, error) {
+	changes, err := repo.Changes(base, dir)
 	if err != nil {
 		return nil, err
 	}
-	untracked, err := repo.Untracked(cfg.Dir)
+	untracked, err := repo.Untracked(dir)
 	if err != nil {
 		return nil, err
 	}
-	normalizer := cfg.Normalizer()
 
 	findings := []model.Finding{}
 	for _, change := range changes {
 		name := filepath.Base(change.Path)
-		if change.Status == 'A' || slices.Contains(untracked, change.Path) || !normalizer.MatchesFilename(name) {
+		if change.Status == 'A' || slices.Contains(untracked, change.Path) {
 			continue
 		}
-		id, ok := normalizer.Normalize(name)
-		if !ok {
+		if kind == "" {
+			if !normalizer.MatchesFilename(name) {
+				continue
+			}
+		} else if !strings.HasSuffix(strings.ToLower(name), ".md") {
 			continue
 		}
 		was, err := repo.File(base, change.Path)
@@ -51,10 +78,35 @@ func CheckImmutable(repo *vcs.Repo, cfg config.Config, rev, root string) ([]mode
 		if !ok {
 			continue
 		}
-		findings = append(findings, compareToCommitted(cfg, repo, change, id, committed, root)...)
+		id, ok := immutableID(normalizer, kind, name, was)
+		if !ok {
+			continue
+		}
+		findings = append(findings, compareToCommitted(cfg, repo, change, id, kind, committed, root)...)
 	}
 	SortFindings(findings)
 	return findings, nil
+}
+
+// immutableID resolves the document identity the finding names. A single-kind
+// corpus reads it from the file name; a kind whose pattern carries a slash
+// reads it from the committed frontmatter the way KindFile does.
+func immutableID(normalizer config.IDNormalizer, kind, name string, was []byte) (model.ID, bool) {
+	if kind == "" {
+		return normalizer.Normalize(name)
+	}
+	frontmatter, _, ok := parse.SplitFrontmatter(was)
+	if ok {
+		if fm, err := parse.UnmarshalFrontmatter(frontmatter); err == nil {
+			if written, ok := parse.Attr(fm, config.KeyID); ok {
+				if id, ok := normalizer.Normalize(strings.TrimSpace(written)); ok {
+					return id, true
+				}
+			}
+		}
+	}
+	stem := strings.TrimSuffix(name, ".md")
+	return normalizer.Normalize(stem)
 }
 
 // closedDocument decodes a committed file and reports it when its status closed
@@ -79,12 +131,13 @@ func closedDocument(cfg config.Config, src []byte) (*parse.Document, bool) {
 	return &parse.Document{Frontmatter: fm, Body: string(body)}, true
 }
 
-func compareToCommitted(cfg config.Config, repo *vcs.Repo, change vcs.Change, id model.ID, was *parse.Document, root string) []model.Finding {
+func compareToCommitted(cfg config.Config, repo *vcs.Repo, change vcs.Change, id model.ID, kind string, was *parse.Document, root string) []model.Finding {
 	path := reportedPath(root, repo.Root(), change.Path)
 	if change.Status == 'D' {
 		return []model.Finding{immutableViolation(id, path, firstFileLine, "the document was deleted")}
 	}
-	now, err := parse.File(filepath.Join(repo.Root(), filepath.FromSlash(change.Path)), cfg)
+	abs := filepath.Join(repo.Root(), filepath.FromSlash(change.Path))
+	now, err := parseImmutableNow(cfg, kind, abs)
 	if err != nil || now.Err != nil {
 		return []model.Finding{immutableViolation(id, path, firstFileLine, "the document no longer parses")}
 	}
@@ -99,6 +152,13 @@ func compareToCommitted(cfg config.Config, repo *vcs.Repo, change vcs.Change, id
 			fmt.Sprintf("the body changed at line %d, which append-only history forbids", now.BodyLine+line)))
 	}
 	return findings
+}
+
+func parseImmutableNow(cfg config.Config, kind, abs string) (*parse.Document, error) {
+	if kind == "" {
+		return parse.File(abs, cfg)
+	}
+	return parse.KindFile(abs, cfg, kind)
 }
 
 // change is one forbidden frontmatter difference and the key it belongs to.

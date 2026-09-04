@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
 	"github.com/Kaikei-e/DocDag/internal/render"
 )

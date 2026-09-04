@@ -11,7 +11,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // LabelLimit is the maximum rendered node label width; longer labels are cut to

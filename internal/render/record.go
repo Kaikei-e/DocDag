@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/Kaikei-e/DocDag/internal/graph"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // Fields a listing can be printed with.

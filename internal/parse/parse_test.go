@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/config"
 )
 
 // testFixture resolves a fixture scenario: tests run with the package directory

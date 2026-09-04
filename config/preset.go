@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // DerivedSupersededPattern matches the MADR status string "superseded by <ref>"
@@ -349,8 +349,11 @@ func SpecPreset() Config {
 				ID:  IDConform,
 				// The test body is not Markdown, so the document names the path
 				// to it. The kind is open — a harness writes these — but the key
-				// is declared anyway, so stats --fields can count it.
-				Fields: map[string]FieldSpec{FieldTest: {}},
+				// is declared anyway, so stats --fields can count it. The
+				// harness also owns the history: once accepted, a conformance
+				// record is appended to rather than rewritten.
+				AppendOnly: true,
+				Fields:     map[string]FieldSpec{FieldTest: {}},
 			},
 			KindDeviation: {
 				Dir: "spec/deviations",
@@ -367,8 +370,9 @@ func SpecPreset() Config {
 				Period: &PeriodSpec{From: KeyDate, Until: FieldExpires},
 			},
 			KindMeasure: {
-				Dir: "spec/measures",
-				ID:  IDMeasure,
+				Dir:        "spec/measures",
+				ID:         IDMeasure,
+				AppendOnly: true,
 			},
 			KindPremise: {
 				Dir: "spec/premises",

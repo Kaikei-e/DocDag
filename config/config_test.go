@@ -9,7 +9,7 @@ import (
 
 	"github.com/goccy/go-yaml"
 
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // testKinds is the multi-kind vocabulary the kind tests are written against:

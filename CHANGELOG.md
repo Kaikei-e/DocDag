@@ -4,6 +4,28 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Public Go packages `config` and `model` (moved out of `internal/`), so a vault owner can assemble a
+  `Config` in process, call `Validate`, and marshal it to `docdag.yaml`. ADR 0006 records what is
+  stable.
+- `lint.Check(cfg, vaultDir, fixturesDir)` — a thin in-process entry for the three lint layers.
+- `KindSpec.append_only` / YAML `append_only: true`. `validate --immutable-since` reads a multi-kind
+  corpus under those kinds only; the `spec` preset marks `conform` and `measure`.
+- YAML round-trip tests for both presets, deterministic `yaml.Marshal`, and `EdgeCondition.MarshalYAML`
+  that keeps the scalar form when thresholds are the defaults.
+
+### Changed
+
+- Go toolchain directive is `go 1.27`.
+- A multi-kind corpus without any `append_only` kind still exits 3 under `--immutable-since`, with a
+  message that names `append_only` rather than refusing every multi-kind corpus.
+
+CLI output shapes (`docdag version …`, `query --binding` JSON, validate/lint exit codes) are
+unchanged.
+
 ## [0.3.0] - 2026-09-01
 
 v0.3.0 takes the graph past one directory of decision records. A corpus may hold several kinds of

@@ -7,7 +7,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/Kaikei-e/DocDag/internal/graph"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // ReportSchemaVersion is the version of the JSON validation report. A consumer

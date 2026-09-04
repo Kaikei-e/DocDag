@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // Search colours of the iterative depth-first walks in this package.

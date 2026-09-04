@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/config"
 )
 
 // patterns caches compiled derived-edge patterns: a corpus applies the same

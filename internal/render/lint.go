@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/Kaikei-e/DocDag/internal/lint"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // LintSchemaVersion is the version of the JSON lint report.

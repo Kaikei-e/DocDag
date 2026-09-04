@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/config"
 )
 
 func TestMatchDerived(t *testing.T) {

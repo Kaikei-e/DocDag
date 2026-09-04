@@ -1,13 +1,15 @@
 # Architecture decision records
 
-Five records stand behind the design DocDag ships. They are the reasoning;
+Six records stand behind the design DocDag ships. They are the reasoning;
 [configuration.md](../configuration.md) and [checks.md](../checks.md) are what the binary does, so a
 record is read for *why* a key exists and the reference pages for what it accepts today. The records
 are written in Japanese, the language they were argued in.
 
 Read **0001 first**: it establishes the vocabulary — kinds, edge attributes, projections, the `spec`
-preset — that the other four extend. The remaining four are independent of one another and can be
-read in any order, or singly, when a particular check needs an explanation.
+preset — that the other four extend. 0002 through 0005 are independent of one another and can be
+read in any order, or singly, when a particular check needs an explanation. **0006** is the contract
+for importing the configuration from Go: what is stable, how YAML round-trips, and which kinds
+`--immutable-since` may read.
 
 Every record is **Accepted**, and the four that were implemented after acceptance carry their
 departures inline rather than in a superseding record: 0002 under 実装時の注記 and 0005 under 実装時の逸脱. A
@@ -76,3 +78,14 @@ scanning history for the moment a document stopped binding. Its deviation sectio
 places the implementation differs, the largest being that only the JSON reports always carry `as_of`
 — a text report carries the day only where some kind declares a period, because changing the first
 line of every text report would break every golden file and problem matcher that reads it.
+
+## [0006 — public `config`, YAML round-trip and append-only kinds](0006-public-config-yaml-roundtrip-and-append-only.md)
+
+A vault configuration is the same contract whether a person writes `docdag.yaml` or a Go program
+assembles a `Config` and marshals it. The record moves `config` and `model` out of `internal/`,
+names what is stable (field names and YAML tags, the presets, `Load` / `Merge` / `Validate`,
+severities, and the fields of a `Finding` that `lint.Check` returns), requires a deterministic YAML
+round trip including the scalar form of an `EdgeCondition`, and lets `--immutable-since` read a
+multi-kind corpus only under kinds that declare `append_only: true`. It declines embedding the wide
+`internal/lint` surface, duplicating `Severity` into `config`, and treating `Resolve` as the
+stable validation entry.

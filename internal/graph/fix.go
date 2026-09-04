@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/config"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // suggestionCandidates is how many existing documents a "did you mean" names.

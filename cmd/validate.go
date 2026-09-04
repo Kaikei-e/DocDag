@@ -6,9 +6,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/config"
 	"github.com/Kaikei-e/DocDag/internal/graph"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/render"
 	"github.com/Kaikei-e/DocDag/internal/vcs"
 )
@@ -146,11 +146,12 @@ func immutableFindings(cmd *cobra.Command, cfg config.Config) ([]model.Finding, 
 	} else if at != "" {
 		return nil, usageErr("--%s reads the working tree, so it takes no --%s", flagImmutableSince, flagAt)
 	}
-	// The history check reads one documents directory under one identity rule.
-	// A multi-kind corpus has neither, and answering over the wrong directory
-	// would report an append-only violation nobody committed.
-	if cfg.Multikind() {
-		return nil, ioErr(fmt.Errorf("--%s does not read a multi-kind corpus yet: %w", flagImmutableSince, model.ErrInvalidConfig))
+	// The history check reads one documents directory under one identity rule,
+	// or every kind that declares append_only: true. A multi-kind corpus with
+	// none leaves the check nothing to read without guessing, so it refuses
+	// rather than comparing the wrong files.
+	if cfg.Multikind() && len(cfg.AppendOnlyKinds()) == 0 {
+		return nil, ioErr(fmt.Errorf("--%s reads only kinds with append_only: true: %w", flagImmutableSince, model.ErrInvalidConfig))
 	}
 	repo, err := vcs.Open(cfg.Dir)
 	if err != nil {

@@ -18,6 +18,31 @@ where a `MUST` that no test enforces is a finding rather than a rule. Both are p
 [docs/configuration.md](docs/configuration.md) prints each in full, and `docdag.yaml` overrides
 either.
 
+## Assembling a configuration in Go
+
+A program that owns a vault can build the same configuration the YAML file describes, validate it
+without writing a file, and marshal it into `docdag.yaml`. The field names and YAML tags of
+`config.Config` are the contract; see
+[docs/adr/0006](docs/adr/0006-public-config-yaml-roundtrip-and-append-only.md) for what is stable.
+
+```go
+import (
+    "github.com/goccy/go-yaml"
+    "github.com/Kaikei-e/DocDag/config"
+)
+
+cfg := config.SpecPreset()
+cfg.PresetVersion = 3
+// … add kinds, edges, rules …
+if err := cfg.Validate(); err != nil {
+    return err
+}
+out, err := yaml.Marshal(cfg)
+```
+
+`lint.Check(cfg, vaultDir, fixturesDir)` runs the three lint layers in process. An empty `vaultDir`
+answers only the inherent layer.
+
 ## The model
 
 DocDag keeps two layers apart. The **constraint layer** is the typed edges declared in frontmatter
@@ -186,7 +211,7 @@ $ claude
 - [docs/agents.md](docs/agents.md) — `context`, `--fields`, `--touching`, `lint` and the plugin.
 - [docs/adr/](docs/adr/) — the architecture decision records behind the design, indexed and in
   reading order: the `spec` preset without an expression language, target conditions, modality,
-  `lint` and in-force periods.
+  `lint`, in-force periods, and the public `config` package.
 - [CHANGELOG.md](CHANGELOG.md) — what each release changed, including the output formats v0.2.0
   broke and how to migrate off them.
 

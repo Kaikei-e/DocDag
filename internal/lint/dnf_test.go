@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/config"
 )
 
 // expand is called through this helper so a test never repeats the depth.

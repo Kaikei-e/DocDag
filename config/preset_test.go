@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 func testDeref(t *testing.T, what string, p *string) string {
@@ -675,7 +675,7 @@ const specPresetMarker = "The file below is that preset in full:"
 // and it is the documentation a person adopts the preset by reading.
 func documentedSpecPreset(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join("..", "..", "docs", "configuration.md")
+	path := filepath.Join("..", "docs", "configuration.md")
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)

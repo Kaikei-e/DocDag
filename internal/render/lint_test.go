@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/Kaikei-e/DocDag/internal/lint"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/model"
 )
 
 // testLintFindings is one finding of each severity, which is what separates a

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
-	"github.com/Kaikei-e/DocDag/internal/model"
+	"github.com/Kaikei-e/DocDag/config"
+	"github.com/Kaikei-e/DocDag/model"
 	"github.com/Kaikei-e/DocDag/internal/render"
 )
 
@@ -1334,9 +1334,50 @@ func TestValidateRefusesTheHistoryCheckOnAMultiKindCorpus(t *testing.T) {
 	got := run(t, "validate", "--config", kindsConfig(t), "--immutable-since", "HEAD")
 
 	assertExit(t, got, 3)
-	if !strings.Contains(got.stderr, "multi-kind") {
-		t.Errorf("stderr = %q, want it to say the history check does not read a multi-kind corpus", got.stderr)
+	if !strings.Contains(got.stderr, "append_only") {
+		t.Errorf("stderr = %q, want it to say the history check reads only append_only kinds", got.stderr)
 	}
+}
+
+func TestValidateImmutableSinceOnAppendOnlyKinds(t *testing.T) {
+	const conformDoc = "---\ntitle: Check that every claim carries evidence\nstatus: accepted\nid: conform/uz-v-001\ndate: 2026-02-01\n---\n\n# Check\n\nThe harness owns this record.\n"
+	const configYAML = `kinds:
+  conform:
+    dir: spec/conform
+    id: '^conform/[a-z0-9-]+$'
+    append_only: true
+`
+	corpus := map[string]string{
+		"docdag.yaml":              configYAML,
+		"spec/conform/uz-v-001.md": conformDoc,
+	}
+
+	t.Run("an untouched append_only kind passes", func(t *testing.T) {
+		t.Chdir(gitRepo(t, corpus))
+
+		got := run(t, "validate", "--immutable-since", "HEAD")
+
+		assertExit(t, got, 0)
+	})
+
+	t.Run("a rewritten append_only document fails", func(t *testing.T) {
+		dir := gitRepo(t, corpus)
+		t.Chdir(dir)
+		rewritten := strings.Replace(conformDoc, "The harness owns", "Nobody owns", 1)
+		if err := os.WriteFile(filepath.Join(dir, "spec", "conform", "uz-v-001.md"), []byte(rewritten), 0o600); err != nil {
+			t.Fatalf("rewrite: %v", err)
+		}
+
+		got := run(t, "validate", "--immutable-since", "HEAD")
+
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+			"uz-v-001.md:",
+		})
+		if !strings.Contains(got.stdout, "immutable_violation") || !strings.Contains(got.stdout, "conform/uz-v-001") {
+			t.Errorf("stdout = %q, want an immutable_violation naming conform/uz-v-001", got.stdout)
+		}
+	})
 }
 
 func TestValidateRejectsADirectoryBesideKinds(t *testing.T) {

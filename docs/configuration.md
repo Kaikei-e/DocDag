@@ -26,6 +26,8 @@ out in full.
   operating conventions.
 - [filename and template](#filename-and-template) — what `docdag new` names and writes.
 - [Structural escalation](#structural-escalation) — raising a built-in check.
+- [Assembling a configuration in Go](#assembling-a-configuration-in-go) — building `Config` without
+  writing YAML first.
 
 ## The preset
 
@@ -259,11 +261,16 @@ than as a reference to nothing.
 `docdag new` needs `--kind` on a multi-kind corpus: which kind to create, under which identity rules
 and from which template, has no default answer. See [commands.md](commands.md) for what it writes.
 
-### What a multi-kind corpus does not do yet
+### Append-only kinds
 
-`validate --immutable-since` refuses one — `--immutable-since does not read a multi-kind corpus
-yet`, exit 3 — because the check reads one directory under one identity rule;
-[ci.md](ci.md#append-only-history) covers what it allows on the corpora it does read.
+`validate --immutable-since` reads a multi-kind corpus only under the kinds that declare
+`append_only: true`. Those are the machine-generated records — the `spec` preset marks
+`conform` and `measure` — so a closed document there is compared the way a single-kind ADR
+corpus is. A multi-kind configuration that declares no such kind is refused:
+
+`--immutable-since reads only kinds with append_only: true`, exit 3.
+
+[ci.md](ci.md#append-only-history) covers what the check allows on the documents it does read.
 
 ## Edge attributes
 
@@ -766,6 +773,7 @@ kinds:
   conform:
     dir: spec/conform
     id: '^conform/[a-z0-9-]+$'
+    append_only: true           # harness-written; validate --immutable-since reads it
     fields:
       test: {}                  # path to the executable test body
   deviation:
@@ -779,6 +787,7 @@ kinds:
   measure:
     dir: spec/measures
     id: '^interp/UZ-[A-Z]-\d{3}@\d{4}-\d{2}-\d{2}$'
+    append_only: true           # harness-written; validate --immutable-since reads it
   premise:
     dir: spec/premises
     id: '^premise/[a-z0-9/-]+$'
@@ -1104,3 +1113,12 @@ kind that declares no `id:` keeps the digit-run identity, and with it the `filen
 Structural checks are not rules. `structural:` may raise one — `missing_frontmatter` and
 `unstructured_supersedes` are the two that warn by default — but lowering one, or naming a check
 that does not exist, is a configuration error (exit 3), and no check can be disabled.
+
+## Assembling a configuration in Go
+
+The YAML keys on this page are also fields of `config.Config`. A program imports
+`github.com/Kaikei-e/DocDag/config`, starts from `SpecPreset()` or `ADRPreset()`, mutates kinds,
+edges and rules, calls `Validate()`, then `yaml.Marshal`s the value into `docdag.yaml`. The marshal
+is deterministic and round-trips through `Load`. See
+[ADR 0006](adr/0006-public-config-yaml-roundtrip-and-append-only.md) for the stable surface, and
+`lint.Check` in package `lint` for the three lint layers without exec.

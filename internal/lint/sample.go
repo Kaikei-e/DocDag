@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/Kaikei-e/DocDag/internal/config"
+	"github.com/Kaikei-e/DocDag/config"
 )
 
 // sampleID returns an identifier a declared pattern accepts: the shortest one
