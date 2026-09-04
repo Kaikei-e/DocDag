@@ -18,9 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.3.0
+      - uses: Kaikei-e/DocDag@v0.4.0
         with:
-          version: v0.3.0                  # default: latest
+          version: v0.4.0                  # default: latest
           args: validate --format github   # this is the default
           working-directory: .             # this is the default
 ```
@@ -37,7 +37,7 @@ diagnostic rather than passing silently; install with `go install` there instead
 ### Pinning
 
 A tag can be moved, so pin the action by commit SHA when the supply chain matters —
-`uses: Kaikei-e/DocDag@<40-char-sha> # v0.3.0`. This repository pins the actions it uses that way.
+`uses: Kaikei-e/DocDag@<40-char-sha> # v0.4.0`. This repository pins the actions it uses that way.
 
 ### Annotations
 
@@ -46,7 +46,7 @@ annotations, so a corpus with more findings than that needs a second `--format t
 into `$GITHUB_STEP_SUMMARY` to show the rest:
 
 ```yaml
-      - uses: Kaikei-e/DocDag@v0.3.0        # annotations, and the gate
+      - uses: Kaikei-e/DocDag@v0.4.0        # annotations, and the gate
       - if: always()
         shell: bash
         run: docdag validate --format text >> "$GITHUB_STEP_SUMMARY"
@@ -89,7 +89,7 @@ does not have. Ask for the full history and name the branch the change is propos
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Kaikei-e/DocDag@v0.3.0
+      - uses: Kaikei-e/DocDag@v0.4.0
         with:
           args: validate --immutable-since origin/${{ github.base_ref || github.event.repository.default_branch }}
 ```
@@ -121,7 +121,7 @@ jobs:
       - name: Say which day this run asks about
         shell: bash
         run: echo "DOCDAG_AS_OF=$(date -I)" >> "$GITHUB_ENV"
-      - uses: Kaikei-e/DocDag@v0.3.0
+      - uses: Kaikei-e/DocDag@v0.4.0
         with:
           args: validate --format github
 ```
@@ -171,7 +171,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.3.0
+      - uses: Kaikei-e/DocDag@v0.4.0
 
   lint:                                        # only where the rules changed
     needs: changes
@@ -179,7 +179,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.3.0
+      - uses: Kaikei-e/DocDag@v0.4.0
         with:
           args: lint --all --format github
 ```
@@ -207,7 +207,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Kaikei-e/DocDag@v0.3.0
+      - uses: Kaikei-e/DocDag@v0.4.0
         with:
           args: lint --corpus --since origin/main --format text
 ```
@@ -223,7 +223,7 @@ A [pre-commit](https://pre-commit.com) hook is also shipped:
 ```yaml
 repos:
   - repo: https://github.com/Kaikei-e/DocDag
-    rev: v0.3.0
+    rev: v0.4.0
     hooks:
       - id: docdag-validate      # any .md or docdag.yaml edit: the invariants
       - id: docdag-lint          # a docdag.yaml edit: the rules themselves

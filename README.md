@@ -67,7 +67,7 @@ finding rather than a matter of opinion.
 Install a pinned version locally:
 
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.3.0
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.4.0
 ```
 
 This installs `docdag` into `$(go env GOPATH)/bin`. Prebuilt binaries for tagged versions, and the
@@ -79,7 +79,7 @@ release's `checksums.txt`, and needs no Go toolchain:
 
 ```yaml
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.3.0
+      - uses: Kaikei-e/DocDag@v0.4.0
         with:
           args: validate --format github   # this is the default
 ```

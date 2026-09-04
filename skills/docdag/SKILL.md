@@ -120,7 +120,7 @@ read.
 `docdag` must be on `PATH`:
 
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.3.0
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.4.0
 ```
 
 Add this to the project's `.claude/settings.json` so the commands run without a

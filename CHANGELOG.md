@@ -6,6 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-05
+
+v0.4.0 makes the configuration a Go API as well as a YAML file. A vault owner can import
+`config` and `model`, assemble a `Config` from a preset, `Validate` it, and marshal a deterministic
+`docdag.yaml`. `lint.Check` runs the three lint layers in process. Multi-kind corpora can opt kinds
+into `--immutable-since` with `append_only: true`; the `spec` preset marks `conform` and `measure`.
+CLI output shapes are unchanged. ADR 0006 records the stable surface.
+
 ### Added
 
 - Public Go packages `config` and `model` (moved out of `internal/`), so a vault owner can assemble a
@@ -402,6 +410,7 @@ unless the flag is given.
 
 First release. See the [GitHub release](https://github.com/Kaikei-e/DocDag/releases/tag/v0.1.0).
 
+[0.4.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.2.0
 [0.1.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.1.0
