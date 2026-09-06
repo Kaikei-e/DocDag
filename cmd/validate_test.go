@@ -49,6 +49,17 @@ func TestValidateTextReport(t *testing.T) {
 			summary:  "OK: 3 docs, 2 typed edges, no cycles",
 		},
 		{
+			// Every reference in this corpus is an unquoted, zero-padded
+			// token. Read as YAML numbers they are octal: 0011 is 9, so the
+			// supersedes edge used to land on 0009, the depends-on 0010 on
+			// 0008, and the corpus reported a status drift, a dangling
+			// reference and a superseded orphan about documents nobody wrote.
+			name:     "unquoted zero-padded references name the documents they spell",
+			fixture:  "unquoted-refs",
+			wantExit: 0,
+			summary:  "OK: 4 docs, 4 typed edges, no cycles",
+		},
+		{
 			name:     "depends-on corpus is valid",
 			fixture:  "depends-impact",
 			wantExit: 0,

@@ -394,11 +394,11 @@ func TestFile(t *testing.T) {
 				t.Errorf("attr %s = %q (ok=%v), want %q", key, got, ok, want)
 			}
 		}
-		if got, _ := Refs(doc.Frontmatter, "supersedes"); !slices.Equal(got, []string{"2"}) {
-			t.Errorf("supersedes = %#v, want the raw un-normalized reference", got)
+		if got, _ := Refs(doc.Frontmatter, "supersedes"); !slices.Equal(got, []string{"000002"}) {
+			t.Errorf("supersedes = %#v, want the reference as written, zeros and all", got)
 		}
-		if got, _ := Refs(doc.Frontmatter, "depends-on"); !slices.Equal(got, []string{"3"}) {
-			t.Errorf("depends-on = %#v, want the raw un-normalized reference", got)
+		if got, _ := Refs(doc.Frontmatter, "depends-on"); !slices.Equal(got, []string{"000003"}) {
+			t.Errorf("depends-on = %#v, want the reference as written, zeros and all", got)
 		}
 		if !strings.HasPrefix(doc.Body, "\n# Schedule feed polling from the ingestion queue\n") {
 			t.Errorf("body = %q, want it to start after the frontmatter block", doc.Body)
@@ -1332,5 +1332,151 @@ func TestKindDirKeepsWhatDirSkips(t *testing.T) {
 	}
 	if docs[0].ID != "" {
 		t.Errorf("README id = %q, want none", docs[0].ID)
+	}
+}
+
+// TestUnmarshalFrontmatterReadsNumbersAsWritten pins the decode rule the
+// reference layer rests on: a token written in digits comes back as those
+// digits. YAML would read `0011` as octal and hand over 9, which is a different
+// document; every entry below is a reference an author would expect to resolve
+// to the document they typed.
+func TestUnmarshalFrontmatterReadsNumbersAsWritten(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want []string
+	}{
+		{
+			name: "an unquoted leading zero is a reference, not octal",
+			src:  "supersedes: [0011]\n",
+			want: []string{"0011"},
+		},
+		{
+			name: "a quoted reference reads exactly the same way",
+			src:  "supersedes: [\"0011\"]\n",
+			want: []string{"0011"},
+		},
+		{
+			name: "a token no octal accepts reads the same way too",
+			src:  "supersedes: [0009]\n",
+			want: []string{"0009"},
+		},
+		{
+			name: "a plain integer is the token it was written as",
+			src:  "supersedes: [11]\n",
+			want: []string{"11"},
+		},
+		{
+			name: "a scalar value is a one-entry list",
+			src:  "supersedes: 0011\n",
+			want: []string{"0011"},
+		},
+		{
+			name: "a block sequence reads like a flow one",
+			src:  "supersedes:\n  - 0011\n  - \"0012\"\n  - 13\n",
+			want: []string{"0011", "0012", "13"},
+		},
+		{
+			name: "a mixed list keeps every entry as its author wrote it",
+			src:  "supersedes: [0007, 0011, \"0013\", ADR-14]\n",
+			want: []string{"0007", "0011", "0013", "ADR-14"},
+		},
+		{
+			name: "a hexadecimal token stays the text it is",
+			src:  "supersedes: [0x1f]\n",
+			want: []string{"0x1f"},
+		},
+		{
+			name: "an octal token stays the text it is",
+			src:  "supersedes: [0o17]\n",
+			want: []string{"0o17"},
+		},
+		{
+			name: "an exponent stays the text it is",
+			src:  "supersedes: [1e3]\n",
+			want: []string{"1e3"},
+		},
+		{
+			name: "a float keeps the width it was written at",
+			src:  "supersedes: [1.10]\n",
+			want: []string{"1.10"},
+		},
+		{
+			name: "an anchored reference is the scalar it names",
+			src:  "supersedes: [&first 0011]\n",
+			want: []string{"0011"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fm, err := UnmarshalFrontmatter([]byte(tt.src))
+			if err != nil {
+				t.Fatalf("UnmarshalFrontmatter: %v", err)
+			}
+			refs, invalid := Refs(fm, "supersedes")
+			if len(invalid) != 0 {
+				t.Fatalf("invalid = %#v, want none", invalid)
+			}
+			if !slices.Equal(refs, tt.want) {
+				t.Fatalf("supersedes = %#v, want %#v", refs, tt.want)
+			}
+		})
+	}
+}
+
+// TestUnmarshalFrontmatterKeepsEverythingElse guards the blast radius of the
+// rule above: only the scalars YAML would type as numbers change, and they
+// change into their own text.
+func TestUnmarshalFrontmatterKeepsEverythingElse(t *testing.T) {
+	const src = "title: A decision\n" +
+		"status: accepted\n" +
+		"date: 2025-03-08\n" +
+		"draft: true\n" +
+		"empty: null\n" +
+		"tagged: !!int 0011\n" +
+		"note: |\n  a block\n" +
+		"nested:\n  id: 0011\n"
+
+	fm, err := UnmarshalFrontmatter([]byte(src))
+	if err != nil {
+		t.Fatalf("UnmarshalFrontmatter: %v", err)
+	}
+	for key, want := range map[string]any{
+		"title":  "A decision",
+		"status": "accepted",
+		"date":   "2025-03-08",
+		"draft":  true,
+		"empty":  nil,
+		"note":   "a block\n",
+	} {
+		if fm[key] != want {
+			t.Errorf("%s = %#v, want %#v", key, fm[key], want)
+		}
+	}
+	// An explicit tag is an author asking for a number rather than writing a
+	// name that happens to be digits, so it keeps the value YAML resolved.
+	if _, isText := fm["tagged"].(string); isText {
+		t.Errorf("tagged = %#v, want the number the !!int tag asked for", fm["tagged"])
+	}
+	nested, isMapping := fm["nested"].(map[string]any)
+	if !isMapping {
+		t.Fatalf("nested = %#v, want a mapping", fm["nested"])
+	}
+	if nested["id"] != "0011" {
+		t.Errorf("nested id = %#v, want \"0011\": the walk reaches every depth", nested["id"])
+	}
+}
+
+// TestAttrReadsAnIdentifierAsWritten covers the identity key, which under a
+// kind decides what the document is rather than what it points at: an octal
+// reading there gives the document another document's name.
+func TestAttrReadsAnIdentifierAsWritten(t *testing.T) {
+	fm, err := UnmarshalFrontmatter([]byte("id: 0011\nstatus: accepted\n"))
+	if err != nil {
+		t.Fatalf("UnmarshalFrontmatter: %v", err)
+	}
+	got, ok := Attr(fm, config.KeyID)
+	if !ok || got != "0011" {
+		t.Fatalf("id = %q (ok=%v), want 0011", got, ok)
 	}
 }
