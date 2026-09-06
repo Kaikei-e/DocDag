@@ -1,7 +1,7 @@
 {
   "name": "docdag",
   "description": "Read, query and validate a repository's decision records and normative clauses as a typed graph",
-  "version": "0.3.0",
+  "version": "0.4.1",
   "author": {
     "name": "Kaikei-e",
     "url": "https://github.com/Kaikei-e"

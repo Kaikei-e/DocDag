@@ -6,6 +6,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-06
+
+v0.4.1 is a correctness release. A frontmatter reference is now read as the text it was written as
+rather than as a YAML number: `supersedes: [0011]` decoded as octal 9 and built an edge to document
+0009, silently, with `validate` reporting OK. Every reference-bearing key gets the fix, because it
+is one change at the decoder. The release also adds `padding_mismatch`, which tells a vault that a
+reference is a document it holds spelled at the wrong width instead of resolving it to nothing or —
+worse — to something. A corpus that quoted its references sees no change. There are no
+configuration or CLI output changes.
+
 ### Fixed
 
 - **A frontmatter reference is read as the text it was written as, never as a YAML number.** YAML
@@ -449,6 +459,7 @@ unless the flag is given.
 
 First release. See the [GitHub release](https://github.com/Kaikei-e/DocDag/releases/tag/v0.1.0).
 
+[0.4.1]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.4.1
 [0.4.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.2.0
