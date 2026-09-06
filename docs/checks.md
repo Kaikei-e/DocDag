@@ -22,7 +22,8 @@ under. Periods come first among the groups because the checks below read the day
 - [Periods and the day a run is about](#periods-and-the-day-a-run-is-about) — `in_force`, and
   `period_invalid`, `period_conflict`, `expired_deviation`
 - [Document structure](#document-structure) — `invalid_frontmatter`, `missing_frontmatter`,
-  `id_collision`, `unknown_status`, `empty_edge`, `invalid_ref`, `dangling_ref`
+  `id_collision`, `unknown_status`, `empty_edge`, `invalid_ref`, `dangling_ref`,
+  `padding_mismatch`
 - [Kinds](#kinds) — `id_mismatch`, `kind_mismatch`, `unknown_field`, `edge_kind_mismatch`
 - [Declared fields](#declared-fields) — `deprecated_field`, `unknown_field_value`, `missing_field`
 - [Edge attributes](#edge-attributes) — `edge_attr_unknown`, `edge_attr_missing`,
@@ -45,9 +46,10 @@ under. Periods come first among the groups because the checks below read the day
 | **Reference and history** | `references.dangling`, or fixed | `dangling_reference` is off by default; `immutable_violation` needs `--immutable-since` |
 | **Lint** | fixed per finding | nothing configures them; `docdag lint` reports them and `validate` never does |
 
-`structural:` accepts exactly these twenty-nine names: `cycle`, `dangling_ref`, `id_collision`,
+`structural:` accepts exactly these thirty names: `cycle`, `dangling_ref`, `id_collision`,
 `invalid_frontmatter`, `missing_frontmatter`, `unknown_status`, `derived_conflict`,
-`unstructured_supersedes`, `invalid_ref`, `empty_edge`, `inverse_mismatch`, `cardinality`,
+`unstructured_supersedes`, `invalid_ref`, `padding_mismatch`, `empty_edge`, `inverse_mismatch`,
+`cardinality`,
 `edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`, `id_mismatch`, `kind_mismatch`,
 `unknown_field`, `unknown_field_value`, `missing_field`, `edge_kind_mismatch`, `deprecated_field`,
 `stale_target`, `path_mismatch`, `modality_conflict`, `excepts_strict`, `period_invalid`,
@@ -195,8 +197,25 @@ else. No fix suggestion — the entry has to be rewritten by hand.
 
 A typed edge, or an inverse-key entry, names an identifier the corpus does not hold: `<type>
 reference %q does not name a document`. This is the identifier-shaped case; a reference that is not
-identifier-shaped is `invalid_ref` instead. Fix: `did you mean 0002, 0003 or 0042?`, naming up to
-three nearest identifiers, and omitted when there is no plausible candidate.
+identifier-shaped is `invalid_ref` instead, and one whose zero padding is the only thing wrong with
+it is `padding_mismatch` below. Fix: `did you mean 0002, 0003 or 0042?`, naming up to three nearest
+identifiers, and omitted when there is no plausible candidate.
+
+### `padding_mismatch` — error, structural
+
+An entry under an edge key or an inverse key names no document as written, while exactly one
+document answers to a different zero padding of it: `<type> reference "UZ-V-11" does not name a
+document; did you mean "UZ-V-011"?`. Fix: `write supersedes: UZ-V-011`. No edge is built — the
+author named a document that exists and spelled its identifier at the wrong width, and an edge to
+the document they did not name is the silent mis-link this check exists to prevent.
+
+It answers for the kinds whose `id:` pattern is the canonical spelling, where `UZ-V-11` and
+`UZ-V-011` are two identifiers and only one of them is a document. Where identity is the digit run —
+the ADR rules, and any kind that declares no `id:` — padding is not a spelling but the identity
+itself: `339`, `ADR-339` and `000339` name one document, as [the model](../README.md#the-model)
+says they do, so nothing there resolves to nothing and this check never fires. A reference two
+documents both answer to suggests nothing and stays the `invalid_ref` or `dangling_ref` it was:
+there is no single document to name.
 
 ## Kinds
 
@@ -838,7 +857,7 @@ That run exits 1. The other directories are named for the finding or the behavio
 `cycle`, `union-cycle`, `union-cycle-shadowed`, `superseded-orphan`, `id-collision`, `dangling`,
 `dangling-reference`, `empty-edge`, `invalid-yaml`, `inverse-mismatch`, `cardinality`, `withdrawn`,
 `any-of`, `list-attrs`, `fan-in`, `depends-impact`, `projections`, `edge-attrs`, `target`,
-`path-constraints`, `kinds`, `spec-vault`.
+`path-constraints`, `kinds`, `spec-vault`, `unquoted-refs`.
 
 Thirteen of them carry a `docdag.yaml` of their own, because the finding they exercise only exists
 where a configuration declares it: `any-of`, `cardinality`, `dangling-reference`, `edge-attrs`,
@@ -848,6 +867,17 @@ where a configuration declares it: `any-of`, `cardinality`, `dangling-reference`
 on discovery and reads this repository's own decisions instead. The two exceptions are `kinds` and
 `spec-vault`, whose configurations name their directories themselves and are run by `--config`
 alone.
+
+`unquoted-refs` is the corpus every reference of which is an unquoted, zero-padded token —
+`supersedes: [0011]`, `depends-on: [0009, 0011]` — which is what an ADR vault writes when nobody
+tells it to quote. It is clean, and that is the point: read as YAML numbers those tokens are octal,
+`0011` is 9, and the corpus reported a status drift, a dangling reference and a superseded orphan
+about documents nobody had written.
+
+```console
+$ docdag validate --dir testdata/fixtures/unquoted-refs
+OK: 4 docs, 4 typed edges, no cycles
+```
 
 `target` is the corpus whose edges declare what they may point at: a `depends-on` left on a
 replaced decision and an `amends` on a deprecated one, one `stale_target` each. `path-constraints`

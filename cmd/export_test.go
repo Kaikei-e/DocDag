@@ -66,6 +66,17 @@ func TestExportNodeLinkJSON(t *testing.T) {
 			},
 		},
 		{
+			name:    "unquoted zero-padded references resolve to the documents they spell",
+			fixture: "unquoted-refs",
+			nodes:   []model.ID{"0009", "0010", "0011", "0013"},
+			links: []string{
+				"0011|depends-on|0010|structured",
+				"0013|depends-on|0009|structured",
+				"0013|depends-on|0011|structured",
+				"0013|supersedes|0011|structured",
+			},
+		},
+		{
 			name:    "derived edges are exported as supersedes",
 			fixture: "ok-madr",
 			nodes:   []model.ID{"0001", "0002", "0003", "0004"},

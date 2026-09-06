@@ -872,3 +872,23 @@ func TestKindIsReadableByRulesAndProjections(t *testing.T) {
 		testAssertSingleFinding(t, EvalRules(g, cfg, testAsOf), "orphan_test", model.SeverityWarn, "conform/check")
 	})
 }
+
+// TestUnquotedReferencesResolveAsWritten reads the corpus a reader can open:
+// every reference in it is an unquoted, zero-padded token, which YAML would
+// resolve as octal and land three edges away from the documents named.
+func TestUnquotedReferencesResolveAsWritten(t *testing.T) {
+	g, cfg := testFixtureGraph(t, "unquoted-refs")
+
+	want := []model.Edge{
+		testEdge("0011", "0010", "depends-on"),
+		testEdge("0013", "0009", "depends-on"),
+		testEdge("0013", "0011", "depends-on"),
+		testEdge("0013", "0011", "supersedes"),
+	}
+	if !slices.EqualFunc(g.Edges, want, model.Edge.Equal) {
+		t.Fatalf("edges = %+v, want %+v", g.Edges, want)
+	}
+	if findings := Validate(g, cfg, testAsOf); len(findings) != 0 {
+		t.Fatalf("findings = %+v, want none: every reference names the document it was written as", findings)
+	}
+}

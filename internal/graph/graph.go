@@ -55,6 +55,10 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 		targets[spec.Name] = cfg.EdgeNormalizer(spec)
 	}
 
+	// Every node is in place by now, so a reference that resolves to nothing can
+	// be asked whether a different width of it would have resolved to something.
+	padding := newPaddingIndex(g)
+
 	records := make(map[edgeKey]edgeRecord)
 	for _, doc := range docs {
 		for _, spec := range cfg.Edges {
@@ -81,12 +85,24 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 				// itself a finding.
 				attrs, attrFindings := edgeAttrs(cfg, doc, spec, entry)
 				findings = append(findings, attrFindings...)
+				// A reference that resolves to nothing is asked whether a
+				// different zero-padding of it would have resolved to something,
+				// and the answer is reported in place of "is not an identifier"
+				// or "does not name a document": those name a symptom, and the
+				// width is the mistake. It builds no edge either way.
+				loc := model.Locate(doc.Path, doc.FrontmatterLine, doc.KeyLines, spec.Key)
+				target, resolved := targets[spec.Name].Normalize(entry.Ref)
+				if _, known := g.Node(target); !resolved || !known || !cfg.IDShaped(entry.Ref) {
+					if mismatch, isPadding := paddingMismatch(cfg, padding, g, doc.ID, loc, spec.Key, t, entry.Ref); isPadding {
+						findings = append(findings, mismatch)
+						continue
+					}
+				}
 				if !cfg.IDShaped(entry.Ref) {
 					findings = append(findings, invalidRef(cfg, doc, spec.Key, t, entry.Ref))
 					continue
 				}
-				target, ok := targets[spec.Name].Normalize(entry.Ref)
-				if !ok {
+				if !resolved {
 					findings = append(findings, unresolvableRef(cfg, doc, spec.Key, t, entry.Ref))
 					continue
 				}

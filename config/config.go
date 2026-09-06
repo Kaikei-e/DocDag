@@ -813,6 +813,7 @@ var structuralSeverities = map[string]model.Severity{
 	model.RuleDerivedConflict:        model.SeverityError,
 	model.RuleUnstructuredSupersedes: model.SeverityWarn,
 	model.RuleInvalidRef:             model.SeverityError,
+	model.RulePaddingMismatch:        model.SeverityError,
 	model.RuleEmptyEdge:              model.SeverityError,
 	model.RuleInverseMismatch:        model.SeverityError,
 	model.RuleCardinality:            model.SeverityError,

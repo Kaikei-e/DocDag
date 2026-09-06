@@ -119,6 +119,15 @@ func isDelimiter(line []byte) bool { return string(line) == Delimiter }
 // UnmarshalFrontmatter decodes a frontmatter block with a strict YAML parser.
 // Unknown keys stay allowed: other repositories carry extra frontmatter fields.
 // The parser already rejects duplicate keys, so strictness needs no option.
+//
+// Every scalar YAML would type as a number comes back as the text it was
+// written as instead. Nothing DocDag reads out of frontmatter is a quantity —
+// an identifier is a name that happens to be spelled in digits — and YAML reads
+// a leading zero as octal, so `supersedes: [0011]` decoded as a number is 9 and
+// the edge lands on document 0009 without a word said. Reading the literal
+// token is what makes an unquoted reference resolve exactly as the quoted one
+// does, and it puts `0x1f` and `0o17`, which used to resolve to some other
+// document too, in front of the invalid_ref check where they belong.
 func UnmarshalFrontmatter(src []byte) (map[string]any, error) {
 	if len(bytes.TrimSpace(src)) == 0 {
 		return nil, nil
@@ -127,7 +136,123 @@ func UnmarshalFrontmatter(src []byte) (map[string]any, error) {
 	if err := yaml.Unmarshal(src, &fm); err != nil {
 		return nil, frontmatterError(err)
 	}
-	return fm, nil
+	literal, ok := literalScalars(fm, documentBody(src)).(map[string]any)
+	if !ok {
+		return fm, nil
+	}
+	return literal, nil
+}
+
+// documentBody returns the syntax tree of the frontmatter block, or nil when it
+// does not parse a second time. The decoder has already accepted the block by
+// the time this is asked, so nil means only that the literal text cannot be
+// recovered, and the decoded values stand as they are.
+func documentBody(src []byte) ast.Node {
+	file, err := parser.ParseBytes(src, 0)
+	if err != nil || len(file.Docs) == 0 || file.Docs[0] == nil {
+		return nil
+	}
+	return file.Docs[0].Body
+}
+
+// literalScalars walks a decoded value beside the syntax tree it came from,
+// replacing every scalar YAML typed as a number with the text it was written
+// as. A value whose node is missing, or whose node has a shape the decoded
+// value does not, is left exactly as the decoder produced it: an alias and an
+// explicit `!!int 0011` keep their decoded form, because there the author asked
+// for a number rather than merely wrote digits down.
+func literalScalars(value any, node ast.Node) any {
+	node = deref(node)
+	switch v := value.(type) {
+	case map[string]any:
+		values := mappingValues(node)
+		if values == nil {
+			return v
+		}
+		for key, item := range v {
+			v[key] = literalScalars(item, values[key])
+		}
+		return v
+	case []any:
+		items := sequenceValues(node)
+		if len(items) != len(v) {
+			return v
+		}
+		for i, item := range v {
+			v[i] = literalScalars(item, items[i])
+		}
+		return v
+	case string, nil:
+		// A string is already the text it was written as, and a null names
+		// nothing; neither can be the octal this walk is here for.
+		return v
+	default:
+		if text, ok := numberLiteral(node); ok {
+			return text
+		}
+		return v
+	}
+}
+
+// deref looks through an anchor to the node it names: `&latest 0011` is the
+// scalar 0011 under a name, and the name changes nothing about the text.
+func deref(node ast.Node) ast.Node {
+	if anchor, ok := node.(*ast.AnchorNode); ok {
+		return anchor.Value
+	}
+	return node
+}
+
+// mappingValues indexes a mapping node by the text of its keys, so a decoded
+// map can be walked beside it. A node that is not a mapping indexes to nothing,
+// which stops the walk rather than guessing at a correspondence.
+func mappingValues(node ast.Node) map[string]ast.Node {
+	var pairs []*ast.MappingValueNode
+	switch body := node.(type) {
+	case *ast.MappingNode:
+		pairs = body.Values
+	case *ast.MappingValueNode:
+		pairs = []*ast.MappingValueNode{body}
+	default:
+		return nil
+	}
+	values := make(map[string]ast.Node, len(pairs))
+	for _, pair := range pairs {
+		if pair == nil || pair.Key == nil {
+			continue
+		}
+		if tk := pair.Key.GetToken(); tk != nil {
+			values[tk.Value] = pair.Value
+		}
+	}
+	return values
+}
+
+// sequenceValues returns the items of a sequence node, and nothing for a node
+// that is not one.
+func sequenceValues(node ast.Node) []ast.Node {
+	seq, isSequence := node.(*ast.SequenceNode)
+	if !isSequence {
+		return nil
+	}
+	return seq.Values
+}
+
+// numberLiteral reports the text a numeric scalar was written as. Only the node
+// types YAML resolves to a number answer: a quoted string is already its own
+// text, and a block scalar's token is the `|` indicator rather than its
+// content.
+func numberLiteral(node ast.Node) (string, bool) {
+	switch node.(type) {
+	case *ast.IntegerNode, *ast.FloatNode, *ast.InfinityNode, *ast.NanNode:
+	default:
+		return "", false
+	}
+	tk := node.GetToken()
+	if tk == nil {
+		return "", false
+	}
+	return tk.Value, true
 }
 
 // frontmatterError lifts goccy's position and message out of a decode failure,
@@ -509,8 +634,9 @@ func listItems(fm map[string]any, key string) ([]any, bool) {
 }
 
 // Scalar renders a decoded YAML scalar as the string it was written as, and
-// reports whether the value is a scalar at all. A zero-padded reference decodes
-// as a number, so numbers must stringify.
+// reports whether the value is a scalar at all. UnmarshalFrontmatter already
+// hands over every written number as its literal text, so the numeric cases are
+// for a frontmatter map assembled in Go rather than read off a document.
 func Scalar(value any) (string, bool) {
 	switch v := value.(type) {
 	case string:

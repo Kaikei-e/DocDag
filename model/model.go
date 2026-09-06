@@ -71,6 +71,7 @@ const (
 	RuleStatusDrift            = "status_drift"
 	RuleSupersededOrphan       = "superseded_orphan"
 	RuleInvalidRef             = "invalid_ref"
+	RulePaddingMismatch        = "padding_mismatch"
 	RuleDanglingReference      = "dangling_reference"
 	RuleEmptyEdge              = "empty_edge"
 	RuleInverseMismatch        = "inverse_mismatch"
