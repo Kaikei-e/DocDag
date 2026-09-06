@@ -357,13 +357,21 @@ func checkInverseKey(g *model.Graph, cfg config.Config, spec config.EdgeSpec) []
 	// An inverse key names the sources of the edges it mirrors, which the
 	// edge's own to: kinds say nothing about, so every kind resolves them.
 	normalizer := cfg.Normalizer()
+	padding := newPaddingIndex(g)
 	listed := make(map[edgeKey]bool)
 
 	for _, id := range g.NodeIDs() {
 		n := g.Nodes[id]
 		loc := n.Location(spec.Inverse, spec.Key, statusField(cfg))
+		inverse := model.EdgeType(spec.Inverse)
 		refs, invalid := parse.Refs(n.Attrs, spec.Inverse)
 		for _, entry := range append(slices.Clone(invalid), unshaped(cfg, refs)...) {
+			// An inverse key resolves references the way an edge key does, so a
+			// reference of the wrong width is reported the same way there too.
+			if mismatch, isPadding := paddingMismatch(cfg, padding, g, id, loc, spec.Inverse, inverse, entry); isPadding {
+				findings = append(findings, mismatch)
+				continue
+			}
 			findings = append(findings, model.Finding{
 				Severity: cfg.Severity(model.RuleInvalidRef),
 				Rule:     model.RuleInvalidRef,
@@ -378,11 +386,15 @@ func checkInverseKey(g *model.Graph, cfg config.Config, spec config.EdgeSpec) []
 				continue
 			}
 			if _, known := g.Node(source); !known {
+				if mismatch, isPadding := paddingMismatch(cfg, padding, g, id, loc, spec.Inverse, inverse, ref); isPadding {
+					findings = append(findings, mismatch)
+					continue
+				}
 				findings = append(findings, model.Finding{
 					Severity: cfg.Severity(model.RuleDanglingRef),
 					Rule:     model.RuleDanglingRef,
 					ID:       id,
-					Detail:   danglingDetail(model.EdgeType(spec.Inverse), ref),
+					Detail:   danglingDetail(inverse, ref),
 					Location: loc,
 				})
 				continue

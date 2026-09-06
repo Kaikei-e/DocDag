@@ -34,13 +34,15 @@ var (
 // such as "see 0042" never counts as one. An Obsidian wikilink is unwrapped
 // first: a corpus that writes `[[0042]]` in frontmatter means 0042.
 func IDShaped(ref string) bool {
-	ref = unwrap(ref)
+	ref = Unwrap(ref)
 	return ref != "" && idShape.MatchString(ref)
 }
 
-// unwrap returns the reference a frontmatter value names, with an Obsidian
-// wikilink wrapper and its alias removed.
-func unwrap(ref string) string {
+// Unwrap returns the reference a frontmatter value names, with an Obsidian
+// wikilink wrapper and its alias removed. A corpus that writes `[[0042]]` in
+// frontmatter means 0042, so every path that reads a reference as text starts
+// here.
+func Unwrap(ref string) string {
 	ref = strings.TrimSpace(ref)
 	if inside := wikilink.FindStringSubmatch(ref); inside != nil {
 		return strings.TrimSpace(inside[1])
@@ -171,7 +173,7 @@ type PatternNormalizer struct {
 // strip one: a pattern may itself carry slashes, as `^conform/[a-z0-9-]+$`
 // does, and cutting at the last slash would take the identity apart.
 func (n PatternNormalizer) Normalize(ref string) (model.ID, bool) {
-	token := unwrap(ref)
+	token := Unwrap(ref)
 	if token == "" || n.Pattern == nil || !n.Pattern.MatchString(token) {
 		return "", false
 	}

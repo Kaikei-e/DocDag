@@ -155,8 +155,9 @@ mechanical remedy, and exits 1 if any finding is an error:
 ```
 
 - **Structural** — `invalid_frontmatter`, `missing_frontmatter`, `id_collision`, `unknown_status`,
-  `empty_edge`, `invalid_ref`, `dangling_ref`, `unstructured_supersedes`, `derived_conflict`, and,
-  for an edge that declares `attrs:`, `edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`.
+  `empty_edge`, `invalid_ref`, `dangling_ref`, `padding_mismatch`, `unstructured_supersedes`,
+  `derived_conflict`, and, for an edge that declares `attrs:`, `edge_attr_unknown`,
+  `edge_attr_missing`, `edge_attr_invalid`.
 - **Kinds and declared fields** — for a corpus that declares `kinds:` or `fields:`, an identity its
   kind's pattern rejects, a `kind:` its directory disagrees with, an undeclared key on a closed
   kind, an endpoint of the wrong kind and a field value the vocabulary does not hold:

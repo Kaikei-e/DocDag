@@ -6,6 +6,45 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A frontmatter reference is read as the text it was written as, never as a YAML number.** YAML
+  reads an unquoted integer with a leading zero as octal, so `supersedes: [0011]` decoded as 9 and
+  the edge landed on document 0009 — a wrong edge, in silence, with `validate` reporting OK. The
+  table it produced: `[0011]` → 0009, `[0010]` → 0008, `[0013]` → 0011, `[0009]` → 0009 (invalid
+  octal, so YAML fell back to the literal and it happened to be right), `[11]` → 0011 (right by
+  accident). `0x1f` and `0o17` mis-resolved the same way. Only quoting gave the true edge.
+  `UnmarshalFrontmatter` now recovers the literal token of every scalar YAML would type as a number,
+  so every reference-bearing key — `supersedes:`, `depends-on:`, any `inverse:` key, any edge a
+  configuration declares, the `ref:` of an attributed entry, and a kind's `id:` — resolves the same
+  way quoted and unquoted. An explicit `!!int` keeps the number it asks for.
+
+### Added
+
+- `padding_mismatch` — error, structural. A reference that names no document as written, while
+  exactly one document answers to a different zero padding of it: `supersedes reference "UZ-V-11"
+  does not name a document; did you mean "UZ-V-011"?`, with the fix `write supersedes: UZ-V-011`.
+  No edge is built. It answers for the kinds whose `id:` pattern is the canonical spelling; where
+  identity is the digit run — the ADR rules, and any kind declaring no `id:` — `339`, `ADR-339` and
+  `000339` name one document as they always have, so the check cannot fire there. `structural:`
+  accepts the new name, bringing it to thirty.
+- `config.Unwrap`, the wikilink unwrapping every identity path already did, as a function a caller
+  can reach.
+- `testdata/fixtures/unquoted-refs`, an ADR corpus written the way a vault writes one: every
+  reference an unquoted, zero-padded token. It is clean, and used to report a `status_drift`, a
+  `dangling_ref` and a `superseded_orphan` about documents nobody had written.
+
+### Changed
+
+- **Behaviour change.** A corpus whose references were mis-linked by the octal reading now builds
+  the edges its documents name, so findings that were consequences of the wrong graph disappear and
+  findings the right graph implies may appear. A reference whose only fault is its zero padding is
+  now the `padding_mismatch` error rather than an `invalid_ref`, a `dangling_ref` or, worse, an edge
+  to the document nobody named.
+- Every frontmatter value written in digits now reaches rules and edge attributes as the text it was
+  written as, so `1.10` stays `1.10` rather than becoming `1.1`. Attribute `type:` checking already
+  read the string form and is unaffected.
+
 ## [0.4.0] - 2026-09-05
 
 v0.4.0 makes the configuration a Go API as well as a YAML file. A vault owner can import
