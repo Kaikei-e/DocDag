@@ -1,3 +1,9 @@
+---
+title: "DocDag を規範文書向け spec preset で拡張する（式言語は導入しない）"
+status: accepted
+date: 2026-09-01
+---
+
 # 0001: DocDag を規範文書向け `spec` preset で拡張する（式言語は導入しない）
 
 ## ステータス

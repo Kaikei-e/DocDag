@@ -32,6 +32,31 @@ jobs:
       - run: go build ./...
       - run: go test ./... -count=1 -race -shuffle=on
 
+  self-corpus:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Validate DocDag's decision records
+        run: go run ./cmd/docdag validate --format github
+      - name: Check the binding decisions
+        shell: bash
+        run: |
+          expected='0001
+          0002
+          0003
+          0004
+          0005
+          0006'
+          actual="$(go run ./cmd/docdag query --binding)"
+          test "$actual" = "$expected"
+      - name: Lint the self-corpus configuration
+        run: go run ./cmd/docdag lint --format github
+
   # Windows is advisory until the suite has a green history there.
   test-windows:
     runs-on: windows-latest

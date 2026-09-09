@@ -16,6 +16,11 @@ departures inline rather than in a superseding record: 0002 under 実装時の�
 decision the implementation took differently is recorded where the decision is, because a reader who
 has found the record has found the only place the difference matters.
 
+[`../../docdag.yaml`](../../docdag.yaml) adopts the `adr` preset for this directory and requires
+frontmatter. CI validates the records, checks that these six records are the binding set, and lints
+the configuration. Run the same checks locally with `go run ./cmd/docdag validate`,
+`go run ./cmd/docdag query --binding`, and `go run ./cmd/docdag lint` from the repository root.
+
 ## [0001 — the `spec` preset, without an expression language](0001-extend-docdag-with-spec-preset-without-expression-language.md)
 
 The record that opens the series. It decides that a corpus may hold several `kinds:` of document,

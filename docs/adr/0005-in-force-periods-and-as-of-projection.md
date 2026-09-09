@@ -1,3 +1,9 @@
+---
+title: "有効期間をkindごとのperiodとして宣言し、binding・現行・逸脱の効力をas-of時点の射影にする"
+status: accepted
+date: 2026-09-01
+---
+
 # 0005: 有効期間を kind ごとの `period:` として宣言し、binding・現行・逸脱の効力を as-of 時点の射影にする
 
 ## ステータス

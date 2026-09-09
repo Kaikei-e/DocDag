@@ -1,3 +1,9 @@
+---
+title: "辺の合成に関する不変量を target と path_constraints として検査する"
+status: accepted
+date: 2026-09-01
+---
+
 # 0002: 辺の合成に関する不変量を `target:` と `path_constraints:` として検査する
 
 ## ステータス

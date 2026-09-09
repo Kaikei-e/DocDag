@@ -1,3 +1,9 @@
+---
+title: "config と model を公開し、設定のYAML往復とkindごとのappend-onlyを契約する"
+status: accepted
+date: 2026-09-04
+---
+
 # 0006: `config` / `model` を公開し、設定の YAML 往復と kind ごとの append-only を契約する
 
 ## ステータス
