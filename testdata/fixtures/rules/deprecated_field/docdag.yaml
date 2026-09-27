@@ -1,0 +1,4 @@
+preset: adr
+fields:
+  owner:
+    deprecated: true

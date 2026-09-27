@@ -1,5 +1,14 @@
 preset: adr
 dir: docs/ADR
 id_width: 4
+template: docs/ADR/template.md
 references:
   dangling: error
+
+# DocDag validates its own decision records in CI. A record cannot become
+# binding without the same frontmatter contract the tool asks of its users.
+structural:
+  missing_frontmatter: error
+
+sections:
+  required: ["ステータス", "日付", "コンテキスト", "決定"]

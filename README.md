@@ -23,7 +23,7 @@ either.
 A program that owns a vault can build the same configuration the YAML file describes, validate it
 without writing a file, and marshal it into `docdag.yaml`. The field names and YAML tags of
 `config.Config` are the contract; see
-[docs/adr/0006](docs/adr/0006-public-config-yaml-roundtrip-and-append-only.md) for what is stable.
+[docs/ADR/0006](docs/ADR/0006-public-config-yaml-roundtrip-and-append-only.md) for what is stable.
 
 ```go
 import (
@@ -155,9 +155,10 @@ mechanical remedy, and exits 1 if any finding is an error:
 ```
 
 - **Structural** — `invalid_frontmatter`, `missing_frontmatter`, `id_collision`, `unknown_status`,
-  `empty_edge`, `invalid_ref`, `dangling_ref`, `padding_mismatch`, `unstructured_supersedes`,
+  `empty_edge`, `invalid_ref`, `dangling_ref`, `padding_mismatch`, `unmanaged_file`, `unstructured_supersedes`,
   `derived_conflict`, and, for an edge that declares `attrs:`, `edge_attr_unknown`,
   `edge_attr_missing`, `edge_attr_invalid`.
+- **Sections** — for a corpus that opts into `sections:`, `missing_section` and `section_order`.
 - **Kinds and declared fields** — for a corpus that declares `kinds:` or `fields:`, an identity its
   kind's pattern rejects, a `kind:` its directory disagrees with, an undeclared key on a closed
   kind, an endpoint of the wrong kind and a field value the vocabulary does not hold:
@@ -210,7 +211,7 @@ $ claude
 - [docs/ci.md](docs/ci.md) — the composite action, append-only history, linting the configuration
   and the pre-commit hook.
 - [docs/agents.md](docs/agents.md) — `context`, `--fields`, `--touching`, `lint` and the plugin.
-- [docs/adr/](docs/adr/) — the architecture decision records behind the design, indexed and in
+- [docs/ADR/](docs/ADR/) — the architecture decision records behind the design, indexed and in
   reading order: the `spec` preset without an expression language, target conditions, modality,
   `lint`, in-force periods, and the public `config` package.
 - [CHANGELOG.md](CHANGELOG.md) — what each release changed, including the output formats v0.2.0
@@ -221,12 +222,15 @@ $ claude
 A conventional MADR repository needs no changes — the invariants hold as the files already are:
 
 - Filenames `NNNN-kebab-title.md` and bare `NNNNNN.md` are both recognized, 3 to 6 digits, and
-  unrecognized frontmatter keys are ignored, so another tool's fields are safe.
+  unrecognized frontmatter keys are ignored, so another tool's fields are safe. Stray `.md` files
+  in the documents directory not matching the filename pattern are warned as `unmanaged_file`
+  (exempt: `README.md`, `index.md`, `template.md`, and files starting with `_` or `.`).
 - `status: superseded by 0003` derives the `supersedes` edge with `0003` as the newer document and
   makes the containing one count as superseded, raising an `unstructured_supersedes` warning — a
   suggestion to declare the edge in frontmatter, not a failure. The graph is the same either way.
 - Body links stay in the reference layer, so prose cannot fail a build unless `references.dangling`
   opts in.
+- Optional `sections:` configuration can enforce standard MADR or Nygard headings and ordering.
 
 [docs/checks.md](docs/checks.md) has the rest: how `withdrawn` differs from `superseded`, what makes
 a `supersedes:` entry `invalid_ref` rather than `dangling_ref`, and which links never join the

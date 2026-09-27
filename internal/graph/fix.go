@@ -63,6 +63,8 @@ func suggestion(f model.Finding, g *model.Graph, cfg config.Config, asOf time.Ti
 		return "remove one of the listed edges"
 	case model.RuleDeprecatedField:
 		return migrateField(g, cfg, f)
+	case model.RuleUnmanagedFile:
+		return "rename the file to match the pattern or move it out of the documents directory"
 	}
 	return ""
 }

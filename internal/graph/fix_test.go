@@ -99,6 +99,14 @@ func TestSuggestNamesWhatToType(t *testing.T) {
 			finding: model.Finding{Rule: model.RuleInvalidFrontmatter, ID: "0002"},
 			want:    "",
 		},
+		{
+			name: "an unmanaged file suggests renaming or moving",
+			finding: model.Finding{
+				Rule:     model.RuleUnmanagedFile,
+				Location: model.Location{Path: "docs/adr/ADR-1.md", Line: 1},
+			},
+			want: "rename the file to match the pattern or move it out of the documents directory",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

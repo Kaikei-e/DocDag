@@ -423,7 +423,11 @@ func TestNewResolvesToTheCreatedDocument(t *testing.T) {
 
 	resolved := run(t, "resolve", "0001", "--dir", dir)
 	assertExit(t, resolved, 0)
-	assertLines(t, "resolve", lines(resolved.stdout), []string{"0007"})
+	// Resolution stops at non-binding successors, leaving the predecessor active until the proposed successor binds.
+	assertLines(t, "resolve", lines(resolved.stdout), []string{"0001"})
+	if !strings.Contains(resolved.stderr, "not yet binding") {
+		t.Errorf("stderr = %q, want pending successor note", resolved.stderr)
+	}
 }
 
 func TestNewRefusesAMultiKindCorpus(t *testing.T) {

@@ -7,6 +7,7 @@ var (
 	ErrUnknownID       = errors.New("docdag: unknown document id")
 	ErrCycle           = errors.New("docdag: cycle in constraint graph")
 	ErrNoDocuments     = errors.New("docdag: no documents directory found")
+	ErrEmptyCorpus     = errors.New("docdag: empty document corpus")
 	ErrInvalidConfig   = errors.New("docdag: invalid configuration")
 	ErrInvalidDocument = errors.New("docdag: invalid document")
 	ErrIDConflict      = errors.New("docdag: identifier claimed by another document")

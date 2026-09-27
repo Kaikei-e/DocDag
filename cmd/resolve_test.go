@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Kaikei-e/DocDag/internal/graph"
 	"github.com/Kaikei-e/DocDag/internal/render"
 	"github.com/Kaikei-e/DocDag/model"
 )
@@ -178,4 +179,89 @@ func TestResolveFailures(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveWithPendingSuccessor(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-record-architecture-decisions.md": "---\ntitle: Record architecture decisions\nstatus: accepted\ndate: 2025-01-01\n---\n\n# Record architecture decisions\n",
+		"0002-use-markdown-adrs.md":             "---\ntitle: Use Markdown ADRs\nstatus: proposed\nsupersedes:\n  - 0001\ndate: 2025-02-01\n---\n\n# Use Markdown ADRs\n",
+	})
+
+	t.Run("text output prints the predecessor and notes pending successor on stderr", func(t *testing.T) {
+		got := run(t, "resolve", "0001", "--dir", dir)
+		assertExit(t, got, 0)
+		assertLines(t, "resolve", lines(got.stdout), []string{"0001"})
+		wantNote := "note: 0002 supersedes 0001 but is proposed; not yet binding"
+		if !strings.Contains(got.stderr, wantNote) {
+			t.Errorf("stderr = %q, want it to contain %q", got.stderr, wantNote)
+		}
+	})
+
+	t.Run("json output includes pending list", func(t *testing.T) {
+		got := run(t, "resolve", "0001", "--format", "json", "--dir", dir)
+		assertExit(t, got, 0)
+		type resolveRecordJSON struct {
+			render.Record
+			Pending []graph.PendingSuccessor `json:"pending"`
+		}
+		records := decodeJSON[[]resolveRecordJSON](t, got.stdout)
+		if len(records) != 1 {
+			t.Fatalf("records = %+v, want one record", records)
+		}
+		if records[0].ID != "0001" {
+			t.Errorf("id = %q, want 0001", records[0].ID)
+		}
+		if len(records[0].Pending) != 1 {
+			t.Fatalf("pending = %+v, want 1 pending successor", records[0].Pending)
+		}
+		p := records[0].Pending[0]
+		if p.ID != "0002" || p.Predecessor != "0001" || p.Status != "proposed" {
+			t.Errorf("pending = %+v, want 0002 superseding 0001 with status proposed", p)
+		}
+	})
+}
+
+func TestResolveProposedSupersededByProposed(t *testing.T) {
+	// Observed in consumer corpus: ADR 000970 (proposed) superseded by 000974 (proposed)
+	dir := writeDocs(t, map[string]string{
+		"docdag.yaml":      "id_width: 6\n",
+		"000970-first.md":  "---\ntitle: First proposed\nstatus: proposed\ndate: 2025-01-01\n---\n\n# First proposed\n",
+		"000974-second.md": "---\ntitle: Second proposed\nstatus: proposed\nsupersedes:\n  - 000970\ndate: 2025-02-01\n---\n\n# Second proposed\n",
+	})
+
+	got := run(t, "resolve", "000970", "--config", filepath.Join(dir, "docdag.yaml"), "--dir", dir)
+	assertExit(t, got, 0)
+	assertLines(t, "resolve", lines(got.stdout), []string{"000970"})
+	wantNote := "note: 000974 supersedes 000970 but is proposed; not yet binding"
+	if !strings.Contains(got.stderr, wantNote) {
+		t.Errorf("stderr = %q, want note %q", got.stderr, wantNote)
+	}
+}
+
+func TestResolveChainAcceptedToProposed(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-first.md":  "---\ntitle: First\nstatus: superseded\ndate: 2025-01-01\n---\n\n# First\n",
+		"0002-second.md": "---\ntitle: Second\nstatus: accepted\nsupersedes:\n  - 0001\ndate: 2025-02-01\n---\n\n# Second\n",
+		"0003-third.md":  "---\ntitle: Third\nstatus: proposed\nsupersedes:\n  - 0002\ndate: 2025-03-01\n---\n\n# Third\n",
+	})
+
+	t.Run("resolving head stops at accepted middle document", func(t *testing.T) {
+		got := run(t, "resolve", "0001", "--dir", dir)
+		assertExit(t, got, 0)
+		assertLines(t, "resolve", lines(got.stdout), []string{"0002"})
+		wantNote := "note: 0003 supersedes 0002 but is proposed; not yet binding"
+		if !strings.Contains(got.stderr, wantNote) {
+			t.Errorf("stderr = %q, want note %q", got.stderr, wantNote)
+		}
+	})
+
+	t.Run("resolving accepted middle document stops at itself", func(t *testing.T) {
+		got := run(t, "resolve", "0002", "--dir", dir)
+		assertExit(t, got, 0)
+		assertLines(t, "resolve", lines(got.stdout), []string{"0002"})
+		wantNote := "note: 0003 supersedes 0002 but is proposed; not yet binding"
+		if !strings.Contains(got.stderr, wantNote) {
+			t.Errorf("stderr = %q, want note %q", got.stderr, wantNote)
+		}
+	})
 }

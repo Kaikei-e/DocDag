@@ -657,3 +657,140 @@ func TestBindingCountsAnInboundEdgeFromAnUnknownDocument(t *testing.T) {
 		t.Fatalf("BindingSet = %v, want none", got)
 	}
 }
+
+func TestResolveAtBindingStatus(t *testing.T) {
+	cfg := config.ADRPreset()
+
+	t.Run("proposed successor ignored", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNode("0001", config.StatusAccepted),
+				testNode("0002", config.StatusProposed),
+			},
+			[]model.Edge{
+				testEdge("0002", "0001", config.EdgeSupersedes),
+			},
+			nil,
+		)
+
+		got, pending, err := ResolveWithPending(g, cfg, "0001", config.EdgeSupersedes, testAsOf)
+		if err != nil {
+			t.Fatalf("ResolveWithPending: %v", err)
+		}
+		testAssertIDs(t, "ResolveWithPending", got, testIDs("0001"))
+		wantPending := []PendingSuccessor{{ID: "0002", Predecessor: "0001", Status: "proposed"}}
+		if !slices.Equal(pending, wantPending) {
+			t.Fatalf("pending = %+v, want %+v", pending, wantPending)
+		}
+
+		atGot, err := ResolveAt(g, cfg, "0001", config.EdgeSupersedes, testAsOf)
+		if err != nil {
+			t.Fatalf("ResolveAt: %v", err)
+		}
+		testAssertIDs(t, "ResolveAt", atGot, testIDs("0001"))
+	})
+
+	t.Run("accepted successor followed", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNode("0001", config.StatusSuperseded),
+				testNode("0002", config.StatusAccepted),
+			},
+			[]model.Edge{
+				testEdge("0002", "0001", config.EdgeSupersedes),
+			},
+			nil,
+		)
+
+		got, pending, err := ResolveWithPending(g, cfg, "0001", config.EdgeSupersedes, testAsOf)
+		if err != nil {
+			t.Fatalf("ResolveWithPending: %v", err)
+		}
+		testAssertIDs(t, "ResolveWithPending", got, testIDs("0002"))
+		if len(pending) != 0 {
+			t.Fatalf("pending = %+v, want empty", pending)
+		}
+
+		atGot, err := ResolveAt(g, cfg, "0001", config.EdgeSupersedes, testAsOf)
+		if err != nil {
+			t.Fatalf("ResolveAt: %v", err)
+		}
+		testAssertIDs(t, "ResolveAt", atGot, testIDs("0002"))
+	})
+
+	t.Run("chain accepted->proposed stops at the accepted one", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNode("0001", config.StatusSuperseded),
+				testNode("0002", config.StatusAccepted),
+				testNode("0003", config.StatusProposed),
+			},
+			[]model.Edge{
+				testEdge("0002", "0001", config.EdgeSupersedes),
+				testEdge("0003", "0002", config.EdgeSupersedes),
+			},
+			nil,
+		)
+
+		got, pending, err := ResolveWithPending(g, cfg, "0001", config.EdgeSupersedes, testAsOf)
+		if err != nil {
+			t.Fatalf("ResolveWithPending: %v", err)
+		}
+		testAssertIDs(t, "ResolveWithPending(0001)", got, testIDs("0002"))
+		wantPending := []PendingSuccessor{{ID: "0003", Predecessor: "0002", Status: "proposed"}}
+		if !slices.Equal(pending, wantPending) {
+			t.Fatalf("pending = %+v, want %+v", pending, wantPending)
+		}
+
+		atGot, err := ResolveAt(g, cfg, "0001", config.EdgeSupersedes, testAsOf)
+		if err != nil {
+			t.Fatalf("ResolveAt(0001): %v", err)
+		}
+		testAssertIDs(t, "ResolveAt(0001)", atGot, testIDs("0002"))
+
+		// Resolving 0002 directly stops at 0002
+		got2, pending2, err := ResolveWithPending(g, cfg, "0002", config.EdgeSupersedes, testAsOf)
+		if err != nil {
+			t.Fatalf("ResolveWithPending(0002): %v", err)
+		}
+		testAssertIDs(t, "ResolveWithPending(0002)", got2, testIDs("0002"))
+		if !slices.Equal(pending2, wantPending) {
+			t.Fatalf("pending2 = %+v, want %+v", pending2, wantPending)
+		}
+
+		atGot2, err := ResolveAt(g, cfg, "0002", config.EdgeSupersedes, testAsOf)
+		if err != nil {
+			t.Fatalf("ResolveAt(0002): %v", err)
+		}
+		testAssertIDs(t, "ResolveAt(0002)", atGot2, testIDs("0002"))
+	})
+
+	t.Run("both proposed in lineage stops at starting document", func(t *testing.T) {
+		g := testGraph(
+			[]*model.Node{
+				testNode("000970", config.StatusProposed),
+				testNode("000974", config.StatusProposed),
+			},
+			[]model.Edge{
+				testEdge("000974", "000970", config.EdgeSupersedes),
+			},
+			nil,
+		)
+
+		got, pending, err := ResolveWithPending(g, cfg, "000970", config.EdgeSupersedes, testAsOf)
+		if err != nil {
+			t.Fatalf("ResolveWithPending: %v", err)
+		}
+		testAssertIDs(t, "ResolveWithPending", got, testIDs("000970"))
+		wantPending := []PendingSuccessor{{ID: "000974", Predecessor: "000970", Status: "proposed"}}
+		if !slices.Equal(pending, wantPending) {
+			t.Fatalf("pending = %+v, want %+v", pending, wantPending)
+		}
+
+		atGot, err := ResolveAt(g, cfg, "000970", config.EdgeSupersedes, testAsOf)
+		if err != nil {
+			t.Fatalf("ResolveAt: %v", err)
+		}
+		testAssertIDs(t, "ResolveAt", atGot, testIDs("000970"))
+	})
+}

@@ -10,9 +10,12 @@ cd "$root" 2>/dev/null || exit 0
 payload=$(cat)
 
 if ! command -v jq >/dev/null 2>&1; then
-    echo "docdag hook: jq is not installed, skipping validation" >&2
+    echo "docdag hook: jq is not installed, enforcement is OFF" >&2
     exit 0
 fi
+
+err_file=$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/docdag-hook-$$.err")
+trap 'rm -f "$err_file"' EXIT INT HUP TERM
 
 file_path=$(printf '%s' "$payload" | jq -r '.tool_input.file_path // empty')
 case "$file_path" in
@@ -24,14 +27,14 @@ case "$file_path" in
         # than validated. Layer 1 reads no documents and costs milliseconds; the
         # corpus and fixture layers belong in CI.
         if ! command -v docdag >/dev/null 2>&1; then
-            echo "docdag hook: docdag is not on PATH, skipping lint" >&2
+            echo "docdag hook: docdag is not on PATH, enforcement is OFF" >&2
             exit 0
         fi
         # --config names the file that was edited. Without it discovery answers
         # from the project root, so editing a nested docdag.yaml would lint a
         # different configuration and report findings about lines nobody
         # touched.
-        report=$(docdag lint --config "$file_path" 2>/dev/null)
+        report=$(docdag lint --config "$file_path" 2>"$err_file")
         status=$?
         case $status in
             1|2)
@@ -41,11 +44,12 @@ case "$file_path" in
                 ;;
             0) exit 0 ;;
             *)
-                # An edit that leaves the configuration unreadable exits 3 with
-                # nothing on stdout. Staying silent there would hide the very
-                # break the edit caused.
-                echo "docdag hook: docdag exited $status, run docdag lint to see why" >&2
-                exit 0
+                if [ -s "$err_file" ]; then
+                    cat "$err_file" >&2
+                else
+                    echo "docdag hook: docdag exited $status, run docdag lint to see why" >&2
+                fi
+                exit 2
                 ;;
         esac
         ;;
@@ -74,14 +78,14 @@ done
 [ "$under_docs" -eq 1 ] || exit 0
 
 if ! command -v docdag >/dev/null 2>&1; then
-    echo "docdag hook: docdag is not on PATH, skipping validation" >&2
+    echo "docdag hook: docdag is not on PATH, enforcement is OFF" >&2
     exit 0
 fi
 
-report=$(docdag validate --touching "$file_path" 2>/dev/null)
+report=$(docdag validate --touching "$file_path" 2>"$err_file")
 status=$?
 case $status in
-    1)
+    1|2)
         # docdag exits on the whole corpus; a failure with nothing to say about
         # this file is somebody else's edit, not this one.
         [ -n "$report" ] || exit 0
@@ -90,7 +94,11 @@ case $status in
         ;;
     0) exit 0 ;;
     *)
-        echo "docdag hook: docdag exited $status, run docdag validate to see why" >&2
-        exit 0
+        if [ -s "$err_file" ]; then
+            cat "$err_file" >&2
+        else
+            echo "docdag hook: docdag exited $status, run docdag validate to see why" >&2
+        fi
+        exit 2
         ;;
 esac

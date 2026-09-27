@@ -1052,6 +1052,7 @@ func TestResolveKinds(t *testing.T) {
 		root := testTree(t, map[string]string{
 			"standard/docdag.yaml":              testKindsFile,
 			"standard/spec/clauses/UZ-V-001.md": testDocument,
+			"standard/spec/conform/.keep":       "",
 		})
 
 		got, err := Resolve(Options{Root: root, ConfigPath: filepath.Join(root, "standard", "docdag.yaml")})
@@ -1070,6 +1071,7 @@ func TestResolveKinds(t *testing.T) {
 		root := testTree(t, map[string]string{
 			"docdag.yaml":              testKindsFile,
 			"spec/clauses/UZ-V-001.md": testDocument,
+			"spec/conform/.keep":       "",
 		})
 
 		got, err := Resolve(Options{Root: root})
@@ -1102,6 +1104,7 @@ func TestResolveKinds(t *testing.T) {
 		root := testTree(t, map[string]string{
 			"docdag.yaml":              testKindsFile,
 			"spec/clauses/UZ-V-001.md": testDocument,
+			"spec/conform/.keep":       "",
 		})
 
 		if _, err := Resolve(Options{Root: root}); err != nil {
@@ -1234,6 +1237,120 @@ func TestMergePathConstraints(t *testing.T) {
 	t.Run("an unwritten list keeps the base", func(t *testing.T) {
 		if got := Merge(base, Config{IDWidth: 6}); !reflect.DeepEqual(got.PathConstraints, base.PathConstraints) {
 			t.Fatalf("path_constraints = %+v, want the base %+v", got.PathConstraints, base.PathConstraints)
+		}
+	})
+}
+
+func TestStrictConfigurationDecoding(t *testing.T) {
+	t.Run("typo in top-level key referencs fails", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml": "referencs:\n  dangling: error\n",
+		})
+		_, err := Load(filepath.Join(root, "docdag.yaml"))
+		if err == nil {
+			t.Fatal("Load succeeded, want unknown key error")
+		}
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("err = %v, want model.ErrInvalidConfig", err)
+		}
+		if !strings.Contains(err.Error(), "referencs") {
+			t.Errorf("err = %v, want mention of referencs", err)
+		}
+	})
+
+	t.Run("nested typo in structural missing_frontmater fails", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml": "structural:\n  missing_frontmater: error\n",
+		})
+		cfg, err := Load(filepath.Join(root, "docdag.yaml"))
+		if err == nil {
+			err = cfg.Validate()
+		}
+		if err == nil {
+			t.Fatal("Validate succeeded, want unknown key error")
+		}
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("err = %v, want model.ErrInvalidConfig", err)
+		}
+		if !strings.Contains(err.Error(), "missing_frontmater") {
+			t.Errorf("err = %v, want mention of missing_frontmater", err)
+		}
+	})
+}
+
+func TestResolveDirCaseSensitivity(t *testing.T) {
+	t.Run("temp dir docs/adr configured as docs/ADR fails", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml":                 "dir: docs/ADR\n",
+			"docs/adr/0001-a-decision.md": testDocument,
+		})
+
+		_, err := Resolve(Options{Root: root})
+		if err == nil {
+			t.Fatal("Resolve succeeded, want error for case mismatch or missing directory")
+		}
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("Resolve = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("temp dir docs/adr with flag --dir docs/ADR fails", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docs/adr/0001-a-decision.md": testDocument,
+		})
+
+		_, err := Resolve(Options{Root: root, Dir: filepath.Join(root, "docs", "ADR")})
+		if err == nil {
+			t.Fatal("Resolve succeeded, want error for case mismatch or missing directory")
+		}
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("Resolve = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("explicit dir that does not exist fails", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml": "dir: docs/nonexistent\n",
+		})
+
+		_, err := Resolve(Options{Root: root})
+		if err == nil {
+			t.Fatal("Resolve succeeded, want error for nonexistent directory")
+		}
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("Resolve = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("explicit kind dir with case mismatch or nonexistent fails", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml": `kinds:
+  clause:
+    dir: spec/CLAUSES
+`,
+			"spec/clauses/UZ-V-001.md": testDocument,
+		})
+
+		_, err := Resolve(Options{Root: root})
+		if err == nil {
+			t.Fatal("Resolve succeeded, want error for kind dir case mismatch or missing")
+		}
+		if !errors.Is(err, model.ErrInvalidConfig) {
+			t.Fatalf("Resolve = %v, want it to wrap model.ErrInvalidConfig", err)
+		}
+	})
+
+	t.Run("explicit dot directory resolves successfully", func(t *testing.T) {
+		root := testTree(t, map[string]string{
+			"docdag.yaml": "dir: .\n",
+		})
+
+		cfg, err := Resolve(Options{Root: root})
+		if err != nil {
+			t.Fatalf("Resolve failed: %v", err)
+		}
+		if cfg.Dir != root {
+			t.Errorf("cfg.Dir = %q, want %q", cfg.Dir, root)
 		}
 	})
 }

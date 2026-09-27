@@ -1,0 +1,9 @@
+kinds:
+  clause:
+    dir: clauses
+    id: '^UZ-[A-Z]-\d{3}$'
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward

@@ -130,7 +130,7 @@ func TestLintShippedFixtures(t *testing.T) {
 	t.Run("--all runs every layer", func(t *testing.T) {
 		dir := lintFixtures(t, "adr")
 
-		got := run(t, "lint", "--all", "--config", filepath.Join(dir, "docdag.yaml"), "--dir", dir)
+		got := run(t, "lint", "--all", "--config", filepath.Join(dir, "docdag.yaml"), "--dir", filepath.Join(dir, "status_drift", "ok"))
 
 		// The fixture directories are the corpus here, so the corpus layer has
 		// documents to answer about and the fixtures are read from lint/, which

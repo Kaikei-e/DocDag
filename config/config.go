@@ -121,6 +121,8 @@ type KindSpec struct {
 	// force between. A kind that declares none has documents that are always in
 	// force, which is every kind there was before periods existed.
 	Period *PeriodSpec `yaml:"period,omitempty"`
+	// Sections declares the body sections required in this kind's documents.
+	Sections *SectionsSpec `yaml:"sections,omitempty"`
 }
 
 // PeriodSpec names the two frontmatter keys a document's period of force is
@@ -158,6 +160,19 @@ func (p PeriodSpec) Fields() []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// SectionsSpec declares the body sections required in a document.
+type SectionsSpec struct {
+	Required []string      `yaml:"required,omitempty"`
+	Level    int           `yaml:"level,omitempty"`
+	Ordered  bool          `yaml:"ordered,omitempty"`
+	When     *SectionsWhen `yaml:"when,omitempty"`
+}
+
+// SectionsWhen filters which documents section enforcement applies to.
+type SectionsWhen struct {
+	Status []string `yaml:"status,omitempty"`
 }
 
 // AttrInForce is the one attribute the engine computes rather than reads: a
@@ -749,7 +764,10 @@ type Config struct {
 	// the days they are in force between, and the default for the kinds of one
 	// that does — a kind's own declaration wins, the way its status vocabulary
 	// and its field declarations do.
-	Period       *PeriodSpec       `yaml:"period,omitempty"`
+	Period *PeriodSpec `yaml:"period,omitempty"`
+	// Sections declares the required body sections for a single-kind corpus,
+	// or the default for kinds that do not declare their own.
+	Sections     *SectionsSpec     `yaml:"sections,omitempty"`
 	StatusField  string            `yaml:"status_field,omitempty"`
 	StatusValues []string          `yaml:"status_values,omitempty"`
 	Edges        []EdgeSpec        `yaml:"edges,omitempty"`
@@ -846,6 +864,12 @@ var structuralSeverities = map[string]model.Severity{
 	model.RulePeriodInvalid:    model.SeverityError,
 	model.RulePeriodConflict:   model.SeverityError,
 	model.RuleExpiredDeviation: model.SeverityWarn,
+	model.RuleUnmanagedFile:    model.SeverityWarn,
+	// The two a sections: declaration turns on. A corpus that declares no
+	// sections: block never sees them, and one that does asked for the body
+	// structure to hold.
+	model.RuleMissingSection: model.SeverityError,
+	model.RuleSectionOrder:   model.SeverityError,
 }
 
 // Severity reports the severity a structural check speaks at, after whatever
@@ -900,6 +924,19 @@ func (c Config) KindPeriod(kind string) (PeriodSpec, bool) {
 		return *c.Period, true
 	}
 	return PeriodSpec{}, false
+}
+
+// KindSections returns the sections specification a kind's documents answer to —
+// its own where it declares one, the top-level one otherwise — and whether there is
+// one at all.
+func (c Config) KindSections(kind string) (SectionsSpec, bool) {
+	if spec, ok := c.Kinds[kind]; ok && spec.Sections != nil {
+		return *spec.Sections, true
+	}
+	if c.Sections != nil {
+		return *c.Sections, true
+	}
+	return SectionsSpec{}, false
 }
 
 // Periods reports whether anything declares a period, which is what makes an
@@ -1156,6 +1193,9 @@ func (c Config) Validate() error {
 		return err
 	}
 	if err := c.validateStructural(); err != nil {
+		return err
+	}
+	if err := c.validateSections(); err != nil {
 		return err
 	}
 	return c.validateDerivedEdges()
@@ -1805,4 +1845,50 @@ func validDirection(direction string) error {
 		return fmt.Errorf("unknown direction %q: %w", direction, model.ErrInvalidConfig)
 	}
 	return nil
+}
+
+func (c Config) validateSections() error {
+	if err := c.validateSectionsSpec("sections", c.Sections); err != nil {
+		return err
+	}
+	for _, name := range c.KindNames() {
+		if err := c.validateSectionsSpec(fmt.Sprintf("kind %q: sections", name), c.Kinds[name].Sections); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c Config) validateSectionsSpec(subject string, spec *SectionsSpec) error {
+	if spec == nil {
+		return nil
+	}
+	if spec.Level != 0 && (spec.Level < 1 || spec.Level > 6) {
+		return fmt.Errorf("%s: level %d is outside 1..6: %w", subject, spec.Level, model.ErrInvalidConfig)
+	}
+	seen := make(map[string]bool)
+	for _, entry := range spec.Required {
+		if strings.TrimSpace(entry) == "" {
+			return fmt.Errorf("%s: empty section name: %w", subject, model.ErrInvalidConfig)
+		}
+		alts := strings.Split(entry, "|")
+		for _, alt := range alts {
+			norm := normalizeHeadingText(alt)
+			if norm == "" {
+				return fmt.Errorf("%s: empty section name: %w", subject, model.ErrInvalidConfig)
+			}
+			if seen[norm] {
+				return fmt.Errorf("%s: duplicate section name %q: %w", subject, strings.TrimSpace(alt), model.ErrInvalidConfig)
+			}
+			seen[norm] = true
+		}
+	}
+	return nil
+}
+
+func normalizeHeadingText(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimRight(s, ":")
+	s = strings.TrimSpace(s)
+	return strings.ToLower(s)
 }

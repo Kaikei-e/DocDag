@@ -103,6 +103,9 @@ const (
 	RuleNoCounterexample       = "no_counterexample"
 	RuleMayWithoutInterop      = "may_without_interop"
 	RuleInteropNotMust         = "interop_not_must"
+	RuleUnmanagedFile          = "unmanaged_file"
+	RuleMissingSection         = "missing_section"
+	RuleSectionOrder           = "section_order"
 )
 
 // Node is one managed document. Line and KeyLines are the frontmatter

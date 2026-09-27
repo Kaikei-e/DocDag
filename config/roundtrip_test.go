@@ -56,6 +56,43 @@ func TestPresetYAMLRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSectionsYAMLRoundTrip(t *testing.T) {
+	cfg := ADRPreset()
+	cfg.Sections = &SectionsSpec{
+		Required: []string{"Context", "Decision", "Consequences"},
+		Level:    2,
+		Ordered:  true,
+		When:     &SectionsWhen{Status: []string{"accepted"}},
+	}
+
+	first, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	second, err := yaml.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal again: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Fatalf("Marshal is not deterministic:\n--- first ---\n%s\n--- second ---\n%s", first, second)
+	}
+
+	path := filepath.Join(t.TempDir(), DefaultConfigFile)
+	if err := os.WriteFile(path, first, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if err := got.Validate(); err != nil {
+		t.Fatalf("Validate after Load: %v", err)
+	}
+	if !reflect.DeepEqual(got, cfg) {
+		t.Fatalf("round-trip DeepEqual failed\n--- got ---\n%+v\n--- want ---\n%+v", got, cfg)
+	}
+}
+
 func TestEdgeConditionYAMLRoundTrip(t *testing.T) {
 	tests := []struct {
 		name string

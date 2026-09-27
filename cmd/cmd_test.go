@@ -363,3 +363,31 @@ func TestVersionFlagReportsTheBuiltVersion(t *testing.T) {
 		t.Errorf("version output = %q, want it to contain %q", got.stdout, "docdag version dev")
 	}
 }
+
+func TestEmptyCorpusFailsReadingCommandsAndAllowsNew(t *testing.T) {
+	dir := t.TempDir()
+	readingCommands := [][]string{
+		{"validate"},
+		{"stats"},
+		{"export"},
+		{"query", "1"},
+		{"context", "1"},
+		{"resolve", "1"},
+	}
+	for _, cmdArgs := range readingCommands {
+		cmdName := cmdArgs[0]
+		t.Run(cmdName+" fails on empty dir", func(t *testing.T) {
+			args := append(slices.Clone(cmdArgs), "--dir", dir)
+			got := run(t, args...)
+			assertExit(t, got, 3)
+			if !strings.Contains(got.stderr, "no documents found in") {
+				t.Errorf("stderr = %q, want empty corpus error", got.stderr)
+			}
+		})
+	}
+
+	t.Run("new succeeds on empty dir", func(t *testing.T) {
+		got := run(t, "new", "First Decision", "--dir", dir)
+		assertExit(t, got, 0)
+	})
+}

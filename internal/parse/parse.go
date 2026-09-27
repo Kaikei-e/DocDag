@@ -423,9 +423,26 @@ func LocalPath(base, path string) string {
 	return filepath.ToSlash(rel)
 }
 
+func isExempt(name, dir string, cfg config.Config) bool {
+	if strings.HasPrefix(name, "_") || strings.HasPrefix(name, ".") {
+		return true
+	}
+	if strings.EqualFold(name, "README.md") || strings.EqualFold(name, "index.md") || strings.EqualFold(name, "template.md") {
+		return true
+	}
+	if cfg.Template != "" && filepath.Base(cfg.Template) == name {
+		tplDir := filepath.Dir(cfg.Template)
+		if tplDir == "." || tplDir == "" || tplDir == dir || filepath.Clean(tplDir) == filepath.Clean(dir) || strings.HasSuffix(filepath.ToSlash(dir), "/"+filepath.ToSlash(tplDir)) {
+			return true
+		}
+	}
+	return false
+}
+
 // Dir parses the Markdown files directly in dir whose name matches the preset
 // filename pattern. The name carries the identity, so a file named anything
-// else is not a managed document, whatever its frontmatter says.
+// else is not a managed document, whatever its frontmatter says. Non-matching
+// files are not returned as documents.
 func Dir(dir string, cfg config.Config) ([]*Document, error) {
 	entries, err := markdownEntries(dir)
 	if err != nil {
@@ -443,6 +460,30 @@ func Dir(dir string, cfg config.Config) ([]*Document, error) {
 		docs = append(docs, doc)
 	}
 	return docs, nil
+}
+
+// Unmanaged returns the paths of Markdown files directly in dir that are
+// not managed documents and are not exempt.
+func Unmanaged(dir string, cfg config.Config) []string {
+	entries, err := markdownEntries(dir)
+	if err != nil {
+		return nil
+	}
+	norm := cfg.Normalizer()
+	var unmanaged []string
+	for _, name := range entries {
+		if isExempt(name, dir, cfg) {
+			continue
+		}
+		if !norm.MatchesFilename(name) {
+			unmanaged = append(unmanaged, filepath.Join(dir, name))
+			continue
+		}
+		if id, ok := norm.Normalize(name); !ok || id == "" {
+			unmanaged = append(unmanaged, filepath.Join(dir, name))
+		}
+	}
+	return unmanaged
 }
 
 // KindDir parses every Markdown file directly in one kind's directory. Unlike

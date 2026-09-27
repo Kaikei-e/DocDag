@@ -6,6 +6,43 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+This is a **breaking release** introducing fail-closed enforcement across configuration, corpus discovery, hook execution, and document resolution:
+
+- An empty corpus (zero matched documents) now fails closed with exit code 3 (`model.ErrEmptyCorpus`) across all reading commands.
+- `docdag.yaml` is now decoded strictly with `goccy/go-yaml`'s `DisallowUnknownField`, reporting typos with exact line numbers, and unknown structural rule names in `structural:` are rejected by `Config.Validate`.
+- Configured document directories (`dir:` and kind `dir:`) must exist with exact on-disk case matching.
+- Stray Markdown files in the documents directory that do not match the filename pattern are reported by the new `unmanaged_file` warning rule and never counted as documents. Conventional files (`README.md`, `index.md`, `template.md` case-insensitively, configured `template:` files, and names starting with `_` or `.`) are exempt. Finding locations follow the standard repository-relative path convention.
+- The Claude Code `PostToolUse` hook (`scripts/docdag-validate.sh`) now fails closed with exit code 2 and forwards `docdag`'s stderr on unexpected exit codes; missing `jq` or `docdag` emits a non-blocking stderr notice saying enforcement is OFF.
+- `docdag resolve` now stops at successors that are not binding (e.g., `proposed`) and reports them as notes on stderr in text mode and under a `pending` list in JSON mode.
+- Opt-in `sections:` configuration enforces required headings and ordering in document bodies via `missing_section` and `section_order` structural checks. Headings in fenced code blocks are ignored.
+- A rule coverage suite (`cmd/rulecoverage_test.go`) enforces that every built-in structural rule and preset rule has a fixture proving it fires.
+
+### Added
+
+- `sections:` configuration block (top-level and per-kind) declaring required body headings (`required:` list with `|` alternatives), heading `level:` (1..6), heading ordering (`ordered: true`), and status conditions (`when: {status: [...]}`).
+- `missing_section` — error, structural. A document body is missing a required section heading (or all of its `|` alternatives).
+- `section_order` — error, structural. A document body has required sections appearing out of declared order when `ordered: true` is configured.
+- `unmanaged_file` — warn, structural. Reports Markdown files in the documents directory that do not match the document filename pattern and are not exempt. Uses the standard repository-relative path convention (e.g. `docs/adr/stray.md:1:`).
+- Conventional `template.md` (case-insensitive) default exemption alongside `README.md`, `index.md`, and `_`/`.` prefixes, even when `template:` is not set in config.
+- `cmd/rulecoverage_test.go`: automated completeness testing ensuring every built-in and preset rule fires on at least one fixture.
+- Pending successor reporting in `docdag resolve`: non-binding successors are reported on stderr (`note: X supersedes Y but is proposed; not yet binding`) in text mode and as a `pending` array in JSON output.
+
+### Changed
+
+- **Breaking change: Empty corpus exit code.** All reading commands (`validate`, `lint`, `resolve`, `query`, `stats`, `export`, `context`) now fail closed with exit 3 and `model.ErrEmptyCorpus` if 0 managed documents match in the configured documents directory.
+- **Breaking change: Strict configuration decoding.** `docdag.yaml` rejects unknown fields with file lines and numbers using `DisallowUnknownField`. `Config.Validate` rejects unrecognized structural rule names in `structural:`.
+- **Breaking change: Exact directory casing.** Explicit `dir:` and kind `dir:` paths must exist on disk with exact case, even on case-insensitive filesystems.
+- **Breaking change: Resolve stops at non-binding successors.** `docdag resolve` no longer traverses past proposed or non-binding successors as if they were already adopted.
+- `scripts/docdag-validate.sh` hook fails closed: unexpected exit codes from `docdag` exit 2 with the tool's stderr instead of exiting 0. Missing `jq` or `docdag` outputs a non-blocking warning notice on stderr stating enforcement is OFF and exits 0.
+
+### Migrating
+
+1. **Fix configuration typos:** Run `docdag lint` or `docdag validate`. Unknown fields in `docdag.yaml` are now rejected with line numbers. Check for misspelled keys (e.g. `directon` → `direction`) and unrecognized rule names in `structural:`.
+2. **Verify directory paths and casing:** Ensure `dir:` or kind `dir:` matches the exact casing on disk (e.g. `docs/adr` vs `docs/ADR`).
+3. **Handle stray Markdown files:** Check for `unmanaged_file` warnings. Move non-decision Markdown files out of the documents directory, or rename them to conventional exempt names (`README.md`, `template.md`, `index.md`, or prefix with `_` or `.`).
+4. **Update `resolve` expectations:** When querying replaced decisions, note that `docdag resolve` will stop at `proposed` successors rather than traversing through them. Accept the proposed successor or inspect stderr/`pending` output.
+5. **(Optional) Configure `sections:`:** If your repository uses standard ADR templates like MADR or Nygard, declare `sections:` in `docdag.yaml` to enforce required headings and ordering.
+
 ## [0.4.1] - 2026-09-06
 
 v0.4.1 is a correctness release. A frontmatter reference is now read as the text it was written as

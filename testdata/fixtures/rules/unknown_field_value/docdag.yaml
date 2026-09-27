@@ -1,0 +1,6 @@
+preset: adr
+fields:
+  tier:
+    one_of:
+      - gold
+      - silver
