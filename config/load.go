@@ -335,14 +335,21 @@ func checkExplicitDir(base, dir string) (string, error) {
 	if !info.IsDir() {
 		return "", fmt.Errorf("documents directory %s is not a directory: %w", absDir, model.ErrInvalidConfig)
 	}
-	if !filepath.IsAbs(clean) {
-		exact, err := matchesOnDiskCase(base, filepath.ToSlash(clean))
-		if err != nil {
-			return "", fmt.Errorf("read documents directory %s: %w", absDir, model.ErrInvalidConfig)
+	rel := clean
+	if filepath.IsAbs(clean) {
+		// Paths outside base only require existence: walking from volume root would false-positive on Windows 8.3 short names (e.g. RUNNER~1).
+		r, err := filepath.Rel(base, absDir)
+		if err != nil || strings.HasPrefix(r, "..") {
+			return absDir, nil
 		}
-		if !exact {
-			return "", fmt.Errorf("documents directory %s case does not match on-disk path: %w", dir, model.ErrInvalidConfig)
-		}
+		rel = r
+	}
+	exact, err := matchesOnDiskCase(base, filepath.ToSlash(rel))
+	if err != nil {
+		return "", fmt.Errorf("read documents directory %s: %w", absDir, model.ErrInvalidConfig)
+	}
+	if !exact {
+		return "", fmt.Errorf("documents directory %s case does not match on-disk path: %w", dir, model.ErrInvalidConfig)
 	}
 	return absDir, nil
 }
