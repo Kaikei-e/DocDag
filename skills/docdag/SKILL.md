@@ -124,7 +124,7 @@ are reported as `unmanaged_file`. Opt-in `sections:` config enforces required bo
 `docdag` must be on `PATH`:
 
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.4.1
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.5.0
 ```
 
 Add this to the project's `.claude/settings.json` so the commands run without a

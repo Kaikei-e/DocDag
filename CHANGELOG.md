@@ -4,18 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-09-27
 
-This is a **breaking release** introducing fail-closed enforcement across configuration, corpus discovery, hook execution, and document resolution:
-
-- An empty corpus (zero matched documents) now fails closed with exit code 3 (`model.ErrEmptyCorpus`) across all reading commands.
-- `docdag.yaml` is now decoded strictly with `goccy/go-yaml`'s `DisallowUnknownField`, reporting typos with exact line numbers, and unknown structural rule names in `structural:` are rejected by `Config.Validate`.
-- Configured document directories (`dir:` and kind `dir:`) must exist with exact on-disk case matching.
-- Stray Markdown files in the documents directory that do not match the filename pattern are reported by the new `unmanaged_file` warning rule and never counted as documents. Conventional files (`README.md`, `index.md`, `template.md` case-insensitively, configured `template:` files, and names starting with `_` or `.`) are exempt. Finding locations follow the standard repository-relative path convention.
-- The Claude Code `PostToolUse` hook (`scripts/docdag-validate.sh`) now fails closed with exit code 2 and forwards `docdag`'s stderr on unexpected exit codes; missing `jq` or `docdag` emits a non-blocking stderr notice saying enforcement is OFF.
-- `docdag resolve` now stops at successors that are not binding (e.g., `proposed`) and reports them as notes on stderr in text mode and under a `pending` list in JSON mode.
-- Opt-in `sections:` configuration enforces required headings and ordering in document bodies via `missing_section` and `section_order` structural checks. Headings in fenced code blocks are ignored.
-- A rule coverage suite (`cmd/rulecoverage_test.go`) enforces that every built-in structural rule and preset rule has a fixture proving it fires.
+v0.5.0 is a breaking release that makes exit 0 mean the check ran and passed. Until now, several
+paths ended in exit 0 without checking anything. This repository's own CI passed `validate` with
+`OK: 0 docs` because `dir:` named `docs/ADR` while the records sat in `docs/adr`. A misspelled
+`docdag.yaml` key was dropped in silence, a Markdown file outside the filename pattern was skipped,
+and the Claude Code hook exited 0 when docdag could not read its configuration. Each of those now
+fails or reports. The release also lets a corpus require body sections with an opt-in `sections:`
+block, and it stops `resolve` from answering a `proposed` successor as the current record. A corpus
+whose configuration is spelled correctly, whose `dir:` matches the disk, and whose successors are
+accepted sees no change beyond `unmanaged_file` warnings for stray files. ADRs 0007–0009 record the
+reasoning.
 
 ### Added
 
@@ -496,6 +496,7 @@ unless the flag is given.
 
 First release. See the [GitHub release](https://github.com/Kaikei-e/DocDag/releases/tag/v0.1.0).
 
+[0.5.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.5.0
 [0.4.1]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.4.1
 [0.4.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.3.0
