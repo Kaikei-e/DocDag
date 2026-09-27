@@ -2,6 +2,7 @@
 title: "docdag lint を追加し、ルール・射影・辺仕様の矛盾・空虚性・不発を3層で検出する"
 status: accepted
 date: 2026-09-01
+depends-on: ["0001"]
 ---
 
 # 0004: `docdag lint` を追加し、ルール・射影・辺仕様の矛盾・空虚性・不発を 3 層で検出する
@@ -271,3 +272,5 @@ ADR-0001 の `spec` preset に同梱するルール（`orphan_must`、`orphan_te
 - 0003（`modality_conflict`、`excepts`、`interop`）— 衝突表の到達不能な組と、topic 粒度（1 topic あたりの
   条項数が閾値を超える `topic_too_wide` warn）の検査
 - 0005（有効期間）— 層 2 の評価は as-of 時点で行い、`--as-of` を `lint --corpus` にも通す
+- [[0007]]（fail-closed）— 層 3 の「沈黙するルールが発火しうることを fixture で示す」考え方を、DocDag 自身の
+  組み込みルールに適用した（全ルールに発火する fixture が無ければテストが落ちる）

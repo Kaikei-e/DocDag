@@ -373,7 +373,7 @@ rules:
 
 ## 関連ADR
 
-本 ADR が DocDag の最初の ADR。後続として次を起票済み（いずれも Proposed）。
+本 ADR が DocDag の最初の ADR。後続として次を起票した（起票時は Proposed、いずれも 2026-09-01 に採択済み）。
 
 - 0002 `target:` と `path_constraints:`（辺の合成に関する不変量）
 - 0003 `modality` の 5 値化、MAY の強い許可としての明示、`modality_conflict` / `excepts` / `interop`

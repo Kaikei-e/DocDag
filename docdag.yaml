@@ -11,4 +11,4 @@ structural:
   missing_frontmatter: error
 
 sections:
-  required: ["ステータス", "日付", "コンテキスト", "決定"]
+  required: ["コンテキスト", "決定", "検討した代替案|代替案と棄却理由", "影響とトレードオフ|帰結"]

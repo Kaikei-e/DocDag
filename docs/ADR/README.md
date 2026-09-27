@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Six records stand behind the design DocDag ships. They are the reasoning;
+Nine records stand behind the design DocDag ships. They are the reasoning;
 [configuration.md](../configuration.md) and [checks.md](../checks.md) are what the binary does, so a
 record is read for *why* a key exists and the reference pages for what it accepts today. The records
 are written in Japanese, the language they were argued in.
@@ -9,15 +9,19 @@ Read **0001 first**: it establishes the vocabulary — kinds, edge attributes, p
 preset — that the other four extend. 0002 through 0005 are independent of one another and can be
 read in any order, or singly, when a particular check needs an explanation. **0006** is the contract
 for importing the configuration from Go: what is stable, how YAML round-trips, and which kinds
-`--immutable-since` may read.
+`--immutable-since` may read. **0007** through **0009** came out of one release: they make DocDag fail
+when a check could not actually run, let a corpus require body sections, and stop `resolve` at a
+successor that is not binding yet.
 
 Every record is **Accepted**, and the four that were implemented after acceptance carry their
 departures inline rather than in a superseding record: 0002 under 実装時の注記 and 0005 under 実装時の逸脱. A
 decision the implementation took differently is recorded where the decision is, because a reader who
 has found the record has found the only place the difference matters.
 
-[`../../docdag.yaml`](../../docdag.yaml) adopts the `adr` preset for this directory and requires
-frontmatter. CI validates the records, checks that these six records are the binding set, and lints
+[`../../docdag.yaml`](../../docdag.yaml) adopts the `adr` preset for this directory, requires
+frontmatter, and requires the body sections every record carries (0008). The `depends-on` edges
+record which decision each one rests on. CI validates the records, checks that these nine records
+are the binding set, and lints
 the configuration. Run the same checks locally with `go run ./cmd/docdag validate`,
 `go run ./cmd/docdag query --binding`, and `go run ./cmd/docdag lint` from the repository root.
 
@@ -94,3 +98,30 @@ round trip including the scalar form of an `EdgeCondition`, and lets `--immutabl
 multi-kind corpus only under kinds that declare `append_only: true`. It declines embedding the wide
 `internal/lint` surface, duplicating `Severity` into `config`, and treating `Resolve` as the
 stable validation entry.
+
+## [0007 — fail closed when enforcement cannot run](0007-fail-closed-when-enforcement-cannot-run.md)
+
+This repository's own CI once passed `validate` with `OK: 0 docs`: `dir:` named `docs/ADR` while the
+records were still in `docs/adr`. The record lists every path where exit 0 meant "nothing was checked"
+rather than "the check passed", and closes each one. An empty corpus exits 3. `docdag.yaml` is
+decoded strictly. An explicit `dir:` must exist with its on-disk case. A stray Markdown file is
+reported as `unmanaged_file` instead of being dropped. The Claude Code hook blocks on an unexpected
+docdag failure. Every built-in rule must have a fixture that makes it fire. It declines an opt-in
+`--strict`, warn-level empty corpora, and per-document suppression.
+
+## [0008 — body sections, opt-in](0008-opt-in-body-sections.md)
+
+Before this record, the body was read by exactly one check, dangling references. The record decides
+a declarative `sections:` block, at the top level or per kind. It lists required headings, where `|`
+separates alternatives that absorb MADR, Nygard and in-corpus variation. It can also fix the heading
+level and order and limit the check to some statuses. Violations are reported as `missing_section` and
+`section_order`. No preset enables it. It declines checking prose against frontmatter, heading
+regular expressions, and judging whether a section is empty.
+
+## [0009 — `resolve` stops at non-binding successors](0009-resolve-stops-at-non-binding-successors.md)
+
+0005 made `resolve` agree with `--binding` only where a kind declares a period. Elsewhere, a
+`proposed` successor was reported as the current record. The record makes the walk follow only an
+accepted successor that is in force, and report the rest as pending. It declines a warning-only
+answer and an opt-in flag. It notes as open work that the condition is not yet shared with the
+`binding:` projection.
