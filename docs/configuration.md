@@ -22,6 +22,7 @@ out in full.
   against, and the lifecycle of a frontmatter key.
 - [Periods and as-of](#periods-and-as-of) — the days a document is in force between, and the day a
   command answers for.
+- [Sections](#sections) — required document body sections and their ordering.
 - [The spec preset](#the-spec-preset) — the second preset, printed whole, with its kinds and its
   operating conventions.
 - [filename and template](#filename-and-template) — what `docdag new` names and writes.
@@ -85,7 +86,9 @@ rules:
 ```
 
 `dir` defaults to whichever of `docs/adr`, `doc/adr`, `docs/decisions`, `docs/ADR`, `adr` exists
-first and holds a document. Status comparison is case-insensitive, and a value outside
+first and holds a document. When specified explicitly (`dir:` or kind `dir:`), the directory must exist
+and match the exact on-disk case (exit 3 on failure). `docdag.yaml` is parsed strictly: unknown keys
+fail closed with line numbers. Status comparison is case-insensitive, and a value outside
 `status_values` is an `unknown_status` finding.
 
 ## The optional keys
@@ -102,6 +105,17 @@ references:                    # reference-layer validation; without it the laye
 
 structural:                    # raise a built-in check; lowering one is a configuration error
   missing_frontmatter: error
+  unmanaged_file: error
+
+sections:                      # opt-in document body section enforcement
+  level: 2
+  ordered: true
+  required:
+    - "Context and Problem Statement|Context"
+    - "Decision Outcome|Decision"
+    - "Consequences"
+  when:
+    status: [accepted]
 
 edges:
   - name: amends
@@ -735,6 +749,36 @@ A binding projection that should follow the same reading adds `in_force: {eq: "t
 absence of `has_inforce_successor` to its own condition, which is what the `spec` preset's
 `effective` does.
 
+## Sections
+
+The `sections:` block opts into enforcing required headings and their ordering in document bodies:
+
+```yaml
+sections:
+  level: 2                         # heading level (1..6); 0 (default) matches any level
+  ordered: true                    # enforce headings appear in the declared order
+  required:                        # required heading names; use '|' for alternatives
+    - "Context and Problem Statement|Context"
+    - "Decision Outcome|Decision"
+    - "Consequences"
+  when:                            # optional filter: enforce only when document matches
+    status: [accepted, recommended]
+```
+
+This supports conventional architectural decision templates such as MADR or Nygard, where alternative heading titles are common across template versions:
+- `required`: list of required section headings. Pipe (`|`) separates alternative acceptable titles for a section. Headings are compared case-insensitively, with trailing colons trimmed.
+- `level`: optional integer from 1 to 6 constraining the markdown heading level (`##` for 2). When 0 or omitted, matches headings at any level.
+- `ordered`: when `true`, checks that sections appear in the order declared in `required`.
+- `when`: optional status condition filter (e.g. `status: [accepted]`). Documents with non-matching status are skipped.
+
+Sections configuration turns on two structural checks:
+- `missing_section` (error, structural) — a document body lacks a required section.
+- `section_order` (error, structural) — required sections appear out of the declared order.
+
+Headings inside fenced code blocks are ignored.
+
+In a multi-kind corpus, `sections:` can be declared at the top level as a default, or per kind under `kinds.<name>.sections` to override the top-level specification.
+
 ## The spec preset
 
 `preset: spec` is the second built-in configuration: a normative standard as a graph of clauses, the
@@ -1110,9 +1154,10 @@ kind that declares no `id:` keeps the digit-run identity, and with it the `filen
 
 ## Structural escalation
 
-Structural checks are not rules. `structural:` may raise one — `missing_frontmatter` and
-`unstructured_supersedes` are the two that warn by default — but lowering one, or naming a check
-that does not exist, is a configuration error (exit 3), and no check can be disabled.
+Structural checks are not rules. `structural:` may raise one — `missing_frontmatter`,
+`unstructured_supersedes`, `unmanaged_file`, `deprecated_field`, and `expired_deviation` are the five
+that warn by default — but lowering one, or naming a check that does not exist, is a configuration error
+(exit 3), and no check can be disabled. Unknown structural rule names are rejected by `Config.Validate`.
 
 ## Assembling a configuration in Go
 

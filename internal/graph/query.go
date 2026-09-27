@@ -55,27 +55,175 @@ func Resolve(g *model.Graph, id model.ID, t model.EdgeType) ([]model.ID, error) 
 	return resolveOver(g, retainKnown(g, Reverse(g, t)), id)
 }
 
+// PendingSuccessor is a successor that was not followed during resolution
+// because its status is not currently binding (e.g. proposed, rejected, withdrawn)
+// or its period has not yet begun.
+type PendingSuccessor struct {
+	ID          model.ID `json:"id"`
+	Predecessor model.ID `json:"predecessor"`
+	Status      string   `json:"status"`
+}
+
+type pendingKey struct {
+	id          model.ID
+	predecessor model.ID
+}
+
 // ResolveAt walks the lineage to the documents that stand in for a reference on
-// one day. Where the kind being walked declares a period, a successor replaces
-// its predecessor only once somebody has accepted it and its own period has
-// begun: until then the predecessor is what binds, and resolve says so — which
-// is what keeps it answering the same set `--binding` does. A corpus whose
-// kinds declare no period resolves exactly as Resolve does.
+// one day. A successor replaces its predecessor only once somebody has accepted
+// it and its own period has begun: until then the predecessor is what binds,
+// and resolve says so — which is what keeps it answering the same set `--binding`
+// does.
 func ResolveAt(g *model.Graph, cfg config.Config, id model.ID, t model.EdgeType, asOf time.Time) ([]model.ID, error) {
-	if !cfg.Periods() {
-		return Resolve(g, id, t)
+	ids, _, err := ResolveWithPending(g, cfg, id, t, asOf)
+	return ids, err
+}
+
+// ResolveWithPending walks the lineage along reverse edges of t from id to the
+// current binding documents, stopping before any successor whose status is not
+// binding-eligible (e.g. proposed, rejected, withdrawn) or not in force on asOf.
+// Skipped successors are reported in the returned PendingSuccessor slice.
+func ResolveWithPending(g *model.Graph, cfg config.Config, id model.ID, t model.EdgeType, asOf time.Time) ([]model.ID, []PendingSuccessor, error) {
+	if _, ok := g.Nodes[id]; !ok {
+		return nil, nil, fmt.Errorf("resolve %s: %w", id, model.ErrUnknownID)
 	}
-	periods := EvalPeriods(g, cfg, asOf)
-	successors := retainKnown(g, Reverse(g, t))
-	for from, list := range successors {
-		if !periods.Declared(from) {
+
+	adj := retainKnown(g, Reverse(g, t))
+	adj = sortNeighbors(adj)
+
+	// Detect cycles reachable from id along the lineage.
+	color := make(map[model.ID]int, len(adj))
+	color[id] = colorGray
+	cycleStack := []visitFrame{{id: id}}
+	for len(cycleStack) > 0 {
+		frame := &cycleStack[len(cycleStack)-1]
+		neighbors := adj[frame.id]
+		if frame.next >= len(neighbors) {
+			color[frame.id] = colorBlack
+			cycleStack = cycleStack[:len(cycleStack)-1]
 			continue
 		}
-		successors[from] = slices.DeleteFunc(list, func(next model.ID) bool {
-			return !replaces(g, cfg, periods, next)
-		})
+		next := neighbors[frame.next]
+		frame.next++
+		switch color[next] {
+		case colorGray:
+			return nil, nil, fmt.Errorf("resolve %s through %s: %w", id, next, model.ErrCycle)
+		case colorWhite:
+			color[next] = colorGray
+			cycleStack = append(cycleStack, visitFrame{id: next})
+		}
 	}
-	return resolveOver(g, successors, id)
+
+	periods := EvalPeriods(g, cfg, asOf)
+
+	statusOf := func(nodeID model.ID) string {
+		n, ok := g.Nodes[nodeID]
+		if !ok {
+			return "unknown"
+		}
+		status, ok := canonicalKindStatus(cfg, n.Kind, n.Status)
+		if !ok || status == "" {
+			status = strings.TrimSpace(n.Status)
+		}
+		if status == "" {
+			status = "unknown"
+		}
+		return status
+	}
+
+	isAcceptedInForce := func(nodeID model.ID) bool {
+		n, ok := g.Nodes[nodeID]
+		if !ok {
+			return false
+		}
+		status, ok := canonicalKindStatus(cfg, n.Kind, n.Status)
+		return ok && strings.EqualFold(status, config.StatusAccepted) && periods.InForce(nodeID)
+	}
+
+	memoBinding := make(map[model.ID]bool)
+	var leadsToBindingSink func(u model.ID) bool
+	leadsToBindingSink = func(u model.ID) bool {
+		if res, ok := memoBinding[u]; ok {
+			return res
+		}
+		n, ok := g.Nodes[u]
+		if !ok {
+			memoBinding[u] = false
+			return false
+		}
+		if isAcceptedInForce(u) {
+			memoBinding[u] = true
+			return true
+		}
+		status, _ := canonicalKindStatus(cfg, n.Kind, n.Status)
+		if strings.EqualFold(status, config.StatusSuperseded) {
+			for _, next := range adj[u] {
+				if leadsToBindingSink(next) {
+					memoBinding[u] = true
+					return true
+				}
+			}
+		}
+		memoBinding[u] = false
+		return false
+	}
+
+	validSuccessors := make(map[model.ID][]model.ID, len(adj))
+	pendingMap := make(map[pendingKey]PendingSuccessor)
+
+	stack := []model.ID{id}
+	visited := map[model.ID]bool{id: true}
+	for len(stack) > 0 {
+		curr := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+
+		var valid []model.ID
+		for _, next := range adj[curr] {
+			if leadsToBindingSink(next) {
+				valid = append(valid, next)
+				if !visited[next] {
+					visited[next] = true
+					stack = append(stack, next)
+				}
+			} else {
+				k := pendingKey{id: next, predecessor: curr}
+				if _, seen := pendingMap[k]; !seen {
+					st := statusOf(next)
+					n, ok := g.Nodes[next]
+					if ok {
+						cst, _ := canonicalKindStatus(cfg, n.Kind, n.Status)
+						if strings.EqualFold(cst, config.StatusAccepted) && !periods.InForce(next) {
+							st = "not in force"
+						}
+					}
+					pendingMap[k] = PendingSuccessor{
+						ID:          next,
+						Predecessor: curr,
+						Status:      st,
+					}
+				}
+			}
+		}
+		validSuccessors[curr] = valid
+	}
+
+	resolved, err := resolveOver(g, validSuccessors, id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	pending := make([]PendingSuccessor, 0, len(pendingMap))
+	for _, p := range pendingMap {
+		pending = append(pending, p)
+	}
+	slices.SortFunc(pending, func(a, b PendingSuccessor) int {
+		if c := strings.Compare(a.ID.String(), b.ID.String()); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Predecessor.String(), b.Predecessor.String())
+	})
+
+	return resolved, pending, nil
 }
 
 // resolveOver is the lineage walk both spellings share: an iterative

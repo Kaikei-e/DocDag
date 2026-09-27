@@ -544,7 +544,7 @@ func TestDir(t *testing.T) {
 		dir := testWriteDocs(t, map[string]string{
 			"0001-keep-this.md":      "---\nstatus: accepted\n---\n\n# Keep this\n",
 			"0002-no-frontmatter.md": "# No frontmatter\n",
-			"notes.md":               "# Loose notes\n",
+			"_notes.md":              "# Loose notes\n",
 			"0003-not-markdown.txt":  "---\nstatus: accepted\n---\n",
 			"docdag.yaml":            "id_width: 4\n",
 		})
@@ -556,6 +556,58 @@ func TestDir(t *testing.T) {
 		want := []string{"0001-keep-this.md", "0002-no-frontmatter.md"}
 		if got := testNames(docs); !slices.Equal(got, want) {
 			t.Fatalf("names = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("unmanaged markdown files are recorded while exempt files are skipped", func(t *testing.T) {
+		testCfg := cfg
+		testCfg.Template = "template.md"
+		dir := testWriteDocs(t, map[string]string{
+			"0001-keep.md": "---\nstatus: accepted\n---\n",
+			"ADR-1.md":     "# Loose ADR\n",
+			"template.md":  "# Template\n",
+			"README.md":    "# Readme\n",
+			"index.md":     "# Index\n",
+			"_draft.md":    "# Hidden draft\n",
+			".notes.md":    "# Dot note\n",
+		})
+
+		docs, err := Dir(dir, testCfg)
+		if err != nil {
+			t.Fatalf("Dir: %v", err)
+		}
+		wantNames := []string{"0001-keep.md"}
+		if got := testNames(docs); !slices.Equal(got, wantNames) {
+			t.Fatalf("names = %v, want %v", got, wantNames)
+		}
+		unmanaged := Unmanaged(dir, testCfg)
+		wantUnmanaged := []string{filepath.Join(dir, "ADR-1.md")}
+		if !slices.Equal(unmanaged, wantUnmanaged) {
+			t.Fatalf("unmanaged = %v, want %v", unmanaged, wantUnmanaged)
+		}
+	})
+
+	t.Run("template.md is exempt by default even when template is not configured", func(t *testing.T) {
+		testCfg := cfg
+		testCfg.Template = ""
+		dir := testWriteDocs(t, map[string]string{
+			"0001-keep.md": "---\nstatus: accepted\n---\n",
+			"ADR-1.md":     "# Loose ADR\n",
+			"template.md":  "# Lowercase template\n",
+			"Template.md":  "# Capitalized template\n",
+		})
+
+		docs, err := Dir(dir, testCfg)
+		if err != nil {
+			t.Fatalf("Dir: %v", err)
+		}
+		if got := testNames(docs); !slices.Equal(got, []string{"0001-keep.md"}) {
+			t.Fatalf("names = %v, want [0001-keep.md]", got)
+		}
+		unmanaged := Unmanaged(dir, testCfg)
+		wantUnmanaged := []string{filepath.Join(dir, "ADR-1.md")}
+		if !slices.Equal(unmanaged, wantUnmanaged) {
+			t.Fatalf("unmanaged = %v, want %v", unmanaged, wantUnmanaged)
 		}
 	})
 

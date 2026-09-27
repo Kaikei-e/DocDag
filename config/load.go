@@ -79,6 +79,13 @@ func Discover(root string, norm IDNormalizer) (string, error) {
 func matchesOnDiskCase(root, candidate string) (bool, error) {
 	parent := root
 	for component := range strings.SplitSeq(candidate, "/") {
+		if component == "" || component == "." {
+			continue
+		}
+		if component == ".." {
+			parent = filepath.Join(parent, "..")
+			continue
+		}
 		entries, err := os.ReadDir(parent)
 		if err != nil {
 			return false, err
@@ -98,7 +105,7 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("read configuration %s: %w", path, err)
 	}
 	var cfg Config
-	if err := yaml.Unmarshal(src, &cfg); err != nil {
+	if err := yaml.UnmarshalWithOptions(src, &cfg, yaml.DisallowUnknownField()); err != nil {
 		return Config{}, fmt.Errorf("decode configuration %s: %v: %w", path, err, model.ErrInvalidConfig)
 	}
 	return cfg, nil
@@ -175,6 +182,9 @@ func Merge(base, override Config) Config {
 	}
 	if len(override.Structural) > 0 {
 		merged.Structural = maps.Clone(override.Structural)
+	}
+	if override.Sections != nil {
+		merged.Sections = override.Sections
 	}
 	if override.Edges != nil && override.Projections == nil {
 		merged = dropUnsupportedProjections(merged)
@@ -306,6 +316,37 @@ func retargetDerivedEdges(specs []DerivedEdgeSpec, from, to string) []DerivedEdg
 	return out
 }
 
+func checkExplicitDir(base, dir string) (string, error) {
+	if dir == "" {
+		return "", nil
+	}
+	clean := filepath.Clean(dir)
+	absDir := clean
+	if !filepath.IsAbs(absDir) {
+		absDir = filepath.Join(base, clean)
+	}
+	info, err := os.Stat(absDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return "", fmt.Errorf("documents directory %s does not exist: %w", absDir, model.ErrInvalidConfig)
+		}
+		return "", fmt.Errorf("read documents directory %s: %w", absDir, model.ErrInvalidConfig)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("documents directory %s is not a directory: %w", absDir, model.ErrInvalidConfig)
+	}
+	if !filepath.IsAbs(clean) {
+		exact, err := matchesOnDiskCase(base, filepath.ToSlash(clean))
+		if err != nil {
+			return "", fmt.Errorf("read documents directory %s: %w", absDir, model.ErrInvalidConfig)
+		}
+		if !exact {
+			return "", fmt.Errorf("documents directory %s case does not match on-disk path: %w", dir, model.ErrInvalidConfig)
+		}
+	}
+	return absDir, nil
+}
+
 // Resolve produces the effective configuration for one CLI invocation,
 // including documents-directory discovery when nothing selected one.
 func Resolve(opts Options) (Config, error) {
@@ -336,9 +377,30 @@ func Resolve(opts Options) (Config, error) {
 		// is read relative to the file that wrote it down rather than to the
 		// process's directory: a corpus is described from where it lives.
 		cfg.Kinds = rootedKinds(cfg.Kinds, kindRoot(root, from))
+		if file.Kinds != nil {
+			for _, spec := range file.Kinds {
+				if spec.Dir != "" {
+					if _, err := checkExplicitDir(kindRoot(root, from), spec.Dir); err != nil {
+						return Config{}, err
+					}
+				}
+			}
+		}
 		return cfg, nil
 	}
-	if cfg.Dir == "" {
+	if opts.Dir != "" {
+		resolved, err := checkExplicitDir(root, opts.Dir)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.Dir = resolved
+	} else if file.Dir != "" {
+		resolved, err := checkExplicitDir(kindRoot(root, from), file.Dir)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.Dir = resolved
+	} else if cfg.Dir == "" {
 		dir, err := Discover(root, cfg.Normalizer())
 		if err != nil {
 			return Config{}, err

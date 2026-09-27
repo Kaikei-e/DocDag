@@ -160,9 +160,11 @@ The hook reads what was edited: a Markdown file inside the documents directory i
 reads no documents and costs milliseconds — so a rule that contradicts itself is reported in the same
 turn it was written. The edited file is named explicitly, so a nested configuration is linted rather
 than the project root's. An edit that leaves it unreadable at all says so on stderr instead of
-passing quietly.
+passing quietly. On unexpected docdag exit codes (such as exit 3 on configuration or I/O failure),
+the hook fails closed with exit code 2 and outputs docdag's stderr.
 
-The hook needs `docdag` and `jq` on `PATH` and does nothing without them. Allow the commands once
+The hook needs `docdag` and `jq` on `PATH`. If either tool is missing, it emits a non-blocking stderr
+notice that enforcement is OFF and exits 0. Allow the commands once
 with `"permissions": {"allow": ["Bash(docdag *)"]}` in `.claude/settings.json`:
 
 ```json

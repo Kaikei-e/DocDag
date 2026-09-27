@@ -23,7 +23,8 @@ under. Periods come first among the groups because the checks below read the day
   `period_invalid`, `period_conflict`, `expired_deviation`
 - [Document structure](#document-structure) — `invalid_frontmatter`, `missing_frontmatter`,
   `id_collision`, `unknown_status`, `empty_edge`, `invalid_ref`, `dangling_ref`,
-  `padding_mismatch`
+  `padding_mismatch`, `unmanaged_file`
+- [Sections](#sections) — `missing_section`, `section_order`
 - [Kinds](#kinds) — `id_mismatch`, `kind_mismatch`, `unknown_field`, `edge_kind_mismatch`
 - [Declared fields](#declared-fields) — `deprecated_field`, `unknown_field_value`, `missing_field`
 - [Edge attributes](#edge-attributes) — `edge_attr_unknown`, `edge_attr_missing`,
@@ -46,16 +47,17 @@ under. Periods come first among the groups because the checks below read the day
 | **Reference and history** | `references.dangling`, or fixed | `dangling_reference` is off by default; `immutable_violation` needs `--immutable-since` |
 | **Lint** | fixed per finding | nothing configures them; `docdag lint` reports them and `validate` never does |
 
-`structural:` accepts exactly these thirty names: `cycle`, `dangling_ref`, `id_collision`,
+`structural:` accepts exactly these thirty-three names: `cycle`, `dangling_ref`, `id_collision`,
 `invalid_frontmatter`, `missing_frontmatter`, `unknown_status`, `derived_conflict`,
 `unstructured_supersedes`, `invalid_ref`, `padding_mismatch`, `empty_edge`, `inverse_mismatch`,
 `cardinality`,
 `edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`, `id_mismatch`, `kind_mismatch`,
 `unknown_field`, `unknown_field_value`, `missing_field`, `edge_kind_mismatch`, `deprecated_field`,
 `stale_target`, `path_mismatch`, `modality_conflict`, `excepts_strict`, `period_invalid`,
-`period_conflict`, `expired_deviation`. Naming anything else is a configuration error and exits 3 —
-`status_drift` and `superseded_orphan` included, since they are rules a `rules:` list replaces, and
-every lint finding, since `validate` never reports one.
+`period_conflict`, `expired_deviation`, `unmanaged_file`, `missing_section`, `section_order`. Naming
+anything else is a configuration error and exits 3 — `status_drift` and `superseded_orphan` included,
+since they are rules a `rules:` list replaces, and every lint finding, since `validate` never reports
+one.
 
 ## Status is a projection
 
@@ -217,6 +219,40 @@ says they do, so nothing there resolves to nothing and this check never fires. A
 documents both answer to suggests nothing and stays the `invalid_ref` or `dangling_ref` it was:
 there is no single document to name.
 
+### `unmanaged_file` — warn, structural
+
+A Markdown file directly in the documents directory does not match the configured document filename
+pattern and is not exempt: `does not match the document filename pattern {id}-{slug}.md; rename it
+or move it out of the documents directory`. Fix: `rename the file to match the pattern or move it out
+of the documents directory`.
+
+The file is never counted as a managed document, so other tools' notes or drafts placed in the directory
+are surfaced rather than quietly ignored. Conventional non-document files are exempt: `README.md`,
+`index.md`, `template.md` (case-insensitive), any file matching the configured `template:` path,
+and any file whose name begins with `_` or `.`. Exempt files are skipped in silence.
+Findings use the exact same path convention as other findings, relative to the working directory /
+repository root (e.g. `docs/adr/stray.md:1:`).
+
+## Sections
+
+The two checks below are what a `sections:` declaration turns on: the required headings in the
+document body, and whether they appear in the configured order. A corpus that declares no
+`sections:` block never sees either of them.
+
+### `missing_section` — error, structural
+
+A document body lacks one of the required headings declared under `sections.required`:
+`missing required section "Context and Problem Statement|Context"`. Filed on the document's first
+body line. Where alternatives are separated by `|`, the check is satisfied if any one of the
+alternative heading titles appears in the body. Heading comparison is case-insensitive and trims
+trailing colons. Headings inside fenced code blocks are ignored. No fix suggestion.
+
+### `section_order` — error, structural
+
+A document body has required sections that appear out of the order declared under `sections.required`
+when `sections.ordered: true` is configured: `section "Context" (line 12) appears after later section
+"Decision" (line 8)`. Filed on the line of the out-of-order heading. No fix suggestion.
+
 ## Kinds
 
 The four checks below exist only for a corpus that declares `kinds:`; see
@@ -234,8 +270,9 @@ The finding names no document, because there is none to name: it is filed on the
 the file's first line. The file is left out of the graph, so nothing resolves to it. No fix
 suggestion.
 
-The single-kind reader skips a file whose name it does not recognize, in silence. A kind's directory
-is a declaration instead, so what it holds is reported rather than skipped.
+The single-kind reader reports a file whose name it does not recognize as an `unmanaged_file`
+warning unless exempt. A kind's directory is a declaration instead, so a non-matching file there
+is an `id_mismatch` error rather than a warning.
 
 ### `kind_mismatch` — error, structural
 

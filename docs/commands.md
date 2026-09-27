@@ -29,7 +29,7 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 | --- | --- | --- |
 | `docdag validate [--touching <path>]... [--show-suppressed] [--immutable-since <rev>] [--as-of <day>] [--at <rev>] [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` when nothing errored — with `, as of <day>` where a kind declares a `period:` | exit 1 if any finding is an error, exit 3 if `--immutable-since` or `--at` is given outside a git repository or without `git` |
 | `docdag lint [--corpus] [--fixtures <dir>] [--all] [--since <rev>] [--strict] [--as-of <day>] [--at <rev>] [--format text\|json\|github\|rdjson]` | one line per lint finding, then the counts, or `OK: no lint findings` | exit 1 on any error (or on any warning with `--strict`), exit 2 on warnings alone, exit 3 if the configuration does not validate |
-| `docdag resolve <ref> [--as-of <day>] [--at <rev>] [--fields <list>]` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it — a successor nobody has accepted, or one whose period has not begun, has replaced nothing | exit 1 on an unknown reference or a supersedes cycle |
+| `docdag resolve <ref> [--as-of <day>] [--at <rev>] [--fields <list>]` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it — stops at successors that are not binding (e.g. proposed) and reports them on stderr (or under `pending` in JSON) | exit 1 on an unknown reference or a supersedes cycle |
 | `docdag query <ref> [--ancestors\|--descendants] [--edge <type>] [--include-refs] [--as-of <day>] [--at <rev>] [--fields <list>]` | the reachable set over typed edges, descendants by default; reference-layer hits are suffixed ` (reference)` | exit 1 unknown reference, exit 2 unknown edge type or conflicting flags |
 | `docdag query --binding [--as-of <day>] [--at <rev>] [--fields <list>]` | every document binding on the day asked about, with its `modality` beside it where the configuration declares one | exit 2 if combined with `--ancestors`, `--descendants`, `--edge` or `--include-refs` |
 | `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all] [--as-of <day>] [--at <rev>]` | the document, what it resolves to and its neighbourhood, each quoting one section | exit 1 unknown reference, exit 2 unknown edge type |
@@ -43,10 +43,10 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 
 ## Exit codes
 
-`0` success (warnings allowed), `1` domain failure, `2` usage error, `3` I/O or config error —
-including "no documents directory found", so a repository without one needs `--dir`. `lint` reads
-`2` differently — warnings alone, which is not a usage error there — because a configuration that
-lints with warnings is neither a failure nor nothing; `--strict` turns them into `1`.
+`0` success (warnings allowed), `1` domain failure, `2` usage error, `3` I/O, config error, empty corpus
+(matched zero managed documents, `model.ErrEmptyCorpus`, on all reading commands), or directory on-disk
+case mismatch. `lint` reads `2` differently — warnings alone, which is not a usage error there — because
+a configuration that lints with warnings is neither a failure nor nothing; `--strict` turns them into `1`.
 
 ## validate
 

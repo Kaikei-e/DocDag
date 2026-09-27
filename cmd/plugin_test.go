@@ -239,9 +239,9 @@ func TestPluginHookLintsTheConfigurationThatWasEdited(t *testing.T) {
 	}
 }
 
-// TestPluginHookReportsAConfigurationItCannotRead covers the exit code the
-// lint branch used to swallow: an edit that leaves docdag.yaml invalid exits 3
-// with nothing to say, and silence there hides the break the edit caused.
+// TestPluginHookReportsAConfigurationItCannotRead covers exit code 3 from
+// docdag: an edit that leaves docdag.yaml invalid exits 3, and the hook prints
+// docdag's stderr and exits 2 so Claude Code blocks and sees it.
 func TestPluginHookReportsAConfigurationItCannotRead(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the hook is a POSIX shell script")
@@ -254,7 +254,7 @@ func TestPluginHookReportsAConfigurationItCannotRead(t *testing.T) {
 	if err := os.MkdirAll(bin, 0o750); err != nil {
 		t.Fatalf("mkdir %s: %v", bin, err)
 	}
-	stub := "#!/bin/sh\ncase \"$1\" in lint) exit 3 ;; esac\nexit 0\n"
+	stub := "#!/bin/sh\ncase \"$1\" in lint) echo \"bad configuration\" >&2; exit 3 ;; esac\nexit 0\n"
 	if err := os.WriteFile(filepath.Join(bin, "docdag"), []byte(stub), 0o750); err != nil {
 		t.Fatalf("write the stub: %v", err)
 	}
@@ -269,12 +269,69 @@ func TestPluginHookReportsAConfigurationItCannotRead(t *testing.T) {
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
 
-	// Exit 0: the edit is not blocked on a code the hook cannot read a report
-	// out of, but the reader is told which command to run.
-	if err != nil {
-		t.Fatalf("hook: %v (output %q)", err, out)
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+		t.Fatalf("hook err = %v, want exit code 2 (output %q)", err, out)
 	}
-	if !strings.Contains(string(out), "docdag exited 3") {
-		t.Errorf("hook wrote %q, want it to say the configuration could not be read", out)
+	if !strings.Contains(string(out), "bad configuration") {
+		t.Errorf("hook wrote %q, want stderr from docdag", out)
+	}
+}
+
+func TestPluginHookFailsClosedOnUnexpectedValidateExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the hook is a POSIX shell script")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("the hook reads its payload with jq")
+	}
+	project := t.TempDir()
+	bin := filepath.Join(project, "bin")
+	if err := os.MkdirAll(bin, 0o750); err != nil {
+		t.Fatalf("mkdir %s: %v", bin, err)
+	}
+	stub := "#!/bin/sh\ncase \"$1\" in validate) echo \"cannot read corpus\" >&2; exit 3 ;; esac\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docdag"), []byte(stub), 0o750); err != nil {
+		t.Fatalf("write the stub: %v", err)
+	}
+	docs := filepath.Join(project, "docs", "adr")
+	if err := os.MkdirAll(docs, 0o750); err != nil {
+		t.Fatalf("mkdir %s: %v", docs, err)
+	}
+	doc := filepath.Join(docs, "0001-test.md")
+	if err := os.WriteFile(doc, []byte("# Test\n"), 0o600); err != nil {
+		t.Fatalf("write doc: %v", err)
+	}
+
+	cmd := exec.Command("sh", filepath.Join(repoRoot(t), "scripts", "docdag-validate.sh"))
+	cmd.Stdin = strings.NewReader(`{"tool_name":"Edit","tool_input":{"file_path":"` + doc + `"}}`)
+	cmd.Dir = project
+	cmd.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+project, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 2 {
+		t.Fatalf("hook err = %v, want exit 2 (output %q)", err, out)
+	}
+	if !strings.Contains(string(out), "cannot read corpus") {
+		t.Errorf("hook wrote %q, want stderr from docdag", out)
+	}
+}
+
+func TestPluginHookMissingNoticeSaysEnforcementOff(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the hook is a POSIX shell script")
+	}
+	project := t.TempDir()
+	cmd := exec.Command("sh", filepath.Join(repoRoot(t), "scripts", "docdag-validate.sh"))
+	cmd.Stdin = strings.NewReader(`{"tool_name":"Edit","tool_input":{"file_path":"test.md"}}`)
+	cmd.Dir = project
+	cmd.Env = []string{"PATH=/nonexistent"}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("hook failed: %v", err)
+	}
+	if !strings.Contains(string(out), "enforcement is OFF") {
+		t.Errorf("output = %q, want it to say enforcement is OFF", out)
 	}
 }

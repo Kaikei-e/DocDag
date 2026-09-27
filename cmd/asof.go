@@ -135,14 +135,24 @@ func loadCorpus(cmd *cobra.Command) (*corpus, error) {
 	if err != nil {
 		return nil, err
 	}
+	var c *corpus
 	if rev != "" {
-		return loadCorpusAt(cfg, rev)
+		c, err = loadCorpusAt(cfg, rev)
+	} else {
+		var g *model.Graph
+		g, cfg, err = loadGraph(cmd)
+		if err == nil {
+			c = &corpus{graph: g, cfg: cfg}
+		}
 	}
-	g, cfg, err := loadGraph(cmd)
 	if err != nil {
 		return nil, err
 	}
-	return &corpus{graph: g, cfg: cfg}, nil
+	if (cmd == nil || cmd.Name() != "new") && len(c.graph.Nodes) == 0 {
+		c.close()
+		return nil, emptyCorpusErr(c.cfg)
+	}
+	return c, nil
 }
 
 // revision reads the --at flag, and reports none for a command that does not
@@ -185,7 +195,12 @@ func loadCorpusAt(cfg config.Config, rev string) (*corpus, error) {
 	// to its root names them the way the revision holds them: a report about
 	// v1.2.0 points at paths a reader finds in v1.2.0.
 	parse.Localize(docs, tree.Root())
-	return &corpus{graph: graph.Build(docs, cfg), cfg: cfg, at: rev, tree: tree}, nil
+	g := graph.Build(docs, cfg)
+	if len(g.Nodes) == 0 {
+		_ = tree.Close()
+		return nil, emptyCorpusErr(cfg)
+	}
+	return &corpus{graph: g, cfg: cfg, at: rev, tree: tree}, nil
 }
 
 // reportedAsOf is the as-of day a text report carries, and the empty string

@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -86,6 +88,43 @@ func TestCheckDocuments(t *testing.T) {
 		testAssertSortedFindings(t, got)
 		if len(got) != 3 {
 			t.Fatalf("findings = %+v, want 3", got)
+		}
+	})
+}
+
+func TestCheckUnmanaged(t *testing.T) {
+	t.Run("reports unmanaged file with full slash path when outside working directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "ADR-1.md"), []byte("# ADR 1\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg := config.ADRPreset()
+		cfg.Dir = dir
+		f := testAssertSingleFinding(t, CheckUnmanaged(cfg), model.RuleUnmanagedFile, model.SeverityWarn, "")
+		want := filepath.ToSlash(filepath.Join(dir, "ADR-1.md"))
+		if f.Location.Path != want || f.Location.Line != 1 {
+			t.Errorf("location = %+v, want %s:1", f.Location, want)
+		}
+		if !strings.Contains(f.Detail, "does not match the document filename pattern") {
+			t.Errorf("detail = %q, want filename pattern explanation", f.Detail)
+		}
+	})
+
+	t.Run("reports unmanaged file with relative path when under working directory", func(t *testing.T) {
+		root := t.TempDir()
+		docsDir := filepath.Join(root, "docs", "adr")
+		if err := os.MkdirAll(docsDir, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(docsDir, "ADR-1.md"), []byte("# ADR 1\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(root)
+		cfg := config.ADRPreset()
+		cfg.Dir = filepath.Join(root, "docs", "adr")
+		f := testAssertSingleFinding(t, CheckUnmanaged(cfg), model.RuleUnmanagedFile, model.SeverityWarn, "")
+		if f.Location.Path != "docs/adr/ADR-1.md" || f.Location.Line != 1 {
+			t.Errorf("location = %+v, want docs/adr/ADR-1.md:1", f.Location)
 		}
 	})
 }

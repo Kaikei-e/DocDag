@@ -1,0 +1,6 @@
+preset: adr
+id_width: 4
+sections:
+  required: ["Context", "Decision", "Consequences"]
+  level: 2
+  ordered: true

@@ -1,0 +1,4 @@
+preset: adr
+period:
+  from: date
+  until: expires

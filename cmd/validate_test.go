@@ -582,7 +582,7 @@ func TestValidateRejectsAStatusThatOnlyOpensWithAVocabularyWord(t *testing.T) {
 	assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0001-a-decision.md:3: ERROR unknown_status 0001:"})
 }
 
-func TestValidateIgnoresFilesThatAreNotManagedDocuments(t *testing.T) {
+func TestValidateReportsUnmanagedFilesWithoutManagingThem(t *testing.T) {
 	dir := writeDocs(t, map[string]string{
 		"0001-a-decision.md": "---\ntitle: A decision\nstatus: accepted\ndate: 2025-01-01\n---\n\n# A decision\n",
 		"template-v2.md":     "---\ntitle: Template\nstatus: proposed\n---\n\n# Template\n",
@@ -592,6 +592,10 @@ func TestValidateIgnoresFilesThatAreNotManagedDocuments(t *testing.T) {
 	got := run(t, "validate", "--dir", dir)
 
 	assertExit(t, got, 0)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"notes-2024.md:1: WARN unmanaged_file:",
+		"template-v2.md:1: WARN unmanaged_file:",
+	})
 	want := "OK: 1 docs, 0 typed edges, no cycles"
 	if ls := lines(got.stdout); len(ls) == 0 || ls[len(ls)-1] != want {
 		t.Errorf("summary line = %q, want %q", got.stdout, want)
@@ -824,7 +828,10 @@ func TestValidateMissingFrontmatter(t *testing.T) {
 
 	got := run(t, "validate", "--dir", dir)
 	assertExit(t, got, 0)
-	assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0002-bare.md:1: WARN missing_frontmatter 0002:"})
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0002-bare.md:1: WARN missing_frontmatter 0002:",
+		"notes.md:1: WARN unmanaged_file:",
+	})
 	want := "OK: 2 docs, 0 typed edges, no cycles"
 	if ls := lines(got.stdout); len(ls) == 0 || ls[len(ls)-1] != want {
 		t.Errorf("summary line = %q, want %q: unmanaged files are skipped", got.stdout, want)
@@ -1490,5 +1497,122 @@ func TestValidateACorpusThatHasNotGrownIntoEveryKind(t *testing.T) {
 			"UZ-V-001.md:6: ERROR dangling_ref UZ-V-001: about reference \"topic/evidence\" does not name a document",
 			"UZ-V-001.md:3: WARN no_counterexample UZ-V-001: is accepted without a counterexample",
 		})
+	})
+}
+
+func TestValidateEmptyCorpusIsAnError(t *testing.T) {
+	t.Run("empty directory fails with exit 3 and helpful message", func(t *testing.T) {
+		dir := t.TempDir()
+		got := run(t, "validate", "--dir", dir)
+
+		assertExit(t, got, 3)
+		wantMsg := "no documents found in " + dir + " (matched 0 of 0 Markdown files); check dir: in docdag.yaml"
+		if !strings.Contains(got.stderr, wantMsg) {
+			t.Errorf("stderr = %q, want it to contain %q", got.stderr, wantMsg)
+		}
+	})
+
+	t.Run("directory containing only template.md and ADR-1.md fails with exit 3", func(t *testing.T) {
+		root := writeDocs(t, map[string]string{
+			"docdag.yaml":          "preset: adr\ndir: docs/adr\ntemplate: template.md\n",
+			"docs/adr/template.md": "# Template\n",
+			"docs/adr/ADR-1.md":    "# ADR 1\n",
+		})
+		t.Chdir(root)
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 3)
+		if !strings.Contains(got.stderr, "matched 0 of 2 Markdown files") {
+			t.Errorf("stderr = %q, want matched 0 of 2 Markdown files", got.stderr)
+		}
+	})
+
+	t.Run("directory with valid ADR, ADR-1.md and template.md warns for ADR-1.md only", func(t *testing.T) {
+		root := writeDocs(t, map[string]string{
+			"docdag.yaml":            "preset: adr\ntemplate: template.md\n",
+			"docs/adr/template.md":   "# Template\n",
+			"docs/adr/ADR-1.md":      "# ADR 1\n",
+			"docs/adr/0001-valid.md": "---\ntitle: Valid\nstatus: accepted\ndate: 2025-01-01\n---\n\n# Valid\n",
+		})
+		t.Chdir(root)
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 0)
+		findings := findingLines(got.stdout)
+		foundUnmanaged := false
+		for _, f := range findings {
+			if strings.Contains(f, "template.md") {
+				t.Errorf("unexpected finding for template.md: %q", f)
+			}
+			if strings.Contains(f, "ADR-1.md") && strings.Contains(f, "WARN unmanaged_file") {
+				foundUnmanaged = true
+			}
+		}
+		if !foundUnmanaged {
+			t.Errorf("findings = %v, want WARN unmanaged_file for ADR-1.md", findings)
+		}
+		if !strings.Contains(got.stdout, "docs/adr/ADR-1.md:1: WARN unmanaged_file:") {
+			t.Errorf("stdout = %q, want finding at docs/adr/ADR-1.md:1:", got.stdout)
+		}
+	})
+
+	t.Run("template.md is exempt by default without template in config", func(t *testing.T) {
+		root := writeDocs(t, map[string]string{
+			"docdag.yaml":            "preset: adr\n",
+			"docs/adr/template.md":   "# Template\n",
+			"docs/adr/Template.md":   "# Capitalized Template\n",
+			"docs/adr/stray.md":      "# Stray\n",
+			"docs/adr/0001-valid.md": "---\ntitle: Valid\nstatus: accepted\ndate: 2025-01-01\n---\n\n# Valid\n",
+		})
+		t.Chdir(root)
+
+		got := run(t, "validate")
+
+		assertExit(t, got, 0)
+		if !strings.Contains(got.stdout, "docs/adr/stray.md:1: WARN unmanaged_file:") {
+			t.Errorf("stdout = %q, want finding for docs/adr/stray.md", got.stdout)
+		}
+		if strings.Contains(strings.ToLower(got.stdout), "template.md:1: warn") {
+			t.Errorf("stdout = %q, template.md should be exempt", got.stdout)
+		}
+	})
+}
+
+func TestValidateSectionsFixture(t *testing.T) {
+	dir := fixture(t, "sections")
+
+	got := run(t, "validate", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+
+	assertExit(t, got, 1)
+	assertPrefixes(t, "findings", findingLines(got.stdout), []string{
+		"0002-bad.md:6: ERROR missing_section 0002:",
+		"0002-bad.md:13: ERROR section_order 0002:",
+	})
+	detail := strings.Join(findingLines(got.stdout), "\n")
+	if strings.Contains(detail, "0001-good.md") {
+		t.Errorf("findings = %q, want no findings on 0001-good.md", detail)
+	}
+	if !strings.Contains(detail, `missing required section "Consequences"`) {
+		t.Errorf("findings = %q, want missing Consequences", detail)
+	}
+	if !strings.Contains(detail, `section "Context" is out of order`) {
+		t.Errorf("findings = %q, want Context out of order", detail)
+	}
+
+	t.Run("JSON report includes sections findings", func(t *testing.T) {
+		gotJSON := run(t, "validate", "--format", "json", "--dir", dir, "--config", filepath.Join(dir, "docdag.yaml"))
+		assertExit(t, gotJSON, 1)
+		report := decodeJSON[render.Report](t, gotJSON.stdout)
+		if len(report.Findings) != 2 {
+			t.Fatalf("findings = %+v, want 2", report.Findings)
+		}
+		if report.Findings[0].Rule != model.RuleMissingSection || report.Findings[0].ID != "0002" {
+			t.Errorf("first finding = %+v, want RuleMissingSection for 0002", report.Findings[0])
+		}
+		if report.Findings[1].Rule != model.RuleSectionOrder || report.Findings[1].ID != "0002" {
+			t.Errorf("second finding = %+v, want RuleSectionOrder for 0002", report.Findings[1])
+		}
 	})
 }

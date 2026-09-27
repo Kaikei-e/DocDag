@@ -720,6 +720,86 @@ func TestConfigValidate(t *testing.T) {
 				c.Structural = map[string]model.Severity{model.RuleDeprecatedField: model.SeverityError}
 			},
 		},
+		{
+			name: "valid sections configuration",
+			mutate: func(c *Config) {
+				c.Sections = &SectionsSpec{
+					Required: []string{"Context|Problem", "Decision", "Consequences"},
+					Level:    2,
+					Ordered:  true,
+					When:     &SectionsWhen{Status: []string{"accepted"}},
+				}
+			},
+		},
+		{
+			name: "sections with level outside 1..6 (too high)",
+			mutate: func(c *Config) {
+				c.Sections = &SectionsSpec{
+					Required: []string{"Context"},
+					Level:    7,
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "sections with level outside 1..6 (negative)",
+			mutate: func(c *Config) {
+				c.Sections = &SectionsSpec{
+					Required: []string{"Context"},
+					Level:    -1,
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "sections with empty name",
+			mutate: func(c *Config) {
+				c.Sections = &SectionsSpec{
+					Required: []string{""},
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "sections with empty alternative",
+			mutate: func(c *Config) {
+				c.Sections = &SectionsSpec{
+					Required: []string{"Context|"},
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "sections with duplicate name (case-insensitive)",
+			mutate: func(c *Config) {
+				c.Sections = &SectionsSpec{
+					Required: []string{"Context", "context"},
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "sections with duplicate name after trimming colons",
+			mutate: func(c *Config) {
+				c.Sections = &SectionsSpec{
+					Required: []string{"Context:", "Context"},
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "kind sections with duplicate name",
+			mutate: func(c *Config) {
+				c.Kinds = testKinds()
+				c.Kinds["clause"] = KindSpec{
+					Dir: "spec/clauses",
+					Sections: &SectionsSpec{
+						Required: []string{"A", "a"},
+					},
+				}
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -687,7 +689,38 @@ func Check(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
 	findings = append(findings, CheckPeriods(g, cfg, asOf)...)
 	findings = append(findings, CheckModalityConflicts(g, cfg, asOf)...)
 	findings = append(findings, CheckExceptsStrict(g, cfg)...)
+	findings = append(findings, CheckSections(g, cfg)...)
+	findings = append(findings, CheckUnmanaged(cfg)...)
 	SortFindings(findings)
+	return findings
+}
+
+// CheckUnmanaged reports Markdown files in the documents directory that are
+// not managed documents and not exempt.
+func CheckUnmanaged(cfg config.Config) []model.Finding {
+	if cfg.Multikind() || cfg.Dir == "" {
+		return nil
+	}
+	unmanaged := parse.Unmanaged(cfg.Dir, cfg)
+	if len(unmanaged) == 0 {
+		return nil
+	}
+	findings := make([]model.Finding, 0, len(unmanaged))
+	wd, _ := os.Getwd()
+	for _, p := range unmanaged {
+		path := p
+		if wd != "" {
+			path = parse.LocalPath(wd, path)
+		} else {
+			path = filepath.ToSlash(path)
+		}
+		findings = append(findings, model.Finding{
+			Severity: cfg.Severity(model.RuleUnmanagedFile),
+			Rule:     model.RuleUnmanagedFile,
+			Location: model.Location{Path: path, Line: firstFileLine},
+			Detail:   fmt.Sprintf("does not match the document filename pattern %s; rename it or move it out of the documents directory", cfg.FilenameTemplate()),
+		})
+	}
 	return findings
 }
 

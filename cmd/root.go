@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -143,7 +145,50 @@ func loadGraph(cmd *cobra.Command) (*model.Graph, config.Config, error) {
 	// Findings name files the way the caller would type them, not the way
 	// discovery happened to spell them.
 	parse.Localize(docs, root)
-	return graph.Build(docs, cfg), cfg, nil
+	g := graph.Build(docs, cfg)
+	if (cmd == nil || cmd.Name() != "new") && len(g.Nodes) == 0 {
+		return nil, cfg, emptyCorpusErr(cfg)
+	}
+	return g, cfg, nil
+}
+
+func countMarkdownFiles(cfg config.Config) (string, int) {
+	if cfg.Multikind() {
+		total := 0
+		var dirs []string
+		for _, name := range cfg.KindNames() {
+			dir := cfg.Kinds[name].Dir
+			dirs = append(dirs, dir)
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				continue
+			}
+			for _, e := range entries {
+				if !e.IsDir() && filepath.Ext(e.Name()) == ".md" {
+					total++
+				}
+			}
+		}
+		return strings.Join(dirs, ", "), total
+	}
+	dir := cfg.Dir
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return dir, 0
+	}
+	total := 0
+	for _, e := range entries {
+		if !e.IsDir() && filepath.Ext(e.Name()) == ".md" {
+			total++
+		}
+	}
+	return dir, total
+}
+
+func emptyCorpusErr(cfg config.Config) error {
+	dir, total := countMarkdownFiles(cfg)
+	return ioErr(fmt.Errorf("no documents found in %s (matched 0 of %d Markdown files); check dir: in docdag.yaml: %w",
+		dir, total, model.ErrEmptyCorpus))
 }
 
 // requireSupersedes refuses the commands that are defined over the supersedes

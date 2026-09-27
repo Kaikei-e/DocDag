@@ -39,7 +39,8 @@ command below answers for either.
   from a revision instead of the working tree. Without a `period:` neither
   changes anything.
 - **resolve** — walk the `supersedes` chain forward to the documents that stand
-  in for a ref today. A document nothing supersedes resolves to itself.
+  in for a ref today (stops at non-binding successors such as proposed ones and
+  reports them). A document nothing supersedes resolves to itself.
 - **typed edge** — a relation declared in frontmatter (`supersedes:`,
   `depends-on:`) or derived from a field value (`status: superseded by 0003`).
   Only typed edges carry invariants.
@@ -113,7 +114,10 @@ docs/decisions/0001-serve-images.md:3: ERROR status_drift 0001: has inbound supe
 `<path>:<line>` is where to look, the rule name is what is wrong, and `fix:` is
 what to do about it. `validate` exits 1 when any finding is an error, 2 on a
 usage mistake and 3 when the configuration or the documents directory cannot be
-read.
+read (including when 0 managed documents match, or a configured directory case mismatches).
+Validation fails closed: unknown config fields fail closed with line numbers, and stray .md files
+are reported as `unmanaged_file`. Opt-in `sections:` config enforces required body headings
+(`missing_section`, `section_order`).
 
 ## Setup
 
@@ -139,7 +143,8 @@ This plugin also installs a `PostToolUse` hook that runs
 documents directory and reports back when the edit broke an invariant. An edit
 to `docdag.yaml` is linted instead, with `docdag lint`: what breaks when the
 configuration changes is the rules, not the documents. The hook reads its
-payload with `jq`; without `jq` on `PATH` it does nothing.
+payload with `jq`; without `jq` or `docdag` on `PATH` it emits a non-blocking
+notice that enforcement is OFF. On unexpected docdag exits, it fails closed with exit 2.
 
 ## Changing docdag.yaml
 
