@@ -51,7 +51,10 @@ jobs:
           0003
           0004
           0005
-          0006'
+          0006
+          0007
+          0008
+          0009'
           actual="$(go run ./cmd/docdag query --binding)"
           test "$actual" = "$expected"
       - name: Lint the self-corpus configuration

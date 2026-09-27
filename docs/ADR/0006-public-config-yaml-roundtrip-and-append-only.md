@@ -76,7 +76,8 @@ YAML で書いたものに過ぎない。上位のリポジトリが vault 設�
 
 ## 実装時の注記
 
-- `Load` は Unmarshal のみ。ファイルが `kinds:` とトップレベル `id_width` を同時に書いたときだけ
+- `Load` は Unmarshal のみ。（2026-09-27 追記: [[0007]] により `DisallowUnknownField` で厳格にデコードし、
+  未知のキーを `ErrInvalidConfig` にするようになった。契約の対象であるフィールド名と YAML タグは変わらない。）ファイルが `kinds:` とトップレベル `id_width` を同時に書いたときだけ
   意味を持つ検査は `Resolve` 側に残す。
 - map キーの YAML 順序は goccy/go-yaml がソートするため、往復の決定性に追加の `MarshalYAML` は
   要らなかった。

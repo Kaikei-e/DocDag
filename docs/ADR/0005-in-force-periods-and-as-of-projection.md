@@ -2,6 +2,7 @@
 title: "有効期間をkindごとのperiodとして宣言し、binding・現行・逸脱の効力をas-of時点の射影にする"
 status: accepted
 date: 2026-09-01
+depends-on: ["0001"]
 ---
 
 # 0005: 有効期間を kind ごとの `period:` として宣言し、binding・現行・逸脱の効力を as-of 時点の射影にする
@@ -320,3 +321,5 @@ rules:
 - 0002（`leaf_of`）— 「現行の葉」を as-of 時点で評価する
 - 0003（`modality_conflict`、`excepts`）— 「両方が binding」と defeater の有効性を as-of 時点で評価する
 - 0004（`lint --corpus`）— 層 2 の評価に `--as-of` を通す
+- [[0009]]（`resolve` の停止）— コンテキストで挙げた `--binding` と `resolve` の非対称を、`period:` を
+  宣言しないコーパスについても解消した

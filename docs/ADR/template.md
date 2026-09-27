@@ -2,8 +2,8 @@
 title: <決定内容を一文で>
 status: proposed
 date: YYYY-MM-DD
-depends-on: []
-supersedes: []
+# depends-on: ["NNNN"]   # rests on these records; omit the key when there are none
+# supersedes: ["NNNN"]   # replaces these records; omit the key when there are none
 ---
 
 # NNNN: <決定内容を一文で>
