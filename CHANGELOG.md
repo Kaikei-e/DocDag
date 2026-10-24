@@ -129,7 +129,7 @@ attributes and state what it requires of the document it points at; a projection
 it is in force, so what is current becomes an answer about a day rather than a standing fact. The
 second preset, `spec`, is what those keys were added for: a normative standard as a graph, where a
 `MUST` no conformance test enforces is a finding rather than a rule. It is also the first release
-with architecture decision records of its own — the five under [docs/adr/](docs/adr/) record what
+with architecture decision records of its own — the five under [docs/ADR/](docs/ADR/) record what
 each phase decided, and why none of them reached for an expression language. It is a **breaking
 release**: the JSON reports move to `schema_version: 2` and gain headers, and a configuration that
 adopts the new keys fails on documents that used to pass. The migration section at the end lists

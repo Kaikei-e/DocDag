@@ -1165,5 +1165,5 @@ The YAML keys on this page are also fields of `config.Config`. A program imports
 `github.com/Kaikei-e/DocDag/config`, starts from `SpecPreset()` or `ADRPreset()`, mutates kinds,
 edges and rules, calls `Validate()`, then `yaml.Marshal`s the value into `docdag.yaml`. The marshal
 is deterministic and round-trips through `Load`. See
-[ADR 0006](adr/0006-public-config-yaml-roundtrip-and-append-only.md) for the stable surface, and
+[ADR 0006](ADR/0006-public-config-yaml-roundtrip-and-append-only.md) for the stable surface, and
 `lint.Check` in package `lint` for the three lint layers without exec.
