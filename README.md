@@ -243,11 +243,14 @@ document. This repository is also a Claude Code plugin, installing a skill and a
 `PostToolUse` hook that validates a decision record as it is written and lints the configuration when
 that is what changed:
 
-```console
-$ claude
-/plugin marketplace add Kaikei-e/DocDag
-/plugin install docdag@docdag
+```sh
+claude plugin marketplace add Kaikei-e/DocDag
+claude plugin install docdag@docdag
 ```
+
+Inside a session the same two steps are `/plugin marketplace add Kaikei-e/DocDag` and then
+`/plugin install docdag@docdag`, entered as separate prompts: pasted together, they arrive as one
+command and the marketplace source is rejected.
 
 [docs/agents.md](docs/agents.md) covers the flags, the output shapes and the hook's requirements.
 

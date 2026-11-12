@@ -149,11 +149,14 @@ command answers which question, plus a `PostToolUse` hook that runs `docdag vali
 every Markdown file written inside the documents directory and reports back when that document is
 what broke:
 
-```console
-$ claude
-/plugin marketplace add Kaikei-e/DocDag
-/plugin install docdag@docdag
+```sh
+claude plugin marketplace add Kaikei-e/DocDag
+claude plugin install docdag@docdag
 ```
+
+Inside a session the same two steps are `/plugin marketplace add Kaikei-e/DocDag` and then
+`/plugin install docdag@docdag`, entered as separate prompts: pasted together, they arrive as one
+command and the marketplace source is rejected.
 
 The hook reads what was edited: a Markdown file inside the documents directory is validated, and
 `docdag.yaml` itself is linted — `docdag lint --config <the file that was edited>` at layer 1, which
