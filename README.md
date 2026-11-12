@@ -13,6 +13,21 @@ test still pointing at a superseded clause. Those are graph properties, so a det
 check can enforce them, and `docdag validate` exits 1 on any error — and exits 3 if a check could
 not actually run — in one CI line.
 
+![docdag validate reporting a status_drift error with its fix, passing once the fix is applied, then docdag context 0002 --budget 120 showing that 0002 was superseded by 0003 and quoting both decisions](docs/demo.svg)
+
+`docdag export` draws the same four decisions as Mermaid by default, which GitHub renders in place:
+
+```mermaid
+graph LR
+  0001["0001 Cache rendered thumbnails"]
+  0002["0002 Store thumbnails on the local disk"]
+  0003["0003 Store thumbnails in object storage"]
+  0004["0004 Expire thumbnails after thirty days"]
+  0003 -->|depends-on| 0001
+  0003 -->|supersedes| 0002
+  0004 -->|depends-on| 0003
+```
+
 DocDag ships two presets. `adr` is the default: one directory of Architecture Decision Records,
 identified by a digit run, superseding one another. `spec` is a normative standard as a graph —
 eight kinds, among them the clauses, the conformance tests that enforce them and the deviations

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 944 394" width="944" height="394" role="img" aria-labelledby="title desc" xml:space="preserve">
+<title id="title">docdag validate and docdag context in a terminal</title>
+<desc id="desc">docdag validate reports a status_drift error with its fix and exits 1; after the fix it passes; docdag context 0002 --budget 120 then shows that decision 0002 is superseded by 0003, quoting both decisions.</desc>
+<style>text{font-family:ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,'Liberation Mono','DejaVu Sans Mono',monospace;font-size:13px;white-space:pre}.b{font-weight:700}</style>
+<rect width="944" height="394" rx="10" fill="#0d1117"/>
+<rect x="0.5" y="0.5" width="943" height="393" rx="10" fill="none" stroke="#30363d"/>
+<path d="M0.5 34H943.5" stroke="#30363d"/>
+<circle cx="20" cy="17" r="6" fill="#ff5f57"/><circle cx="40" cy="17" r="6" fill="#febc2e"/><circle cx="60" cy="17" r="6" fill="#28c840"/>
+<text x="472.0" y="22" fill="#8b949e" text-anchor="middle">~/thumbnails</text>
+<text x="18" y="63"><tspan fill="#3fb950" class="b">$ </tspan><tspan fill="#f0f6fc" class="b">docdag validate</tspan></text>
+<text x="18" y="82"><tspan fill="#8b949e">docs/adr/0002-local-disk-cache.md:3:</tspan><tspan fill="#c9d1d9"> </tspan><tspan fill="#f85149" class="b">ERROR</tspan><tspan fill="#f0f6fc"> status_drift</tspan><tspan fill="#c9d1d9"> 0002: has inbound supersedes but status is not superseded</tspan></text>
+<text x="18" y="101"><tspan fill="#58a6ff" class="b">  fix:</tspan><tspan fill="#c9d1d9"> set status: superseded in docs/adr/0002-local-disk-cache.md</tspan></text>
+<text x="18" y="128"><tspan fill="#3fb950" class="b">$ </tspan><tspan fill="#8b949e">sed -i 's/^status: accepted$/status: superseded/' docs/adr/0002-local-disk-cache.md</tspan></text>
+<text x="18" y="155"><tspan fill="#3fb950" class="b">$ </tspan><tspan fill="#f0f6fc" class="b">docdag validate</tspan></text>
+<text x="18" y="174"><tspan fill="#3fb950" class="b">OK:</tspan><tspan fill="#c9d1d9"> 4 docs, 3 typed edges, no cycles</tspan></text>
+<text x="18" y="201"><tspan fill="#3fb950" class="b">$ </tspan><tspan fill="#f0f6fc" class="b">docdag context 0002 --budget 120</tspan></text>
+<text x="18" y="220"><tspan fill="#d2a8ff" class="b">ref</tspan></text>
+<text x="18" y="239"><tspan fill="#c9d1d9">  </tspan><tspan fill="#f0f6fc" class="b">0002</tspan><tspan fill="#c9d1d9">  </tspan><tspan fill="#f0f6fc">Store thumbnails on the local disk</tspan><tspan fill="#c9d1d9">  </tspan><tspan fill="#d29922">[superseded]</tspan><tspan fill="#c9d1d9">  </tspan><tspan fill="#8b949e">docs/adr/0002-local-disk-cache.md</tspan></text>
+<text x="18" y="258"><tspan fill="#8b949e">    Chosen option: a directory on the local disk, sharded by the first two characters</tspan></text>
+<text x="18" y="277"><tspan fill="#8b949e">    of the cache key.</tspan></text>
+<text x="18" y="296"></text>
+<text x="18" y="315"><tspan fill="#d2a8ff" class="b">resolves to (0002 is superseded)</tspan></text>
+<text x="18" y="334"><tspan fill="#c9d1d9">  </tspan><tspan fill="#f0f6fc" class="b">0003</tspan><tspan fill="#c9d1d9">  </tspan><tspan fill="#f0f6fc">Store thumbnails in object storage</tspan><tspan fill="#c9d1d9">  </tspan><tspan fill="#3fb950">[accepted]</tspan><tspan fill="#c9d1d9">  </tspan><tspan fill="#8b949e">docs/adr/0003-object-storage-cache.md</tspan></text>
+<text x="18" y="353"><tspan fill="#8b949e">    Chosen option: object storage behind a read-through layer, keeping the</tspan></text>
+<text x="18" y="372"><tspan fill="#8b949e">    content-addressed key from the caching decision unchanged.</tspan></text>
+</svg>

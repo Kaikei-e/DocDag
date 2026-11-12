@@ -30,13 +30,20 @@ func ContextText(w io.Writer, b *brief.Brief) error {
 	contextGroupText(out, groupDescendants, b.Descendants)
 	contextLinesText(out, groupSuppressed, b.Suppressed)
 	if b.Budget.Degraded > 0 {
-		out.printf("budget: %d tokens, %d used, %d entries without an excerpt\n",
-			b.Budget.Limit, b.Budget.Used, b.Budget.Degraded)
+		out.printf("budget: %d tokens, %d used, %s without an excerpt\n",
+			b.Budget.Limit, b.Budget.Used, entryCount(b.Budget.Degraded))
 	}
 	if out.err != nil {
 		return fmt.Errorf("write context: %w", out.err)
 	}
 	return nil
+}
+
+func entryCount(n int) string {
+	if n == 1 {
+		return "1 entry"
+	}
+	return fmt.Sprintf("%d entries", n)
 }
 
 // resolvesToHeading says in one line why a resolution is being reported at all.
@@ -105,8 +112,8 @@ func ContextMarkdown(w io.Writer, b *brief.Brief) error {
 		out.printf("\n")
 	}
 	if b.Budget.Degraded > 0 {
-		out.printf("Budget: %d tokens, %d used, %d entries without an excerpt.\n",
-			b.Budget.Limit, b.Budget.Used, b.Budget.Degraded)
+		out.printf("Budget: %d tokens, %d used, %s without an excerpt.\n",
+			b.Budget.Limit, b.Budget.Used, entryCount(b.Budget.Degraded))
 	}
 	if out.err != nil {
 		return fmt.Errorf("write context: %w", out.err)
