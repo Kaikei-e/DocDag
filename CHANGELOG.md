@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `docdag context` text and Markdown output now reads `1 entry without an excerpt` instead of `1 entries without an excerpt` when the budget drops a single excerpt.
+
 ## [0.5.0] - 2026-09-27
 
 v0.5.0 is a breaking release that makes exit 0 mean the check ran and passed. Until now, several
@@ -496,6 +502,7 @@ unless the flag is given.
 
 First release. See the [GitHub release](https://github.com/Kaikei-e/DocDag/releases/tag/v0.1.0).
 
+[Unreleased]: https://github.com/Kaikei-e/DocDag/compare/v0.5.0...HEAD
 [0.5.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.5.0
 [0.4.1]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.4.1
 [0.4.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.4.0

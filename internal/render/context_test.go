@@ -46,18 +46,32 @@ func TestContextTextOmitsEmptyGroups(t *testing.T) {
 	}
 }
 
-func TestContextTextReportsASpentBudget(t *testing.T) {
-	b := testBrief()
-	b.Budget.Degraded = 2
-
-	var buf bytes.Buffer
-	if err := ContextText(&buf, b); err != nil {
-		t.Fatalf("ContextText: %v", err)
+func TestContextReportsASpentBudget(t *testing.T) {
+	tests := []struct {
+		name     string
+		write    func(io.Writer, *brief.Brief) error
+		degraded int
+		want     string
+	}{
+		{"text, several entries", ContextText, 2, "budget: 2000 tokens, 40 used, 2 entries without an excerpt\n"},
+		{"text, one entry", ContextText, 1, "budget: 2000 tokens, 40 used, 1 entry without an excerpt\n"},
+		{"markdown, several entries", ContextMarkdown, 2, "Budget: 2000 tokens, 40 used, 2 entries without an excerpt.\n"},
+		{"markdown, one entry", ContextMarkdown, 1, "Budget: 2000 tokens, 40 used, 1 entry without an excerpt.\n"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := testBrief()
+			b.Budget.Degraded = tt.degraded
 
-	want := "budget: 2000 tokens, 40 used, 2 entries without an excerpt\n"
-	if !strings.HasSuffix(buf.String(), want) {
-		t.Errorf("context = %q, want it to end with %q", buf.String(), want)
+			var buf bytes.Buffer
+			if err := tt.write(&buf, b); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			if !strings.HasSuffix(buf.String(), tt.want) {
+				t.Errorf("context = %q, want it to end with %q", buf.String(), tt.want)
+			}
+		})
 	}
 }
 
