@@ -76,8 +76,12 @@ prose at roughly N tokens, `--format md` gives a document to paste.
 
 Take the columns needed rather than the whole record:
 `docdag query --binding --fields id,title,status` prints tab-separated columns
-in the order asked for. `--format json` answers with an array of objects
-carrying every field.
+in the order asked for (list fields print comma-joined without spaces, unwritten
+keys print `-`). `--format json` answers with an array of objects carrying
+every configured projection and declared field (`null` when unwritten, array of
+strings for lists). Use `--where <key>=<op>:<value>` (repeatable, ANDed; ops
+`eq`, `not`, `contains`, `not_contains`, `subset_of`) on `docdag query` to
+filter results by status, declared fields, projections or `in_force`.
 
 A finding an exception already answers is suppressed — computed, then left out
 of the report and out of the exit code. `--show-suppressed` prints it with the
@@ -138,13 +142,16 @@ prompt each time:
 }
 ```
 
-This plugin also installs a `PostToolUse` hook that runs
+This plugin also installs a `SessionStart` hook that prints a one- or two-line
+`docdag validate` summary at session start when a corpus is present (or notices
+that `docdag` is not on `PATH`), and a `PostToolUse` hook that runs
 `docdag validate --touching <file>` after every `Edit` or `Write` inside the
 documents directory and reports back when the edit broke an invariant. An edit
 to `docdag.yaml` is linted instead, with `docdag lint`: what breaks when the
-configuration changes is the rules, not the documents. The hook reads its
-payload with `jq`; without `jq` or `docdag` on `PATH` it emits a non-blocking
-notice that enforcement is OFF. On unexpected docdag exits, it fails closed with exit 2.
+configuration changes is the rules, not the documents. The `PostToolUse` hook
+reads its payload with `jq`; without `jq` or `docdag` on `PATH` it emits a
+non-blocking notice that enforcement is OFF. On unexpected docdag exits, it
+fails closed with exit 2.
 
 ## Changing docdag.yaml
 

@@ -170,13 +170,35 @@ func (n *Node) AttrList(key string) ([]string, bool) {
 		}
 		return []string{value}, true
 	}
+	return scalarList(items), true
+}
+
+// AttrValue reports the frontmatter value under key for display: a string for
+// a scalar, a non-nil []string for a list (dropping non-scalar items), or
+// (nil, false) when the key is absent, null, or a mapping.
+func (n *Node) AttrValue(key string) (any, bool) {
+	raw, ok := n.Attrs[key]
+	if !ok || raw == nil {
+		return nil, false
+	}
+	if items, isList := raw.([]any); isList {
+		return scalarList(items), true
+	}
+	value, ok := scalar(raw)
+	if !ok {
+		return nil, false
+	}
+	return value, true
+}
+
+func scalarList(items []any) []string {
 	values := make([]string, 0, len(items))
 	for _, item := range items {
 		if value, ok := scalar(item); ok {
 			values = append(values, value)
 		}
 	}
-	return values, true
+	return values
 }
 
 func scalar(raw any) (string, bool) {

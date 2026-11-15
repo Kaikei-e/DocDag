@@ -2,6 +2,8 @@ package render
 
 import (
 	"bytes"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -142,18 +144,52 @@ func TestWithFieldsReadsTheDeclaredKeys(t *testing.T) {
 	g := &model.Graph{Nodes: map[model.ID]*model.Node{
 		"0001": {ID: "0001", Attrs: map[string]any{"modality": "MUST"}},
 		"0002": {ID: "0002", Attrs: map[string]any{"modality": []any{"MUST", "MAY"}}},
+		"0004": {ID: "0004", Attrs: map[string]any{"modality": map[string]any{"k": "v"}}},
+		"0005": {ID: "0005", Attrs: map[string]any{"modality": []any{}}},
 	}}
-	records := WithFields([]Record{{ID: "0001"}, {ID: "0002"}, {ID: "0003"}}, []string{"modality"}, g)
+	records := WithFields([]Record{{ID: "0001"}, {ID: "0002"}, {ID: "0003"}, {ID: "0004"}, {ID: "0005"}}, []string{"modality"}, g)
 
-	var buf bytes.Buffer
-	if err := RecordsText(&buf, records, []string{FieldID, "modality"}); err != nil {
-		t.Fatalf("RecordsText: %v", err)
-	}
+	t.Run("text", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := RecordsText(&buf, records, []string{FieldID, "modality"}); err != nil {
+			t.Fatalf("RecordsText: %v", err)
+		}
 
-	// A key written as a list has no scalar to show, and a document the corpus
-	// does not hold has nothing at all: both keep the row's shape.
-	want := "0001\tMUST\n0002\t-\n0003\t-\n"
-	if buf.String() != want {
-		t.Errorf("records = %q, want %q", buf.String(), want)
-	}
+		want := "0001\tMUST\n0002\tMUST,MAY\n0003\t-\n0004\t-\n0005\t-\n"
+		if buf.String() != want {
+			t.Errorf("records = %q, want %q", buf.String(), want)
+		}
+	})
+
+	t.Run("json", func(t *testing.T) {
+		var buf bytes.Buffer
+		if err := RecordsJSON(&buf, records); err != nil {
+			t.Fatalf("RecordsJSON: %v", err)
+		}
+		if strings.Contains(buf.String(), `"`+noField+`"`) {
+			t.Errorf("json = %s, must not emit placeholder %q", buf.String(), noField)
+		}
+		var got []Record
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if len(got) != 5 {
+			t.Fatalf("records = %+v, want 5", got)
+		}
+		if got[0].Fields["modality"] != "MUST" {
+			t.Errorf("0001 modality = %#v, want MUST", got[0].Fields["modality"])
+		}
+		if !reflect.DeepEqual(got[1].Fields["modality"], []any{"MUST", "MAY"}) {
+			t.Errorf("0002 modality = %#v, want [MUST MAY]", got[1].Fields["modality"])
+		}
+		if v, exists := got[2].Fields["modality"]; !exists || v != nil {
+			t.Errorf("0003 modality = %#v (exists=%v), want explicit null", v, exists)
+		}
+		if v, exists := got[3].Fields["modality"]; !exists || v != nil {
+			t.Errorf("0004 modality = %#v (exists=%v), want explicit null", v, exists)
+		}
+		if !reflect.DeepEqual(got[4].Fields["modality"], []any{}) {
+			t.Errorf("0005 modality = %#v, want []", got[4].Fields["modality"])
+		}
+	})
 }

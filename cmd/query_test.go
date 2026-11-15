@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -444,4 +445,189 @@ func TestQueryTheBindingSetOfTheADRPreset(t *testing.T) {
 			t.Errorf("binding line = %q, want the identifier alone", line)
 		}
 	}
+}
+
+func TestQueryAndResolveDeclaredFieldsAndProjections(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"docdag.yaml": strings.Join([]string{
+			"fields:",
+			"  affected_services: {}",
+			"  owner: {}",
+			"  meta: {}",
+		}, "\n") + "\n",
+		"docs/adr/0001-base.md":  "---\ntitle: Base\nstatus: accepted\ndate: 2025-01-01\naffected_services: [auth, billing]\nowner: platform\n---\n\n# Base\n",
+		"docs/adr/0002-block.md": "---\ntitle: Block\nstatus: accepted\ndate: 2025-01-02\naffected_services:\n  - search\n  - index\nmeta:\n  tier: core\nsupersedes:\n  - 0003\n---\n\n# Block\n",
+		"docs/adr/0003-old.md":   "---\ntitle: Old\nstatus: superseded\ndate: 2025-01-01\n---\n\n# Old\n",
+	})
+	cfgPath := filepath.Join(dir, "docdag.yaml")
+	docsDir := filepath.Join(dir, "docs", "adr")
+
+	t.Run("text prints list fields comma-joined and unwritten or mapping as dash", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--fields", "id,affected_services,owner,meta",
+			"--dir", docsDir, "--config", cfgPath)
+
+		assertExit(t, got, 0)
+		assertLines(t, "binding", lines(got.stdout), []string{
+			"0001\tauth,billing\tplatform\t-",
+			"0002\tsearch,index\t-\t-",
+		})
+	})
+
+	t.Run("json carries all projections and declared fields even with default fields", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			args []string
+			want int
+			proj string
+		}{
+			{name: "query binding", args: []string{"query", "--binding", "--format", "json", "--dir", docsDir, "--config", cfgPath}, want: 2, proj: "true"},
+			{name: "query walk", args: []string{"query", "0002", "--descendants", "--format", "json", "--dir", docsDir, "--config", cfgPath}, want: 1, proj: "false"},
+			{name: "resolve", args: []string{"resolve", "0003", "--format", "json", "--dir", docsDir, "--config", cfgPath}, want: 1, proj: "true"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				got := run(t, tc.args...)
+				assertExit(t, got, 0)
+				if strings.Contains(got.stdout, `"-"`) {
+					t.Errorf("json = %s, must not emit '-' placeholder", got.stdout)
+				}
+				records := decodeJSON[[]render.Record](t, got.stdout)
+				if len(records) != tc.want {
+					t.Fatalf("len(records) = %d, want %d", len(records), tc.want)
+				}
+				for _, r := range records {
+					if r.Projections["accepted_unsuperseded"] != tc.proj {
+						t.Errorf("%s projections = %+v, want accepted_unsuperseded=%s", r.ID, r.Projections, tc.proj)
+					}
+					if _, hasOwner := r.Fields["owner"]; !hasOwner {
+						t.Errorf("%s fields = %+v, want owner key present", r.ID, r.Fields)
+					}
+				}
+			})
+		}
+
+		got := run(t, "query", "--binding", "--format", "json", "--dir", docsDir, "--config", cfgPath)
+		assertExit(t, got, 0)
+		records := decodeJSON[[]render.Record](t, got.stdout)
+		if !reflect.DeepEqual(records[0].Fields["affected_services"], []any{"auth", "billing"}) {
+			t.Errorf("0001 affected_services = %#v, want [auth billing]", records[0].Fields["affected_services"])
+		}
+		if records[0].Fields["owner"] != "platform" {
+			t.Errorf("0001 owner = %#v, want platform", records[0].Fields["owner"])
+		}
+		if records[0].Fields["meta"] != nil {
+			t.Errorf("0001 meta = %#v, want nil", records[0].Fields["meta"])
+		}
+		if !reflect.DeepEqual(records[1].Fields["affected_services"], []any{"search", "index"}) {
+			t.Errorf("0002 affected_services = %#v, want [search index]", records[1].Fields["affected_services"])
+		}
+		if records[1].Fields["owner"] != nil {
+			t.Errorf("0002 owner = %#v, want nil", records[1].Fields["owner"])
+		}
+		if records[1].Fields["meta"] != nil {
+			t.Errorf("0002 meta = %#v, want nil for mapping", records[1].Fields["meta"])
+		}
+	})
+
+	t.Run("json omits fields when config declares none and still validates --fields", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--format", "json", "--dir", fixture(t, "ok-madr"))
+		assertExit(t, got, 0)
+		if strings.Contains(got.stdout, `"fields"`) {
+			t.Errorf("json = %s, want fields omitted when none declared", got.stdout)
+		}
+		records := decodeJSON[[]render.Record](t, got.stdout)
+		if records[0].Projections["accepted_unsuperseded"] != "true" {
+			t.Errorf("projections = %+v, want accepted_unsuperseded=true", records[0].Projections)
+		}
+
+		bad := run(t, "query", "--binding", "--format", "json", "--fields", "unknown", "--dir", docsDir, "--config", cfgPath)
+		assertExit(t, bad, 2)
+	})
+}
+
+func TestQueryWhereFilters(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"docdag.yaml": strings.Join([]string{
+			"fields:",
+			"  tags: {}",
+			"  owner: {}",
+			"  note: {}",
+			"period:",
+			"  from: date",
+			"  until: expires",
+		}, "\n") + "\n",
+		"docs/adr/0001-auth.md":   "---\ntitle: Auth\nstatus: accepted\ndate: 2025-01-01\ntags: [security, api]\nowner: platform\nnote: \"a:b=c\"\n---\n\n# Auth\n\nSee [[0004]].\n",
+		"docs/adr/0002-cache.md":  "---\ntitle: Cache\nstatus: accepted\ndate: 2025-01-02\ntags: security\n---\n\n# Cache\n",
+		"docs/adr/0003-legacy.md": "---\ntitle: Legacy\nstatus: accepted\ndate: 2025-01-03\ntags: [security, deprecated]\nexpires: 2026-06-01\nsupersedes:\n  - 0001\ndepends-on:\n  - 0002\n---\n\n# Legacy\n",
+		"docs/adr/0004-ref.md":    "---\ntitle: Ref\nstatus: proposed\ndate: 2025-01-04\ntags: [api]\n---\n\n# Ref\n",
+	})
+	cfgPath := filepath.Join(dir, "docdag.yaml")
+	docsDir := filepath.Join(dir, "docs", "adr")
+
+	t.Run("each op and rule semantics", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			where []string
+			want  []string
+		}{
+			{name: "eq case-insensitive", where: []string{"owner=eq:PLATFORM"}, want: nil},
+			{name: "not holds when absent", where: []string{"owner=not:platform"}, want: []string{"0002", "0003"}},
+			{name: "contains matches scalar as one-element list", where: []string{"tags=contains:SECURITY"}, want: []string{"0002", "0003"}},
+			{name: "not_contains holds when absent or missing item", where: []string{"owner=not_contains:platform"}, want: []string{"0002", "0003"}},
+			{name: "subset_of with comma-separated list", where: []string{"tags=subset_of:security,deprecated"}, want: []string{"0002", "0003"}},
+			{name: "AND of two where flags including same key twice", where: []string{"tags=contains:security", "tags=not_contains:deprecated"}, want: []string{"0002"}},
+			{name: "projection filter", where: []string{"accepted_unsuperseded=eq:true"}, want: []string{"0002", "0003"}},
+			{name: "in_force respects as-of", where: []string{"in_force=eq:true"}, want: []string{"0002"}},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				args := []string{"query", "--binding", "--as-of", "2026-07-01", "--dir", docsDir, "--config", cfgPath}
+				for _, w := range tt.where {
+					args = append(args, "--where", w)
+				}
+				got := run(t, args...)
+				assertExit(t, got, 0)
+				assertLines(t, "where", lines(got.stdout), tt.want)
+			})
+		}
+	})
+
+	t.Run("in_force before expiry", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--as-of", "2026-05-01", "--where", "in_force=eq:true", "--dir", docsDir, "--config", cfgPath)
+		assertExit(t, got, 0)
+		assertLines(t, "where", lines(got.stdout), []string{"0002", "0003"})
+	})
+
+	t.Run("walk mode with include-refs and colon/equals in value", func(t *testing.T) {
+		got := run(t, "query", "0003", "--descendants", "--where", "note=eq:a:b=c", "--dir", docsDir, "--config", cfgPath)
+		assertExit(t, got, 0)
+		assertLines(t, "walk where", lines(got.stdout), []string{"0001"})
+
+		refs := run(t, "query", "0001", "--descendants", "--include-refs", "--where", "tags=contains:api", "--dir", docsDir, "--config", cfgPath)
+		assertExit(t, refs, 0)
+		assertLines(t, "walk include-refs where", lines(refs.stdout), []string{"0004 (reference)"})
+	})
+
+	t.Run("errors", func(t *testing.T) {
+		t.Run("unknown key lists allowed keys", func(t *testing.T) {
+			got := run(t, "query", "--binding", "--where", "bogus=eq:x", "--dir", docsDir, "--config", cfgPath)
+			assertExit(t, got, 2)
+			for _, want := range []string{"unknown --where key", "status", "tags", "accepted_unsuperseded", "in_force"} {
+				if !strings.Contains(got.stderr, want) {
+					t.Errorf("stderr = %q, want %q", got.stderr, want)
+				}
+			}
+		})
+
+		for _, expr := range []string{"status", "status=accepted", "=eq:accepted", "status=like:accepted"} {
+			t.Run("malformed_"+expr, func(t *testing.T) {
+				got := run(t, "query", "--binding", "--where", expr, "--dir", docsDir, "--config", cfgPath)
+				assertExit(t, got, 2)
+				for _, want := range []string{"key=op:value", "eq", "not", "contains", "not_contains", "subset_of"} {
+					if !strings.Contains(got.stderr, want) {
+						t.Errorf("stderr = %q, want %q", got.stderr, want)
+					}
+				}
+			})
+		}
+	})
 }

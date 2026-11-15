@@ -6,8 +6,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `docdag query --where <key>=<op>:<value>` repeatable attribute filter (ANDed, `eq`/`not`/`contains`/`not_contains`/`subset_of`), reusing rule evaluation semantics (case-insensitive, scalar as one-element list, negative ops holding when absent, projections and `in_force` shadowing frontmatter, `--as-of` respected) in both walk and `--binding` modes.
+- Claude Code `SessionStart` hook (`scripts/docdag-session-start.sh` in `hooks/hooks.json`) that summarizes `docdag validate` in at most two lines at session start when a corpus is present, notices when `docdag` is not on `PATH`, and stays silent outside DocDag repositories.
+
 ### Fixed
 
+- `query` and `resolve` now render list-valued declared fields comma-joined without spaces in text `--fields` output, and in `--format json` emit every configured projection and declared field regardless of `--fields` (with JSON `fields` values as string, array of strings, or `null` for unwritten/mapping keys instead of `"-"`).
 - `docdag context` text and Markdown output now reads `1 entry without an excerpt` instead of `1 entries without an excerpt` when the budget drops a single excerpt.
 
 ## [0.5.0] - 2026-09-27

@@ -52,8 +52,9 @@ func newResolveCmd() *cobra.Command {
 				return domainErr("%v", err)
 			}
 			out := cmd.OutOrStdout()
-			records := withColumns(g, cfg, render.Records(g, ids), fields, asOf)
+			base := render.Records(g, ids)
 			if format == formatJSON {
+				records := withAllColumns(g, cfg, base, asOf)
 				resolveRecords := make([]resolveRecord, len(records))
 				for i, r := range records {
 					resolveRecords[i] = resolveRecord{Record: r}
@@ -83,6 +84,7 @@ func newResolveCmd() *cobra.Command {
 				enc.SetEscapeHTML(false)
 				err = enc.Encode(resolveRecords)
 			} else {
+				records := withColumns(g, cfg, base, fields, asOf)
 				err = render.RecordsText(out, records, fields)
 				if err != nil {
 					return ioErr(err)
