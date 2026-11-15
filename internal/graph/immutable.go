@@ -168,10 +168,11 @@ type change struct {
 }
 
 // frontmatterChanges lists the frontmatter differences the policy forbids. The
-// status value may move freely, and an inverse key may gain entries: a later
-// decision has to be able to record that it replaced this one.
+// status value may move freely, and an inverse or appendable edge key may gain
+// entries: a later decision has to be able to record that it replaced or amended
+// this one.
 func frontmatterChanges(cfg config.Config, was, now map[string]any) []change {
-	inverse := inverseKeys(cfg)
+	appendable := appendableKeys(cfg)
 	keys := make(map[string]bool, len(was)+len(now))
 	for key := range was {
 		keys[key] = true
@@ -187,7 +188,7 @@ func frontmatterChanges(cfg config.Config, was, now map[string]any) []change {
 		}
 		before, hadBefore := was[key]
 		after, hasAfter := now[key]
-		if inverse[key] {
+		if appendable[key] {
 			if missing := droppedRefs(was, now, key); missing != "" {
 				changes = append(changes, change{key: key, text: fmt.Sprintf("%s no longer lists %s", key, missing)})
 			}
@@ -205,27 +206,59 @@ func frontmatterChanges(cfg config.Config, was, now map[string]any) []change {
 	return changes
 }
 
-func inverseKeys(cfg config.Config) map[string]bool {
+func appendableKeys(cfg config.Config) map[string]bool {
 	keys := make(map[string]bool, len(cfg.Edges))
 	for _, spec := range cfg.Edges {
 		if spec.Inverse != "" {
 			keys[spec.Inverse] = true
 		}
+		if spec.Appendable {
+			keys[spec.Key] = true
+		}
 	}
 	return keys
 }
 
-// droppedRefs names the entries a key held before and does not hold now.
+// droppedRefs names the entries a key held before and does not hold identically now.
 func droppedRefs(was, now map[string]any, key string) string {
-	before, _ := parse.Refs(was, key)
-	after, _ := parse.Refs(now, key)
-	missing := make([]string, 0, len(before))
-	for _, ref := range before {
-		if !slices.Contains(after, ref) {
-			missing = append(missing, ref)
+	before, beforeInvalid := parse.RefEntries(was, key)
+	after, afterInvalid := parse.RefEntries(now, key)
+	missing := make([]string, 0, len(before)+len(beforeInvalid))
+	for _, entry := range before {
+		if !slices.ContainsFunc(after, func(candidate parse.RefEntry) bool { return refEntryEqual(entry, candidate) }) {
+			missing = append(missing, formatRefEntry(entry))
+		}
+	}
+	for _, item := range beforeInvalid {
+		if !slices.Contains(afterInvalid, item) {
+			missing = append(missing, item)
 		}
 	}
 	return strings.Join(missing, ", ")
+}
+
+func refEntryEqual(a, b parse.RefEntry) bool {
+	if a.Ref != b.Ref || len(a.Attrs) != len(b.Attrs) {
+		return false
+	}
+	for k, va := range a.Attrs {
+		vb, ok := b.Attrs[k]
+		if !ok || !reflect.DeepEqual(va, vb) {
+			return false
+		}
+	}
+	return true
+}
+
+func formatRefEntry(e parse.RefEntry) string {
+	if len(e.Attrs) == 0 {
+		return e.Ref
+	}
+	parts := make([]string, 0, len(e.Attrs))
+	for _, k := range slices.Sorted(maps.Keys(e.Attrs)) {
+		parts = append(parts, fmt.Sprintf("%s: %v", k, e.Attrs[k]))
+	}
+	return fmt.Sprintf("%s (%s)", e.Ref, strings.Join(parts, ", "))
 }
 
 // bodyDivergence reports the zero-based body line where the new body stops

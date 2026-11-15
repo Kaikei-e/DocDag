@@ -17,6 +17,7 @@ const (
 	groupAncestors   = "ancestors"
 	groupDescendants = "descendants"
 	groupSuppressed  = "suppressed"
+	groupRetracted   = "retracted"
 )
 
 // ContextText writes a brief as an indented outline: one line per document,
@@ -29,6 +30,7 @@ func ContextText(w io.Writer, b *brief.Brief) error {
 	contextGroupText(out, groupAncestors, b.Ancestors)
 	contextGroupText(out, groupDescendants, b.Descendants)
 	contextLinesText(out, groupSuppressed, b.Suppressed)
+	contextLinesText(out, groupRetracted, retractionLines(b.Retracted))
 	if b.Budget.Degraded > 0 {
 		out.printf("budget: %d tokens, %d used, %s without an excerpt\n",
 			b.Budget.Limit, b.Budget.Used, entryCount(b.Budget.Degraded))
@@ -79,6 +81,17 @@ func contextLinesText(out *errWriter, heading string, lines []string) {
 	out.printf("\n")
 }
 
+func retractionLines(retractions []brief.Retraction) []string {
+	if len(retractions) == 0 {
+		return nil
+	}
+	lines := make([]string, len(retractions))
+	for i, r := range retractions {
+		lines[i] = r.Line()
+	}
+	return lines
+}
+
 func indent(text, prefix string) string {
 	lines := strings.Split(text, "\n")
 	for i, line := range lines {
@@ -104,13 +117,8 @@ func ContextMarkdown(w io.Writer, b *brief.Brief) error {
 	contextGroupMarkdown(out, "Related", b.Related)
 	contextGroupMarkdown(out, "Ancestors", b.Ancestors)
 	contextGroupMarkdown(out, "Descendants", b.Descendants)
-	if len(b.Suppressed) > 0 {
-		out.printf("## Suppressed\n\n")
-		for _, line := range b.Suppressed {
-			out.printf("- %s\n", line)
-		}
-		out.printf("\n")
-	}
+	contextLinesMarkdown(out, "Suppressed", b.Suppressed)
+	contextLinesMarkdown(out, "Retracted", retractionLines(b.Retracted))
 	if b.Budget.Degraded > 0 {
 		out.printf("Budget: %d tokens, %d used, %s without an excerpt.\n",
 			b.Budget.Limit, b.Budget.Used, entryCount(b.Budget.Degraded))
@@ -129,6 +137,17 @@ func contextGroupMarkdown(out *errWriter, heading string, entries []brief.Entry)
 	for _, e := range entries {
 		contextEntryMarkdown(out, "###", e)
 	}
+}
+
+func contextLinesMarkdown(out *errWriter, heading string, lines []string) {
+	if len(lines) == 0 {
+		return
+	}
+	out.printf("## %s\n\n", heading)
+	for _, line := range lines {
+		out.printf("- %s\n", line)
+	}
+	out.printf("\n")
 }
 
 func contextEntryMarkdown(out *errWriter, level string, e brief.Entry) {

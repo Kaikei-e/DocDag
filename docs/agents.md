@@ -32,7 +32,10 @@ with it, so `Decision` finds MADR's `Decision Outcome` in preference to its `Dec
 2000; entries the budget cannot afford degrade to their one-line form rather than being cut
 mid-sentence, and the report ends with a line counting them. `--format md` answers with a Markdown
 document, `--format json` with `schema_version`, `preset_version` where the configuration names one,
-`ref`, `resolves_to`, `related`, `ancestors`, `descendants`, `suppressed` and `budget`.
+`ref`, `resolves_to`, `related`, `ancestors`, `descendants`, `suppressed`, `retracted` (when active
+edge retractions touch the document or are declared by it, as objects
+`{"edge": "...", "from": "...", "to": "...", "by": "..."}`), and `budget`. In text (`retracted`
+group) and Markdown (`## Retracted`), each entry prints `<edge> <from> -> <to> (by <by>)`.
 
 Where the configuration declares the normative vocabulary — the `spec` preset does — a `related`
 group comes before the walks, naming why each document is in it rather than which direction reached

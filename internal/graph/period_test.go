@@ -520,12 +520,49 @@ func TestTimeDependentStatusRules(t *testing.T) {
 		})
 	}
 
-	t.Run("the adr preset keeps the time-independent reading", func(t *testing.T) {
-		// R6: the same shape under the adr preset, which declares no period,
-		// reports status_drift the moment a successor exists.
+	t.Run("the adr preset ignores proposed and withdrawn successors", func(t *testing.T) {
+		cfg := config.ADRPreset()
+		tests := []struct {
+			name      string
+			successor string
+			wantDrift bool
+		}{
+			{name: "proposed successor does not trigger drift", successor: config.StatusProposed},
+			{name: "withdrawn successor does not trigger drift", successor: config.StatusWithdrawn},
+			{name: "accepted successor triggers drift", successor: config.StatusAccepted, wantDrift: true},
+			{name: "superseded successor in a chain triggers drift", successor: config.StatusSuperseded, wantDrift: true},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				nodes := []*model.Node{
+					testNode("0001", config.StatusAccepted),
+					testNode("0002", tt.successor),
+				}
+				edges := []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}
+				if tt.successor == config.StatusSuperseded {
+					nodes = append(nodes, testNode("0003", config.StatusAccepted))
+					edges = append(edges, testEdge("0003", "0002", config.EdgeSupersedes))
+				}
+				g := testGraph(nodes, edges, nil)
+
+				got := EvalRules(g, cfg, testDayOf(t, "2026-09-01"))
+
+				if tt.wantDrift {
+					testAssertSingleFinding(t, got, model.RuleStatusDrift, model.SeverityError, "0001")
+				} else if drift := testFindingsFor(got, model.RuleStatusDrift); len(drift) != 0 {
+					t.Fatalf("status_drift = %+v, want none for %s successor", drift, tt.successor)
+				}
+			})
+		}
+	})
+
+	t.Run("the adr preset stays time-independent for accepted successors", func(t *testing.T) {
 		cfg := config.ADRPreset()
 		g := testGraph(
-			[]*model.Node{testNode("0001", "accepted"), testNode("0002", "proposed")},
+			[]*model.Node{
+				testNode("0001", config.StatusAccepted),
+				testNodeAttrs("0002", config.StatusAccepted, map[string]any{"date": "2099-01-01"}),
+			},
 			[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)}, nil)
 
 		got := EvalRules(g, cfg, testDayOf(t, "2026-09-01"))

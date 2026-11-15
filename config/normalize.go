@@ -308,17 +308,23 @@ func (c Config) Normalizer() IDNormalizer {
 // edge declares is the one it meant. The other kinds still follow, so a
 // reference to a document of the wrong kind resolves and is reported as the
 // edge_kind_mismatch it is, rather than degrading into "not an identifier".
-func (c Config) EdgeNormalizer(spec EdgeSpec) IDNormalizer {
+// EndpointNormalizer returns the normalizer that accepts document IDs whose
+// kind is in kinds (or all IDs in single-kind corpora).
+func (c Config) EndpointNormalizer(kinds []string) IDNormalizer {
 	if !c.Multikind() {
 		return ADRNormalizer{Pad: c.IDWidth}
 	}
+	return c.unionNormalizer(kinds)
+}
+
+func (c Config) EdgeNormalizer(spec EdgeSpec) IDNormalizer {
 	// A reverse edge reads its key as naming the source, so the kinds a
 	// reference under it may have are the edge's from kinds.
 	preferred := spec.To
 	if spec.Direction == DirectionReverse {
 		preferred = spec.From
 	}
-	return c.unionNormalizer(preferred)
+	return c.EndpointNormalizer(preferred)
 }
 
 // unionNormalizer builds the union over every declared kind, sorted by name,

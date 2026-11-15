@@ -11,6 +11,7 @@ out in full.
 - [The preset](#the-preset) — `adr`, the default, printed whole.
 - [The optional keys](#the-optional-keys) — every key a single-kind corpus may add.
 - [List replacement](#list-replacement) — what writing a list or a map does to the preset's.
+- [Retracting an edge](#retracting-an-edge) — voiding a wrong typed edge on a frozen record.
 - [Kinds](#kinds) — several sorts of document in one corpus, each with an identity of its own.
 - [Edge attributes](#edge-attributes) — facts an edge entry carries beside the reference.
 - [The rule vocabulary](#the-rule-vocabulary) — the fixed `when` vocabulary, and what it excludes.
@@ -36,7 +37,7 @@ The file below is the `adr` preset in full — what DocDag applies with no confi
 
 ```yaml
 preset: adr
-preset_version: 1              # the revision this configuration is at
+preset_version: 2              # the revision this configuration is at
 dir: docs/decisions            # default: discovered, see above
 id_width: 4
 status_field: status
@@ -72,7 +73,10 @@ rules:
   - name: status_drift
     severity: error
     when:
-      inbound: supersedes
+      via_inbound:
+        edge: supersedes
+        attr:
+          status: { subset_of: [accepted, superseded] }
       attr:
         status: { not: superseded }
     message: "has inbound supersedes but status is not superseded"
@@ -126,6 +130,8 @@ edges:
     max_inbound: 1             # 0, the default, is unbounded
     max_outbound: 0
     min_outbound: 1            # read over from: where the edge names kinds; see checks.md
+    appendable: false          # true lets --immutable-since frozen docs gain entries under key:
+    require_mention: warn      # warn | error; omitted disables the unmentioned_edge check
 
 rules:
   - name: unexplained_retirement
@@ -140,6 +146,17 @@ rules:
     message: "is retired, nothing supersedes it, and it carries no explained tag"
 ```
 
+Two per-edge options opt into stricter or looser validation for individual relationships:
+
+- `appendable` (`false` by default; unset in built-in presets): under `--immutable-since`, allows a
+  frozen document to add the edge's `key:` or append new entries to it, while still rejecting the
+  removal or modification (including mapping attribute changes) of existing entries. This is meant
+  for amendment-style edges; making `supersedes` appendable removes the protection against bulk
+  re-linking of accepted records.
+- `require_mention` (`warn` or `error`; omitted by default): turns on `unmentioned_edge` for
+  structured entries under this edge's `key:`, requiring the declaring document's body to reference
+  each resolved target via a wikilink, Markdown link, or `references.pattern` link.
+
 ## List replacement
 
 The `edges:` and `rules:` lists above show where the new keys go; writing one of them — or
@@ -151,6 +168,37 @@ declare, and the `binding:` that named one of them: a projection over a vocabula
 replaced away cannot be evaluated. The two scalars behave as scalars do — writing `preset_version:`
 or `binding:` replaces the preset's value, leaving either out keeps it — which is why every section
 below that adds a key to a list prints the whole list it belongs to.
+
+## Retracting an edge
+
+`retracts` is a built-in frontmatter key (no declaration needed) that voids a typed edge already
+recorded elsewhere in the corpus — for example when a frozen record accidentally linked an unrelated
+decision and append-only history (`--immutable-since`) forbids deleting lines from it:
+
+```yaml
+---
+status: accepted
+retracts:
+  - from: "0940"
+    edge: supersedes
+    to: "0877"
+---
+```
+
+Each entry is a mapping with the exact keys `from`, `edge` (a declared edge name), and `to`. `from`
+and `to` follow the graph's edge orientation (`export` and `query` order — for `supersedes`, `from`
+is the superseding record) and normalize like any edge reference. Closed kinds accept `retracts`
+automatically, and declaring an edge `key`, `inverse`, or `fields:` entry named `retracts` is a
+configuration error because the key is reserved.
+
+A retraction takes effect when the record declaring it has `accepted` or `superseded` status (under
+the configured `status_field:`): it removes both structured entries and derived edges for that tuple
+before the graph is checked or queried, and `docdag context` surfaces active retractions on both
+endpoints and on the retracting record. `proposed` and `withdrawn` records leave the graph untouched.
+
+What `retracts` cannot do: it does not edit or delete history from frozen files, it cannot itself be
+modified or removed once its declaring record is frozen under `--immutable-since`, and undoing a
+retraction requires withdrawing the retracting record rather than deleting its `retracts:` block.
 
 ## Kinds
 
@@ -569,20 +617,25 @@ cannot reach.
 `preset_version:` is the revision of the configuration a corpus is written against. It is a plain
 integer the configuration carries and DocDag never interprets: it is written into the JSON output
 headers — `validate --format json` and `context --format json` — so a repository can pin the
-revision its documents were checked under. The `adr` preset is revision 1, and a corpus that
+revision its documents were checked under. The `adr` preset is revision 2, and a corpus that
 overrides it says so by writing its own number.
 
-`fields:` declares the frontmatter keys the documents write: the vocabulary a key's value comes
-from, whether a document has to write it, and the lifecycle of a key being retired. A key nobody
-declares is not unknown, only undeclared, so a corpus pays for this only where it is saying
-something:
+`fields:` declares the frontmatter keys the documents write: their shape (`scalar` or `list`), the
+vocabulary their values come from, whether a document has to write them, how many items a list
+must hold, and the lifecycle of a key being retired. A key nobody declares is not unknown, only
+undeclared, so a corpus pays for this only where it is saying something:
 
 ```yaml
 preset_version: 3
 fields:
-  modality:                    # a key the corpus keeps
+  modality:                    # a scalar key the corpus keeps (type: scalar is the default)
     one_of: [MUST, SHOULD]     # a value outside it is the unknown_field_value finding
     required: true             # a document that writes none is the missing_field finding
+  affected_services:           # a list-valued key
+    type: list
+    required: true             # the key must be written
+    min_items: 1               # a written list must hold at least one item
+    one_of: [alt-backend, alt-notifier]  # every item must be in the vocabulary
   owner:                       # the key being retired
     deprecated: true           # writing it is the deprecated_field finding
     since: 2                   # the preset revision that retired it
@@ -591,17 +644,23 @@ fields:
   team: {}                     # declared, not retired: a known key and nothing more
 ```
 
-The two halves are alternatives rather than a set: `one_of` and `required` describe a field the
-corpus keeps, `deprecated` and its three companions a field the corpus is retiring, and writing one
-of each about one key is a configuration error (exit 3) — a required key that is also deprecated
-would say a document must write what it is reported for writing.
+The two halves are alternatives rather than a set: `type`, `one_of`, `required` and `min_items`
+describe a field the corpus keeps, `deprecated` and its three companions a field the corpus is
+retiring, and writing one of each about one key is a configuration error (exit 3) — a required or
+constrained key that is also deprecated would say a document must write what it is reported for
+writing.
 
-`one_of` is compared exactly, case included, for the reason an edge attribute's is: a declared
-vocabulary is a closed machine vocabulary a preset revision renames wholesale. An empty or repeated
-value in it is a configuration error. `required` reads a **scalar**: a key written as a list or a
-mapping holds no value under that key and is reported as missing. Both are read per **kind**, over
-the declarations a document of that kind sees, and both answer for open kinds as well as closed
-ones. See [checks.md](checks.md).
+`type:` defaults to `scalar` when omitted and admits `scalar` or `list`; any other value is a
+configuration error. `one_of` is compared exactly, case included, for the reason an edge attribute's
+is: a declared vocabulary is a closed machine vocabulary a preset revision renames wholesale. An
+empty or repeated value in it is a configuration error. On a `scalar` field, `required` expects a
+scalar: writing a list or mapping under it is reported as `missing_field` naming the shape mismatch
+(`min_items` is a configuration error without `type: list`, or when negative). On a `list` field, a
+scalar reads as a one-element list (matching `query --where`), `required: true` checks key presence,
+`min_items` checks a written key's item count (absent keys are ignored unless `required: true`),
+`one_of` checks every item, and a mapping value is reported as `missing_field`. Both scalar and list
+fields are read per **kind**, over the declarations a document of that kind sees, and answer for
+open kinds as well as closed ones. See [checks.md](checks.md).
 
 `deprecated: true` is what makes the other half of a declaration do anything. `since`, `migrate_to`
 and `sunset` describe a retirement, so writing one of them without `deprecated: true` is a
@@ -713,9 +772,10 @@ every day has no day worth printing.
 
 ### Time-dependent status checks
 
-The `adr` preset's `status_drift` is time-independent: the moment a successor exists, the
-predecessor has to say `superseded`. A corpus that declares a period can replace it with the three
-rules the `spec` preset carries, which read the day instead:
+The `adr` preset's `status_drift` is time-independent: once an `accepted` (or already `superseded`)
+successor exists, the predecessor has to say `superseded`, ignoring dates and `proposed` or
+`withdrawn` successors. A corpus that declares a period can replace it with the three rules the
+`spec` preset carries, which read the day instead:
 
 ```yaml
 period: {from: date}
@@ -776,6 +836,11 @@ Sections configuration turns on two structural checks:
 - `section_order` (error, structural) — required sections appear out of the declared order.
 
 Headings inside fenced code blocks are ignored.
+
+Frontmatter status is the authoritative status of a record. Under `--immutable-since`, the existing
+body lines of a frozen document cannot be rewritten, so a prose `## Status` section keeps saying what
+it said when the record was accepted; appending a line at the end of the body is permitted and is the
+way to annotate a superseded record.
 
 In a multi-kind corpus, `sections:` can be declared at the top level as a default, or per kind under `kinds.<name>.sections` to override the top-level specification.
 

@@ -18,9 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.6.0
+      - uses: Kaikei-e/DocDag@v0.7.0
         with:
-          version: v0.6.0                  # default: latest
+          version: v0.7.0                  # default: latest
           args: validate --format github   # this is the default
           working-directory: .             # this is the default
 ```
@@ -37,7 +37,7 @@ diagnostic rather than passing silently; install with `go install` there instead
 ### Pinning
 
 A tag can be moved, so pin the action by commit SHA when the supply chain matters —
-`uses: Kaikei-e/DocDag@<40-char-sha> # v0.6.0`. This repository pins the actions it uses that way.
+`uses: Kaikei-e/DocDag@<40-char-sha> # v0.7.0`. This repository pins the actions it uses that way.
 
 ### Annotations
 
@@ -46,7 +46,7 @@ annotations, so a corpus with more findings than that needs a second `--format t
 into `$GITHUB_STEP_SUMMARY` to show the rest:
 
 ```yaml
-      - uses: Kaikei-e/DocDag@v0.6.0        # annotations, and the gate
+      - uses: Kaikei-e/DocDag@v0.7.0        # annotations, and the gate
       - if: always()
         shell: bash
         run: docdag validate --format text >> "$GITHUB_STEP_SUMMARY"
@@ -59,13 +59,17 @@ into `$GITHUB_STEP_SUMMARY` to show the rest:
 `git merge-base <rev> HEAD` and allows exactly three kinds of change to such a document:
 
 - the value of the `status_field`,
-- entries **added** under a configured `inverse:` key, so a later decision can record that it
-  replaced this one,
+- entries **added** under a configured `inverse:` key (so a later decision can record that it
+  replaced this one) or under an edge key marked `appendable: true` — meant for amendment-style
+  edges, where the key may be added or gain entries, though removing or editing an existing entry
+  (including its mapping attributes) is still rejected; making `supersedes` appendable removes the
+  protection against bulk re-linking of accepted records,
 - lines appended to the end of the body.
 
-Anything else — another frontmatter key changed, added or removed; an inverse entry removed; a line
-of the existing body rewritten; the file deleted — is an `immutable_violation` error naming what
-changed. Renames are not followed, so moving a closed document reads as the deletion it is:
+Anything else — another frontmatter key changed, added or removed; an inverse or appendable entry
+removed or edited; a line of the existing body rewritten; the file deleted — is an
+`immutable_violation` error naming what changed. Renames are not followed, so moving a closed
+document reads as the deletion it is:
 
 ```console
 $ docdag validate --immutable-since origin/main
@@ -79,6 +83,27 @@ true`](configuration.md#append-only-kinds) — the `spec` preset marks `conform`
 and a multi-kind configuration that declares none says `--immutable-since reads only kinds with
 append_only: true` rather than comparing the wrong files.
 
+The frontmatter status is the authoritative status of a record. Under `--immutable-since`, the
+existing body lines of a frozen document cannot be rewritten, so a prose `## Status` section keeps
+saying what it said when the record was accepted; appending a line at the end of the body is
+permitted and is the way to annotate a superseded record.
+
+### Correcting a frozen record
+
+A wrong typed edge on a frozen record cannot be deleted directly without triggering
+`immutable_violation`. Instead:
+
+1. Issue a new record (`status: accepted`, or `proposed` while validating) with a `retracts:` entry
+   naming `{from, edge, to}` (matching graph direction — for `supersedes`, `from` is the
+   superseding record).
+2. Set the wrongly superseded record's frontmatter `status:` back to `accepted` (status transitions
+   are permitted under `--immutable-since`).
+3. Append a note at the end of that record's body explaining why the supersession was retracted
+   (appending at the end of the body is permitted).
+
+Together, the frozen record stays untouched, the edge leaves the graph, and `validate
+--immutable-since` passes.
+
 ### Running it in CI
 
 The check needs enough history for `git merge-base <rev> HEAD` to resolve, which a shallow clone
@@ -89,13 +114,22 @@ does not have. Ask for the full history and name the branch the change is propos
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Kaikei-e/DocDag@v0.6.0
+      - uses: Kaikei-e/DocDag@v0.7.0
         with:
           args: validate --immutable-since origin/${{ github.base_ref || github.event.repository.default_branch }}
 ```
 
 `github.base_ref` is the branch a pull request targets and is empty on a push, where the default
 branch is the useful comparison.
+
+## Reviewing graph changes in pull requests
+
+A bulk edit or new supersession chain can silently add dozens of typed edges, flip statuses, or
+move records out of the binding set while still passing `validate`. Running `docdag diff
+origin/main --format github` on pull requests annotates each added or removed edge, status
+transition, and document addition or removal on the changed files and writes the binding-set
+delta (`binding: before -> after (delta)`) to the summary log, making large graph shifts visible in
+review without reading every diff hunk.
 
 ## Periodic runs
 
@@ -121,7 +155,7 @@ jobs:
       - name: Say which day this run asks about
         shell: bash
         run: echo "DOCDAG_AS_OF=$(date -I)" >> "$GITHUB_ENV"
-      - uses: Kaikei-e/DocDag@v0.6.0
+      - uses: Kaikei-e/DocDag@v0.7.0
         with:
           args: validate --format github
 ```
@@ -171,7 +205,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.6.0
+      - uses: Kaikei-e/DocDag@v0.7.0
 
   lint:                                        # only where the rules changed
     needs: changes
@@ -179,7 +213,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.6.0
+      - uses: Kaikei-e/DocDag@v0.7.0
         with:
           args: lint --all --format github
 ```
@@ -207,7 +241,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: Kaikei-e/DocDag@v0.6.0
+      - uses: Kaikei-e/DocDag@v0.7.0
         with:
           args: lint --corpus --since origin/main --format text
 ```
@@ -223,7 +257,7 @@ A [pre-commit](https://pre-commit.com) hook is also shipped:
 ```yaml
 repos:
   - repo: https://github.com/Kaikei-e/DocDag
-    rev: v0.6.0
+    rev: v0.7.0
     hooks:
       - id: docdag-validate      # any .md or docdag.yaml edit: the invariants
       - id: docdag-lint          # a docdag.yaml edit: the rules themselves

@@ -67,6 +67,7 @@ command below answers for either.
 | Are the rules themselves sound? | `docdag lint` |
 | Shape of the corpus | `docdag stats` |
 | Which frontmatter keys does it write? | `docdag stats --fields` |
+| What changed in the graph since a revision? | `docdag diff origin/main` |
 
 Start with `docdag context <ref>`. It prints the document, the successor it
 resolves to if it is superseded, and its neighbourhood over typed edges, each
@@ -128,7 +129,7 @@ are reported as `unmanaged_file`. Opt-in `sections:` config enforces required bo
 `docdag` must be on `PATH`:
 
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.6.0
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.7.0
 ```
 
 Add this to the project's `.claude/settings.json` so the commands run without a

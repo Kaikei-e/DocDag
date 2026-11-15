@@ -286,12 +286,46 @@ func TestCheckFieldValues(t *testing.T) {
 		}
 	})
 
-	t.Run("a required key holding a list is a key holding no value", func(t *testing.T) {
+	t.Run("a required scalar key holding a list reports the mismatch on its own line", func(t *testing.T) {
 		g, cfg := testFieldValueGraph(map[string]any{
 			"status": config.StatusAccepted, "modality": []any{"MUST", "SHOULD"},
 		})
 
-		testAssertSingleFinding(t, CheckFieldValues(g, cfg), model.RuleMissingField, model.SeverityError, "0001")
+		f := testAssertSingleFinding(t, CheckFieldValues(g, cfg), model.RuleMissingField, model.SeverityError, "0001")
+		want := `frontmatter key "modality" is declared as a scalar but holds a list; declare it with type: list`
+		if f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		if f.Location != (model.Location{Path: "0001.md", Line: testFrontmatterLine + 1}) {
+			t.Errorf("location = %+v, want the modality key's line", f.Location)
+		}
+	})
+
+	t.Run("a required scalar key holding a mapping reports the mismatch on its own line", func(t *testing.T) {
+		g, cfg := testFieldValueGraph(map[string]any{
+			"status": config.StatusAccepted, "modality": map[string]any{"level": "MUST"},
+		})
+
+		f := testAssertSingleFinding(t, CheckFieldValues(g, cfg), model.RuleMissingField, model.SeverityError, "0001")
+		want := `frontmatter key "modality" is declared as a scalar but holds a mapping`
+		if f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		if f.Location != (model.Location{Path: "0001.md", Line: testFrontmatterLine + 1}) {
+			t.Errorf("location = %+v, want the modality key's line", f.Location)
+		}
+	})
+
+	t.Run("a non-required scalar key holding a list is still ignored", func(t *testing.T) {
+		cfg := config.ADRPreset()
+		cfg.Fields = map[string]config.FieldSpec{"tags": {}}
+		g := Build([]*parse.Document{
+			testDoc("0001", map[string]any{"status": config.StatusAccepted, "tags": []any{"storage"}}, ""),
+		}, cfg)
+
+		if got := CheckFieldValues(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
 	})
 
 	t.Run("a field the configuration only declares constrains nothing", func(t *testing.T) {
@@ -333,6 +367,139 @@ func TestCheckFieldValues(t *testing.T) {
 		cfg.Structural = map[string]model.Severity{model.RuleUnknownFieldValue: model.SeverityWarn}
 		if err := cfg.Validate(); err == nil {
 			t.Error("Validate accepted a lowered unknown_field_value, want a configuration error")
+		}
+	})
+}
+
+func TestCheckFieldValuesList(t *testing.T) {
+	listGraph := func(spec config.FieldSpec, frontmatter map[string]any) (*model.Graph, config.Config) {
+		cfg := config.ADRPreset()
+		cfg.Fields = map[string]config.FieldSpec{"affected_services": spec}
+		return Build([]*parse.Document{testDoc("0001", frontmatter, "")}, cfg), cfg
+	}
+
+	t.Run("a valid list passes", func(t *testing.T) {
+		spec := config.FieldSpec{Type: config.FieldTypeList, Required: true, MinItems: 1, OneOf: []string{"alt-backend", "alt-notifier"}}
+		g, cfg := listGraph(spec, map[string]any{
+			"status": config.StatusAccepted, "affected_services": []any{"alt-backend", "alt-notifier"},
+		})
+
+		if got := CheckFieldValues(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a scalar reads as a one-element list", func(t *testing.T) {
+		spec := config.FieldSpec{Type: config.FieldTypeList, Required: true, MinItems: 1, OneOf: []string{"alt-backend", "alt-notifier"}}
+		g, cfg := listGraph(spec, map[string]any{
+			"status": config.StatusAccepted, "affected_services": "alt-backend",
+		})
+
+		if got := CheckFieldValues(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("an absent required list field reports missing_field on the status line", func(t *testing.T) {
+		spec := config.FieldSpec{Type: config.FieldTypeList, Required: true, MinItems: 1}
+		g, cfg := listGraph(spec, map[string]any{"status": config.StatusAccepted})
+
+		f := testAssertSingleFinding(t, CheckFieldValues(g, cfg), model.RuleMissingField, model.SeverityError, "0001")
+		if want := `frontmatter key "affected_services" is required`; f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		if f.Location != (model.Location{Path: "0001.md", Line: testFrontmatterLine + 1}) {
+			t.Errorf("location = %+v, want the status key's line", f.Location)
+		}
+	})
+
+	t.Run("min_items does not report when the key is absent and not required", func(t *testing.T) {
+		spec := config.FieldSpec{Type: config.FieldTypeList, MinItems: 1}
+		g, cfg := listGraph(spec, map[string]any{"status": config.StatusAccepted})
+
+		if got := CheckFieldValues(g, cfg); len(got) != 0 {
+			t.Fatalf("findings = %+v, want none", got)
+		}
+	})
+
+	t.Run("a written list shorter than min_items reports missing_field on the key's line", func(t *testing.T) {
+		tests := []struct {
+			name     string
+			minItems int
+			value    any
+			want     string
+		}{
+			{
+				name:     "empty list",
+				minItems: 1,
+				value:    []any{},
+				want:     `frontmatter key "affected_services" holds 0 items, want at least 1`,
+			},
+			{
+				name:     "single item below two",
+				minItems: 2,
+				value:    []any{"alt-backend"},
+				want:     `frontmatter key "affected_services" holds 1 item, want at least 2`,
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				spec := config.FieldSpec{Type: config.FieldTypeList, MinItems: tt.minItems}
+				g, cfg := listGraph(spec, map[string]any{"status": config.StatusAccepted, "affected_services": tt.value})
+
+				f := testAssertSingleFinding(t, CheckFieldValues(g, cfg), model.RuleMissingField, model.SeverityError, "0001")
+				if f.Detail != tt.want {
+					t.Errorf("detail = %q, want %q", f.Detail, tt.want)
+				}
+				if f.Location != (model.Location{Path: "0001.md", Line: testFrontmatterLine + 1}) {
+					t.Errorf("location = %+v, want the key's line", f.Location)
+				}
+			})
+		}
+	})
+
+	t.Run("one_of reports one unknown_field_value per offending item with exact matching", func(t *testing.T) {
+		spec := config.FieldSpec{Type: config.FieldTypeList, OneOf: []string{"alt-backend", "alt-notifier"}}
+		g, cfg := listGraph(spec, map[string]any{
+			"status":            config.StatusAccepted,
+			"affected_services": []any{"alt-backend", "ALT-BACKEND", "unknown-svc"},
+		})
+
+		got := CheckFieldValues(g, cfg)
+		if len(got) != 2 {
+			t.Fatalf("findings = %+v, want 2", got)
+		}
+		for _, f := range got {
+			if f.Rule != model.RuleUnknownFieldValue || f.Severity != model.SeverityError {
+				t.Errorf("finding = %+v, want unknown_field_value error", f)
+			}
+			if f.Location != (model.Location{Path: "0001.md", Line: testFrontmatterLine + 1}) {
+				t.Errorf("location = %+v, want the key's line", f.Location)
+			}
+		}
+		wantDetails := []string{
+			`affected_services "ALT-BACKEND" is outside the vocabulary alt-backend, alt-notifier`,
+			`affected_services "unknown-svc" is outside the vocabulary alt-backend, alt-notifier`,
+		}
+		if got[0].Detail != wantDetails[0] || got[1].Detail != wantDetails[1] {
+			t.Errorf("details = [%q, %q], want %v", got[0].Detail, got[1].Detail, wantDetails)
+		}
+	})
+
+	t.Run("a mapping under a list field is reported even when not required", func(t *testing.T) {
+		spec := config.FieldSpec{Type: config.FieldTypeList}
+		g, cfg := listGraph(spec, map[string]any{
+			"status":            config.StatusAccepted,
+			"affected_services": map[string]any{"name": "alt-backend"},
+		})
+
+		f := testAssertSingleFinding(t, CheckFieldValues(g, cfg), model.RuleMissingField, model.SeverityError, "0001")
+		want := `frontmatter key "affected_services" is declared as a list but holds a mapping`
+		if f.Detail != want {
+			t.Errorf("detail = %q, want %q", f.Detail, want)
+		}
+		if f.Location != (model.Location{Path: "0001.md", Line: testFrontmatterLine + 1}) {
+			t.Errorf("location = %+v, want the key's line", f.Location)
 		}
 	})
 }

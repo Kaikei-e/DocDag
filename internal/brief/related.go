@@ -126,3 +126,22 @@ func suppressed(g *model.Graph, cfg config.Config, id model.ID, asOf time.Time) 
 	}
 	return lines
 }
+
+// retracted reports the effective edge retractions that touch id — either as
+// the edge's source, its target, or the retracting record itself — so a reader
+// opening any involved document sees that the written edge is void.
+func retracted(g *model.Graph, id model.ID) []Retraction {
+	var out []Retraction
+	for _, r := range g.Retractions {
+		if r.From != id && r.To != id && r.By != id {
+			continue
+		}
+		out = append(out, Retraction{
+			Edge: r.Type,
+			From: r.From,
+			To:   r.To,
+			By:   r.By,
+		})
+	}
+	return out
+}

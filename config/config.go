@@ -32,12 +32,14 @@ const (
 )
 
 // Frontmatter keys the engine reads on every document whatever its kind
-// declares: the two it renders, and the two that carry identity.
+// declares: the two it renders, the two that carry identity, and the built-in
+// edge-retraction key.
 const (
-	KeyTitle = "title"
-	KeyDate  = "date"
-	KeyID    = "id"
-	KeyKind  = "kind"
+	KeyTitle    = "title"
+	KeyDate     = "date"
+	KeyID       = "id"
+	KeyKind     = "kind"
+	KeyRetracts = "retracts"
 )
 
 // Edge directions. Forward means the containing document is the edge source;
@@ -186,24 +188,42 @@ type SectionsWhen struct {
 // keeps a configuration that declares none answering exactly as it did.
 const AttrInForce = "in_force"
 
-// FieldSpec declares one frontmatter field: the vocabulary its value comes
-// from and whether a document has to write it, plus its lifecycle — whether the
-// configuration has retired the key, the preset revision that retired it, the
-// key its value moves to, and the day it stops being tolerated.
+// Declared field value shapes. A field without a type reads a scalar.
+const (
+	FieldTypeScalar = "scalar"
+	FieldTypeList   = "list"
+)
+
+// FieldSpec declares one frontmatter field: its shape, the vocabulary its
+// values come from, whether a document has to write it and how many items a
+// list must hold, plus its lifecycle — whether the configuration has retired the
+// key, the preset revision that retired it, the key its value moves to, and the
+// day it stops being tolerated.
 //
-// The two halves are alternatives rather than a set: one_of and required
-// describe a field the corpus keeps, deprecated and its three companions a
-// field the corpus is retiring, and a field cannot be both.
+// The two halves are alternatives rather than a set: type, one_of, required and
+// min_items describe a field the corpus keeps, deprecated and its three
+// companions a field the corpus is retiring, and a field cannot be both.
 type FieldSpec struct {
-	// OneOf is the closed vocabulary the value comes from, empty meaning the
-	// field takes any value. Required makes writing the key part of being a
-	// document of the kind that declares it.
+	// Type is "scalar" (default when omitted) or "list". OneOf is the closed
+	// vocabulary each value comes from, empty meaning any value. Required makes
+	// writing the key part of being a document of the kind that declares it;
+	// MinItems requires a written list to hold at least that many items.
+	Type       string   `yaml:"type,omitempty"`
 	OneOf      []string `yaml:"one_of,omitempty"`
 	Required   bool     `yaml:"required,omitempty"`
+	MinItems   int      `yaml:"min_items,omitempty"`
 	Deprecated bool     `yaml:"deprecated,omitempty"`
 	Since      int      `yaml:"since,omitempty"`
 	MigrateTo  string   `yaml:"migrate_to,omitempty"`
 	Sunset     string   `yaml:"sunset,omitempty"`
+}
+
+// FieldType reports the shape a field declaration reads, scalar being the default.
+func (f FieldSpec) FieldType() string {
+	if f.Type == "" {
+		return FieldTypeScalar
+	}
+	return f.Type
 }
 
 // Accepts reports whether a value satisfies the field's vocabulary. A field
@@ -250,6 +270,12 @@ type EdgeSpec struct {
 	// Inverse is the frontmatter key the edge's target must mirror the edge
 	// under. It declares no edges of its own.
 	Inverse string `yaml:"inverse,omitempty"`
+	// Appendable lets --immutable-since allow adding this edge's key or new
+	// entries under it on a frozen document while still forbidding removals or edits.
+	Appendable bool `yaml:"appendable,omitempty"`
+	// RequireMention checks that every structured edge of this type is also
+	// referenced in the declaring document's body ("warn", "error", or empty).
+	RequireMention string `yaml:"require_mention,omitempty"`
 	// Degree bounds on this edge type. Zero means unbounded.
 	MaxInbound  int `yaml:"max_inbound,omitempty"`
 	MaxOutbound int `yaml:"max_outbound,omitempty"`
@@ -431,6 +457,18 @@ func (s EdgeSpec) AttrNames() []string {
 func (s EdgeSpec) Attr(name string) (EdgeAttrSpec, bool) {
 	spec, ok := s.Attrs[name]
 	return spec, ok
+}
+
+// RequireMentionSeverity reports the severity unmentioned_edge findings carry
+// for this edge, and whether the check is enabled.
+func (s EdgeSpec) RequireMentionSeverity() (model.Severity, bool) {
+	switch s.RequireMention {
+	case string(model.SeverityWarn):
+		return model.SeverityWarn, true
+	case string(model.SeverityError):
+		return model.SeverityError, true
+	}
+	return "", false
 }
 
 // DerivedEdgeSpec declares an edge inferred from a frontmatter field value.
@@ -831,6 +869,7 @@ var structuralSeverities = map[string]model.Severity{
 	model.RuleDerivedConflict:        model.SeverityError,
 	model.RuleUnstructuredSupersedes: model.SeverityWarn,
 	model.RuleInvalidRef:             model.SeverityError,
+	model.RuleInvalidRetraction:      model.SeverityError,
 	model.RulePaddingMismatch:        model.SeverityError,
 	model.RuleEmptyEdge:              model.SeverityError,
 	model.RuleInverseMismatch:        model.SeverityError,
@@ -1067,6 +1106,7 @@ func (c Config) KnownFrontmatterKeys(kind string) []string {
 		KeyDate:             true,
 		KeyID:               true,
 		KeyKind:             true,
+		KeyRetracts:         true,
 		c.EffectiveStatus(): true,
 	}
 	for _, spec := range c.Edges {
@@ -1434,6 +1474,8 @@ func (c Config) validateEdges() error {
 			return fmt.Errorf("edge without a name: %w", model.ErrInvalidConfig)
 		case spec.Key == "":
 			return fmt.Errorf("edge %q without a frontmatter key: %w", spec.Name, model.ErrInvalidConfig)
+		case spec.Key == KeyRetracts:
+			return fmt.Errorf("edge %q: key %q is reserved for retractions: %w", spec.Name, spec.Key, model.ErrInvalidConfig)
 		case declared[spec.Name]:
 			return fmt.Errorf("edge %q is declared twice: %w", spec.Name, model.ErrInvalidConfig)
 		}
@@ -1452,6 +1494,10 @@ func (c Config) validateEdges() error {
 		if err := c.validateEdgeTarget(spec); err != nil {
 			return err
 		}
+		if _, on := spec.RequireMentionSeverity(); !on && spec.RequireMention != "" {
+			return fmt.Errorf("edge %q: unknown require_mention %q, want %s or %s: %w",
+				spec.Name, spec.RequireMention, model.SeverityWarn, model.SeverityError, model.ErrInvalidConfig)
+		}
 		declared[spec.Name] = true
 		keys[spec.Key] = true
 	}
@@ -1466,6 +1512,8 @@ func (c Config) validateInverseKeys(keys map[string]bool) error {
 		switch {
 		case spec.Inverse == "":
 			continue
+		case spec.Inverse == KeyRetracts:
+			return fmt.Errorf("edge %q: inverse key %q is reserved for retractions: %w", spec.Name, spec.Inverse, model.ErrInvalidConfig)
 		case keys[spec.Inverse]:
 			return fmt.Errorf("edge %q: inverse key %q already declares edges: %w", spec.Name, spec.Inverse, model.ErrInvalidConfig)
 		case inverses[spec.Inverse]:
@@ -1512,6 +1560,9 @@ func validateFieldSpecs(where string, fields map[string]FieldSpec, owners map[st
 		if name == "" {
 			return fmt.Errorf("%sfield without a name: %w", where, model.ErrInvalidConfig)
 		}
+		if name == KeyRetracts {
+			return fmt.Errorf("%sfield %q is reserved for retractions: %w", where, name, model.ErrInvalidConfig)
+		}
 		spec := fields[name]
 		subject := fmt.Sprintf("%sfield %q", where, name)
 		if owner, taken := owners[name]; taken {
@@ -1557,6 +1608,16 @@ func validateFieldSpecs(where string, fields map[string]FieldSpec, owners map[st
 // writing, and a vocabulary for a key on its way out constrains a value nobody
 // should be writing at all.
 func validateFieldVocabulary(subject string, spec FieldSpec) error {
+	if spec.Type != "" && spec.Type != FieldTypeScalar && spec.Type != FieldTypeList {
+		return fmt.Errorf("%s: unknown type %q, want %s or %s: %w",
+			subject, spec.Type, FieldTypeScalar, FieldTypeList, model.ErrInvalidConfig)
+	}
+	if spec.MinItems < 0 {
+		return fmt.Errorf("%s: min_items %d is negative: %w", subject, spec.MinItems, model.ErrInvalidConfig)
+	}
+	if spec.MinItems > 0 && spec.FieldType() != FieldTypeList {
+		return fmt.Errorf("%s: min_items requires type: %s: %w", subject, FieldTypeList, model.ErrInvalidConfig)
+	}
 	seen := make(map[string]bool, len(spec.OneOf))
 	for _, value := range spec.OneOf {
 		switch {
@@ -1573,7 +1634,12 @@ func validateFieldVocabulary(subject string, spec FieldSpec) error {
 	for _, written := range []struct {
 		key     string
 		written bool
-	}{{"one_of", len(spec.OneOf) > 0}, {"required", spec.Required}} {
+	}{
+		{"type", spec.Type != ""},
+		{"one_of", len(spec.OneOf) > 0},
+		{"required", spec.Required},
+		{"min_items", spec.MinItems > 0},
+	} {
 		if written.written {
 			return fmt.Errorf("%s: %s describes a field the corpus keeps, not one deprecated: true retires: %w",
 				subject, written.key, model.ErrInvalidConfig)

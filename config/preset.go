@@ -16,11 +16,9 @@ const DerivedSupersededPattern = `(?i)^superseded[\s-]+by[\s-]+(\S+)`
 // code so another preset can hold a different notion of force.
 const ProjectionAcceptedUnsuperseded = "accepted_unsuperseded"
 
-// ADRPresetVersion is the revision the built-in ADR configuration is at. The
-// preset predates the versioning, so it starts at 1 like every other: a header
-// that names a revision everywhere is worth more than one that is absent
-// wherever the corpus happens to use the built-in preset.
-const ADRPresetVersion = 1
+// ADRPresetVersion is the revision the built-in ADR configuration is at.
+// Revision 2 conditions status_drift on an accepted or superseded successor.
+const ADRPresetVersion = 2
 
 // ADRPreset returns the built-in Architecture Decision Record configuration.
 func ADRPreset() Config {
@@ -76,8 +74,13 @@ func ADRPreset() Config {
 				Name:     model.RuleStatusDrift,
 				Severity: model.SeverityError,
 				When: Condition{
-					Inbound: EdgeCondition{Edge: EdgeSupersedes.String()},
-					Attr:    map[string]AttrCondition{DefaultStatusField: not(StatusSuperseded)},
+					ViaInbound: &ViaCondition{
+						Edge: EdgeSupersedes.String(),
+						Attr: map[string]AttrCondition{
+							DefaultStatusField: {SubsetOf: []string{StatusAccepted, StatusSuperseded}},
+						},
+					},
+					Attr: map[string]AttrCondition{DefaultStatusField: not(StatusSuperseded)},
 				},
 				Message: "has inbound supersedes but status is not superseded",
 			},

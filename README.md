@@ -101,7 +101,7 @@ structural boundaries:
 Install a pinned version locally:
 
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.6.0
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.7.0
 ```
 
 This installs `docdag` into `$(go env GOPATH)/bin`. Prebuilt binaries for tagged versions, and the
@@ -113,7 +113,7 @@ release's `checksums.txt`, and needs no Go toolchain:
 
 ```yaml
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.6.0
+      - uses: Kaikei-e/DocDag@v0.7.0
         with:
           args: validate --format github   # this is the default
 ```
@@ -201,7 +201,8 @@ finding is an error:
 
 - **Structural** — `invalid_frontmatter`, `missing_frontmatter`, `id_collision`, `unknown_status`,
   `empty_edge`, `invalid_ref`, `dangling_ref`, `padding_mismatch`, `unmanaged_file`, `unstructured_supersedes`,
-  `derived_conflict`, and, for an edge that declares `attrs:`, `edge_attr_unknown`,
+  `derived_conflict`, `invalid_retraction`, `unmentioned_edge` (when an edge sets
+  `require_mention: warn | error`), and, for an edge that declares `attrs:`, `edge_attr_unknown`,
   `edge_attr_missing`, `edge_attr_invalid`.
 - **Sections** — for a corpus that opts into `sections:`, `missing_section` and `section_order`
   (with `|` heading alternatives, heading `level:`, `ordered: true`, and `when: {status: [...]}`).
@@ -225,8 +226,8 @@ finding is an error:
 - **Reference layer** — `dangling_reference`, off until `references.dangling` asks for it.
 - **Append-only history** — `immutable_violation`, under `--immutable-since <rev>` (scoped to
   `append_only: true` kinds such as `conform` and `measure` on multi-kind corpora): a settled
-  document may only change its `status`, gain entries under an `inverse:` key, or append lines to
-  the end of its body.
+  document may only change its `status`, gain entries under an `inverse:` or `appendable: true` edge
+  key, or append lines to the end of its body.
 - **Fail-closed execution (exit 3)** — every reading command exits 3 (`model.ErrEmptyCorpus`) when
   zero managed documents match; `docdag.yaml` rejects unknown keys (`DisallowUnknownField`) and
   unknown `structural:` check names; and explicit `dir:` / kind `dir:` paths must exist on disk with
@@ -272,12 +273,12 @@ command and the marketplace source is rejected.
 ## Documentation
 
 - [docs/commands.md](docs/commands.md) — every command (`validate`, `lint`, `resolve`, `query`,
-  `context`, `export`, `stats`, `new`), the global `--as-of` / `--at` time flags, the exit codes and
+  `context`, `export`, `stats`, `diff`, `new`), the global `--as-of` / `--at` time flags, the exit codes and
   the `text|json|github|rdjson` and `mermaid|dot|json` output formats.
 - [docs/configuration.md](docs/configuration.md) — the `docdag.yaml` reference: the `adr` and `spec`
   presets in full, every optional key (`kinds:`, `fields:`, `edges:`, `target:`, `path_constraints:`,
   `projections:`, `period:`, `sections:`, `structural:`), the closed rule vocabulary, and the Go API.
-- [docs/checks.md](docs/checks.md) — one entry per finding (33 structural checks, preset rules,
+- [docs/checks.md](docs/checks.md) — one entry per finding (34 structural checks, preset rules,
   reference and history checks, and `lint` findings): what triggers it and what clears it.
 - [docs/ci.md](docs/ci.md) — the composite action, `github` and `rdjson` annotations, append-only
   history (`--immutable-since`), scheduled `--as-of` expiry runs, linting the configuration and the
@@ -290,8 +291,8 @@ command and the marketplace source is rejected.
   checking, bitemporal in-force periods, the public `config`/`model`/`lint` packages and
   `append_only` kinds, fail-closed enforcement, opt-in body `sections:`, and `resolve` stopping at
   non-binding successors.
-- [CHANGELOG.md](CHANGELOG.md) — what each release changed across v0.1.0–v0.6.0, including the
-  v0.5.0 fail-closed breaking changes and migration steps.
+- [CHANGELOG.md](CHANGELOG.md) — what each release changed across v0.1.0–v0.7.0, including the
+  v0.5.0 fail-closed and v0.7.0 breaking changes and migration steps.
 
 ## MADR compatibility
 

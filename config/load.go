@@ -223,10 +223,36 @@ func mergeReferences(base, override ReferencesSpec) ReferencesSpec {
 func retargetRules(rules []Rule, from, to string) []Rule {
 	out := make([]Rule, 0, len(rules))
 	for _, rule := range rules {
-		rule.When.Attr = retargetAttrs(rule.When.Attr, from, to)
+		rule.When = retargetCondition(rule.When, from, to)
 		out = append(out, rule)
 	}
 	return out
+}
+
+func retargetCondition(c Condition, from, to string) Condition {
+	c.Attr = retargetAttrs(c.Attr, from, to)
+	if c.Via != nil {
+		via := *c.Via
+		via.Attr = retargetAttrs(via.Attr, from, to)
+		c.Via = &via
+	}
+	if c.ViaInbound != nil {
+		via := *c.ViaInbound
+		via.Attr = retargetAttrs(via.Attr, from, to)
+		c.ViaInbound = &via
+	}
+	if len(c.AnyOf) > 0 {
+		alts := make([]Condition, len(c.AnyOf))
+		for i, alt := range c.AnyOf {
+			alts[i] = retargetCondition(alt, from, to)
+		}
+		c.AnyOf = alts
+	}
+	if c.Not != nil {
+		neg := retargetCondition(*c.Not, from, to)
+		c.Not = &neg
+	}
+	return c
 }
 
 // retargetProjections moves the inherited projections onto a renamed status
@@ -236,11 +262,11 @@ func retargetRules(rules []Rule, from, to string) []Rule {
 func retargetProjections(projections []ProjectionSpec, from, to string) []ProjectionSpec {
 	out := make([]ProjectionSpec, 0, len(projections))
 	for _, spec := range projections {
-		spec.When.Attr = retargetAttrs(spec.When.Attr, from, to)
+		spec.When = retargetCondition(spec.When, from, to)
 		if spec.AnyOf != nil {
 			alternatives := make([]ProjectionAlt, 0, len(spec.AnyOf))
 			for _, alt := range spec.AnyOf {
-				alt.When.Attr = retargetAttrs(alt.When.Attr, from, to)
+				alt.When = retargetCondition(alt.When, from, to)
 				alternatives = append(alternatives, alt)
 			}
 			spec.AnyOf = alternatives

@@ -283,6 +283,28 @@ func TestConfigValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:   "an appendable edge",
+			mutate: func(c *Config) { c.Edges[0].Appendable = true },
+		},
+		{
+			name:   "an edge with require_mention warn",
+			mutate: func(c *Config) { c.Edges[0].RequireMention = string(model.SeverityWarn) },
+		},
+		{
+			name:   "an edge with require_mention error",
+			mutate: func(c *Config) { c.Edges[0].RequireMention = string(model.SeverityError) },
+		},
+		{
+			name:    "an edge with an unknown require_mention value",
+			mutate:  func(c *Config) { c.Edges[0].RequireMention = "maybe" },
+			wantErr: true,
+		},
+		{
+			name:    "an edge with require_mention off",
+			mutate:  func(c *Config) { c.Edges[0].RequireMention = ReferencesOff },
+			wantErr: true,
+		},
+		{
 			name:   "reference validation switched off explicitly",
 			mutate: func(c *Config) { c.References.Dangling = ReferencesOff },
 		},
@@ -711,6 +733,72 @@ func TestConfigValidate(t *testing.T) {
 				c.Kinds["clause"] = KindSpec{Dir: "spec/clauses", Fields: map[string]FieldSpec{
 					"modality": {OneOf: []string{"MUST", "MUST"}},
 				}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "a scalar field may name its type explicitly",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"modality": {Type: FieldTypeScalar, OneOf: []string{"MUST", "MAY"}}}
+			},
+		},
+		{
+			name: "a list field with min_items and one_of",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"affected_services": {
+					Type:     FieldTypeList,
+					Required: true,
+					MinItems: 1,
+					OneOf:    []string{"alt-backend", "alt-notifier"},
+				}}
+			},
+		},
+		{
+			name: "a field with an unknown type",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"tags": {Type: "mapping"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "min_items with negative count",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"tags": {Type: FieldTypeList, MinItems: -1}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "min_items on a scalar field without type: list",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"tags": {MinItems: 1}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "min_items on an explicit scalar field",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"tags": {Type: FieldTypeScalar, MinItems: 1}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "deprecated combined with type: list",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"tags": {Type: FieldTypeList, Deprecated: true}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "deprecated combined with explicit type: scalar",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"owner": {Type: FieldTypeScalar, Deprecated: true}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "deprecated combined with min_items",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{"tags": {Type: FieldTypeList, MinItems: 1, Deprecated: true}}
 			},
 			wantErr: true,
 		},
@@ -1580,7 +1668,7 @@ func TestConfigKinds(t *testing.T) {
 
 func TestConfigKnownFrontmatterKeys(t *testing.T) {
 	t.Run("the preset knows its own vocabulary", func(t *testing.T) {
-		want := []string{"date", "depends-on", "id", "kind", "status", "supersedes", "title"}
+		want := []string{"date", "depends-on", "id", "kind", "retracts", "status", "supersedes", "title"}
 
 		if got := ADRPreset().KnownFrontmatterKeys(""); !slices.Equal(got, want) {
 			t.Fatalf("KnownFrontmatterKeys = %v, want %v", got, want)
@@ -1981,6 +2069,54 @@ func TestTargetConditionEmpty(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.target.Empty(); got != tt.want {
 				t.Fatalf("Empty = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateRejectsReservedRetractsKey(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "edge key named retracts",
+			mutate: func(c *Config) {
+				c.Edges = append(c.Edges, EdgeSpec{Name: "other", Key: KeyRetracts})
+			},
+		},
+		{
+			name: "edge inverse key named retracts",
+			mutate: func(c *Config) {
+				c.Edges[0].Inverse = KeyRetracts
+			},
+		},
+		{
+			name: "top-level field named retracts",
+			mutate: func(c *Config) {
+				c.Fields = map[string]FieldSpec{KeyRetracts: {}}
+			},
+		},
+		{
+			name: "kind field named retracts",
+			mutate: func(c *Config) {
+				c.Kinds = map[string]KindSpec{
+					"clause": {Dir: "spec/clauses", Fields: map[string]FieldSpec{KeyRetracts: {}}},
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ADRPreset()
+			tt.mutate(&cfg)
+			err := cfg.Validate()
+			if !errors.Is(err, model.ErrInvalidConfig) {
+				t.Fatalf("Validate = %v, want model.ErrInvalidConfig", err)
+			}
+			if !strings.Contains(err.Error(), KeyRetracts) {
+				t.Errorf("error = %q, want it to mention %q", err.Error(), KeyRetracts)
 			}
 		})
 	}

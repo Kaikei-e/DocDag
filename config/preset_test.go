@@ -43,11 +43,8 @@ func TestADRPreset(t *testing.T) {
 	})
 
 	t.Run("the preset names its revision", func(t *testing.T) {
-		// The preset predates the versioning, so it starts at 1: an output
-		// header that names a revision everywhere is worth more than one that
-		// goes missing wherever the built-in preset is used.
-		if cfg.PresetVersion != 1 {
-			t.Errorf("preset_version = %d, want 1", cfg.PresetVersion)
+		if cfg.PresetVersion != ADRPresetVersion {
+			t.Errorf("preset_version = %d, want %d", cfg.PresetVersion, ADRPresetVersion)
 		}
 		if len(cfg.Fields) != 0 {
 			t.Errorf("fields = %+v, want the preset to retire nothing", cfg.Fields)
@@ -133,8 +130,15 @@ func TestADRPreset(t *testing.T) {
 		if drift.Severity != model.SeverityError {
 			t.Errorf("%s severity = %q, want %q", drift.Name, drift.Severity, model.SeverityError)
 		}
-		if drift.When.Inbound.Edge != EdgeSupersedes.String() {
-			t.Errorf("%s inbound = %q, want %q", drift.Name, drift.When.Inbound.Edge, EdgeSupersedes)
+		if drift.When.Inbound.set() {
+			t.Errorf("%s inbound = %+v, want none (conditioned on via_inbound)", drift.Name, drift.When.Inbound)
+		}
+		if drift.When.ViaInbound == nil || drift.When.ViaInbound.Edge != EdgeSupersedes.String() {
+			t.Fatalf("%s via_inbound = %+v, want supersedes", drift.Name, drift.When.ViaInbound)
+		}
+		wantStatuses := []string{StatusAccepted, StatusSuperseded}
+		if got := drift.When.ViaInbound.Attr[cfg.StatusField].SubsetOf; !slices.Equal(got, wantStatuses) {
+			t.Errorf("%s via_inbound status subset_of = %v, want %v", drift.Name, got, wantStatuses)
 		}
 		if got := testDeref(t, "status_drift attr not", drift.When.Attr[cfg.StatusField].Not); got != StatusSuperseded {
 			t.Errorf("%s attr not = %q, want %q", drift.Name, got, StatusSuperseded)

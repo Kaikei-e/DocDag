@@ -291,3 +291,56 @@ func TestContextReadsTheNormativeNeighbourhood(t *testing.T) {
 		}
 	})
 }
+
+func TestContextSurfacesRetractedEdges(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-bulk.md":      "---\ntitle: Bulk update\nstatus: accepted\nsupersedes:\n  - \"0002\"\ndate: 2025-02-01\n---\n\n# Bulk update\n",
+		"0002-original.md":  "---\ntitle: Original\nstatus: accepted\ndate: 2025-01-01\n---\n\n# Original\n",
+		"0003-retract.md":   "---\ntitle: Retract\nstatus: accepted\ndate: 2025-03-01\nretracts:\n  - from: \"0001\"\n    edge: supersedes\n    to: \"0002\"\n---\n\n# Retract\n",
+		"0004-unrelated.md": "---\ntitle: Unrelated\nstatus: accepted\ndate: 2025-04-01\n---\n\n# Unrelated\n",
+	})
+	wantText := "retracted\n  supersedes 0001 -> 0002 (by 0003)\n"
+	wantRetraction := brief.Retraction{Edge: config.EdgeSupersedes, From: "0001", To: "0002", By: "0003"}
+
+	for _, id := range []string{"0001", "0002", "0003"} {
+		t.Run("text on "+id, func(t *testing.T) {
+			got := run(t, "context", id, "--dir", dir)
+			assertExit(t, got, 0)
+			if !strings.Contains(got.stdout, wantText) {
+				t.Errorf("context %s = %q, want %q", id, got.stdout, wantText)
+			}
+			if strings.Contains(got.stdout, "retracted: ") {
+				t.Errorf("context %s = %q, want no redundant 'retracted: ' prefix", id, got.stdout)
+			}
+		})
+	}
+
+	t.Run("markdown on 0001", func(t *testing.T) {
+		got := run(t, "context", "0001", "--format", "md", "--dir", dir)
+		assertExit(t, got, 0)
+		for _, want := range []string{"## Retracted", "- supersedes 0001 -> 0002 (by 0003)"} {
+			if !strings.Contains(got.stdout, want) {
+				t.Errorf("context md = %q, want %q", got.stdout, want)
+			}
+		}
+	})
+
+	t.Run("json carries retracted array on involved doc and omits on unrelated doc", func(t *testing.T) {
+		got := run(t, "context", "0001", "--format", "json", "--dir", dir)
+		assertExit(t, got, 0)
+		b := decodeJSON[brief.Brief](t, got.stdout)
+		if len(b.Retracted) != 1 || b.Retracted[0] != wantRetraction {
+			t.Errorf("Retracted = %+v, want [%+v]", b.Retracted, wantRetraction)
+		}
+
+		unrelated := run(t, "context", "0004", "--format", "json", "--dir", dir)
+		assertExit(t, unrelated, 0)
+		bu := decodeJSON[brief.Brief](t, unrelated.stdout)
+		if len(bu.Retracted) != 0 {
+			t.Errorf("unrelated Retracted = %+v, want empty", bu.Retracted)
+		}
+		if strings.Contains(unrelated.stdout, `"retracted"`) {
+			t.Errorf("unrelated json = %q, want retracted omitted", unrelated.stdout)
+		}
+	})
+}

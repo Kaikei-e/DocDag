@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "preset_version": 2,
+  "as_of": "2026-01-01",
+  "edges": {
+    "added": [
+      {
+        "type": "supersedes",
+        "from": "0940",
+        "to": "0877"
+      }
+    ],
+    "removed": [
+      {
+        "type": "depends-on",
+        "from": "0012",
+        "to": "0003"
+      }
+    ]
+  },
+  "status": [
+    {
+      "id": "0877",
+      "path": "docs/ADR/0877-mid.md",
+      "from": "accepted",
+      "to": "superseded"
+    }
+  ],
+  "documents": {
+    "added": [
+      {
+        "id": "0990",
+        "path": "docs/ADR/0990-extra.md",
+        "status": "accepted"
+      }
+    ],
+    "removed": [
+      {
+        "id": "0005",
+        "path": "docs/ADR/0005-gone.md",
+        "status": "accepted"
+      }
+    ]
+  },
+  "binding": {
+    "before": 944,
+    "after": 890,
+    "delta": -54
+  }
+}

@@ -416,12 +416,18 @@ func checkInverseKey(g *model.Graph, cfg config.Config, spec config.EdgeSpec) []
 			fmt.Sprintf("%s does not list %s, which declares %s", spec.Inverse, e.From, spec.Key)))
 	}
 
+	retracted := make(map[edgeKey]bool, len(g.Retractions))
+	for _, r := range g.Retractions {
+		if r.Type == t {
+			retracted[edgeKey{from: r.From, to: r.To, t: t}] = true
+		}
+	}
 	declared := make(map[edgeKey]bool, len(g.Edges))
 	for _, e := range g.EdgesOfType(t) {
 		declared[edgeKey{from: e.From, to: e.To, t: t}] = true
 	}
 	for k := range listed {
-		if declared[k] {
+		if declared[k] || retracted[k] {
 			continue
 		}
 		findings = append(findings, inverseMismatch(g, cfg, spec, k.to, k.from,
@@ -690,7 +696,50 @@ func Check(g *model.Graph, cfg config.Config, asOf time.Time) []model.Finding {
 	findings = append(findings, CheckModalityConflicts(g, cfg, asOf)...)
 	findings = append(findings, CheckExceptsStrict(g, cfg)...)
 	findings = append(findings, CheckSections(g, cfg)...)
+	findings = append(findings, CheckUnmentionedEdges(g, cfg)...)
 	findings = append(findings, CheckUnmanaged(cfg)...)
+	SortFindings(findings)
+	return findings
+}
+
+// CheckUnmentionedEdges reports structured edges declared under an edge key
+// with require_mention set whose target is never referenced in the declaring
+// document's body. Derived edges, inverse mirrors, and unresolved targets are
+// skipped.
+func CheckUnmentionedEdges(g *model.Graph, cfg config.Config) []model.Finding {
+	findings := []model.Finding{}
+	for _, spec := range cfg.Edges {
+		sev, ok := spec.RequireMentionSeverity()
+		if !ok {
+			continue
+		}
+		for _, e := range g.EdgesOfType(model.EdgeType(spec.Name)) {
+			if e.Origin != model.OriginStructured {
+				continue
+			}
+			ownerID := edgeOwner(spec, e)
+			targetID := e.To
+			if spec.Direction == config.DirectionReverse {
+				targetID = e.From
+			}
+			owner, ownerOK := g.Node(ownerID)
+			target, targetOK := g.Node(targetID)
+			if !ownerOK || !targetOK || owner.BodyRefs[targetID] {
+				continue
+			}
+			f := model.Finding{
+				Severity: sev,
+				Rule:     model.RuleUnmentionedEdge,
+				ID:       ownerID,
+				Detail:   fmt.Sprintf("%s target %q is never referenced in the body", spec.Name, targetID),
+				Location: edgeLocation(cfg, owner, e),
+			}
+			if targetID != ownerID {
+				f.Related = []model.Location{target.Location(statusField(cfg))}
+			}
+			findings = append(findings, f)
+		}
+	}
 	SortFindings(findings)
 	return findings
 }

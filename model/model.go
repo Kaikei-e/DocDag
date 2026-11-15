@@ -71,8 +71,10 @@ const (
 	RuleStatusDrift            = "status_drift"
 	RuleSupersededOrphan       = "superseded_orphan"
 	RuleInvalidRef             = "invalid_ref"
+	RuleInvalidRetraction      = "invalid_retraction"
 	RulePaddingMismatch        = "padding_mismatch"
 	RuleDanglingReference      = "dangling_reference"
+	RuleUnmentionedEdge        = "unmentioned_edge"
 	RuleEmptyEdge              = "empty_edge"
 	RuleInverseMismatch        = "inverse_mismatch"
 	RuleCardinality            = "cardinality"
@@ -122,6 +124,9 @@ type Node struct {
 	Attrs    map[string]any `json:"-"`
 	Line     int            `json:"-"`
 	KeyLines map[string]int `json:"-"`
+	// BodyRefs holds the resolved document targets referenced in the body alone,
+	// recorded at graph build time regardless of references.scan and references.dangling.
+	BodyRefs map[ID]bool `json:"-"`
 }
 
 // Location returns where a finding about this document belongs: the line of
@@ -277,13 +282,22 @@ type Summary struct {
 	Cycles    int `json:"cycles"`
 }
 
+// Retraction records an effective edge retraction declared by record By.
+type Retraction struct {
+	From ID
+	To   ID
+	Type EdgeType
+	By   ID
+}
+
 // Graph is the two-layer document graph: typed constraint edges plus the
 // untyped reference layer extracted from document bodies.
 type Graph struct {
-	Nodes    map[ID]*Node
-	Edges    []Edge
-	RefEdges []Edge
-	Findings []Finding
+	Nodes       map[ID]*Node
+	Edges       []Edge
+	RefEdges    []Edge
+	Retractions []Retraction
+	Findings    []Finding
 }
 
 // NewGraph returns an empty graph ready for population.
