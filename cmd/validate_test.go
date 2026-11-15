@@ -1699,3 +1699,208 @@ func TestValidateRetractsCorrectsFrozenRecord(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateTouchingAllHiddenSuppressesAsOf(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"docdag.yaml":              "preset: spec\n",
+		"spec/topics/evidence.md":  "---\ntitle: Evidence\nkind: topic\nid: topic/evidence\ndate: 2026-01-03\n---\n\n# Evidence\n",
+		"spec/pm/pm-0001.md":       "---\ntitle: Incident\nkind: pm\nstatus: published\ndate: 2026-02-14\n---\n\n# Incident\n",
+		"spec/conform/uz-v-001.md": "---\ntitle: Test 001\nkind: conform\nid: conform/uz-v-001\nenforces:\n  - UZ-V-001\ndate: 2026-02-01\ntest: test.sh\n---\n\n# Test 001\n",
+		"spec/clauses/UZ-V-001.md": "---\ntitle: Clean clause\nkind: clause\nmodality: MUST\nstatus: accepted\nabout:\n  - topic/evidence\ncounterexample:\n  - pm-0001\ndate: 2026-01-05\n---\n\n# Clean clause\n",
+		"spec/clauses/UZ-V-002.md": "---\ntitle: Broken clause\nkind: clause\nmodality: MUST\nstatus: accepted\nabout:\n  - topic/evidence\ncounterexample:\n  - pm-0001\ndate: 2026-01-05\n---\n\n# Broken clause\n",
+	})
+	t.Chdir(dir)
+
+	got := run(t, "validate", "--touching", filepath.Join(dir, "spec", "clauses", "UZ-V-001.md"))
+	assertExit(t, got, 1)
+	if got.stdout != "" {
+		t.Errorf("stdout = %q, want empty when every finding is hidden", got.stdout)
+	}
+	if !strings.Contains(got.stderr, "(1 finding hidden)") {
+		t.Errorf("stderr = %q, want hidden finding count", got.stderr)
+	}
+}
+
+func TestValidateIfManaged(t *testing.T) {
+	t.Run("requires --touching", func(t *testing.T) {
+		got := run(t, "validate", "--if-managed")
+		assertExit(t, got, 2)
+		if !strings.Contains(got.stderr, "--touching") {
+			t.Errorf("stderr = %q, want usage message naming --touching", got.stderr)
+		}
+	})
+
+	t.Run("managed file in adr corpus runs validation", func(t *testing.T) {
+		dir := writeDocs(t, map[string]string{
+			"docs/adr/0001-bad.md": "---\ntitle: Bad\nstatus: accepted\nsupersedes:\n  - 0099\ndate: 2025-01-02\n---\n\n# Bad\n",
+		})
+		t.Chdir(dir)
+
+		got := run(t, "validate", "--touching", filepath.Join(dir, "docs", "adr", "0001-bad.md"), "--if-managed")
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0001-bad.md:4: ERROR dangling_ref 0001:"})
+	})
+
+	t.Run("managed file under spec per-kind directory runs validation", func(t *testing.T) {
+		dir := writeDocs(t, map[string]string{
+			"docdag.yaml":              "preset: spec\n",
+			"spec/clauses/UZ-V-001.md": "---\ntitle: Broken clause\nkind: clause\nmodality: MUST\nstatus: accepted\ndate: 2026-01-05\n---\n\n# Broken clause\n",
+		})
+		t.Chdir(dir)
+
+		got := run(t, "validate", "--touching", filepath.Join("spec", "clauses", "UZ-V-001.md"), "--if-managed")
+		assertExit(t, got, 1)
+		if !strings.Contains(got.stdout, "ERROR orphan_must UZ-V-001:") {
+			t.Errorf("stdout = %q, want orphan_must finding for UZ-V-001", got.stdout)
+		}
+	})
+
+	t.Run("user-declared per-kind dir runs validation", func(t *testing.T) {
+		cfg := `kinds:
+  clause:
+    dir: custom/clauses
+    id: '^UZ-[A-Z]-\d{3}$'
+    status_values: [proposed, accepted, superseded]
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+    from: [clause]
+    to: [clause]
+`
+		dir := writeDocs(t, map[string]string{
+			"docdag.yaml":                cfg,
+			"custom/clauses/UZ-V-001.md": "---\ntitle: Broken\nkind: clause\nstatus: accepted\nsupersedes:\n  - UZ-V-999\n---\n\n# Broken\n",
+		})
+		t.Chdir(dir)
+
+		got := run(t, "validate", "--touching", filepath.Join(dir, "custom", "clauses", "UZ-V-001.md"), "--if-managed")
+		assertExit(t, got, 1)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{"UZ-V-001.md:5: ERROR dangling_ref UZ-V-001:"})
+	})
+
+	t.Run("unmanaged markdown exits 0 silently without parsing corpus", func(t *testing.T) {
+		// Unreadable/failing corpus: an empty spec corpus (ErrEmptyCorpus) or
+		// broken clause would fail if parse.Documents ran.
+		for _, tc := range []struct {
+			name   string
+			files  map[string]string
+			target string
+		}{
+			{
+				name: "README outside spec corpus with empty corpus dirs",
+				files: map[string]string{
+					"docdag.yaml": "preset: spec\n",
+					"README.md":   "# Readme\n",
+				},
+				target: "README.md",
+			},
+			{
+				name: "README outside failing spec corpus",
+				files: map[string]string{
+					"docdag.yaml":              "preset: spec\n",
+					"spec/clauses/UZ-V-001.md": "---\ntitle: Broken\nkind: clause\nmodality: MUST\nstatus: accepted\ndate: 2026-01-05\n---\n\n# Broken\n",
+					"README.md":                "# Readme\n",
+				},
+				target: "README.md",
+			},
+			{
+				name: "nested markdown under adr directory is not collected by non-recursive loader",
+				files: map[string]string{
+					"docs/adr/0001-bad.md":     "---\ntitle: Bad\nstatus: accepted\nsupersedes:\n  - 0099\ndate: 2025-01-02\n---\n\n# Bad\n",
+					"docs/adr/sub/0002-sub.md": "---\ntitle: Sub\nstatus: accepted\n---\n\n# Sub\n",
+				},
+				target: filepath.Join("docs", "adr", "sub", "0002-sub.md"),
+			},
+			{
+				name: "non-markdown file inside document directory is not collected",
+				files: map[string]string{
+					"docs/adr/0001-bad.md": "---\ntitle: Bad\nstatus: accepted\nsupersedes:\n  - 0099\ndate: 2025-01-02\n---\n\n# Bad\n",
+					"docs/adr/notes.txt":   "plain text\n",
+				},
+				target: filepath.Join("docs", "adr", "notes.txt"),
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				dir := writeDocs(t, tc.files)
+				t.Chdir(dir)
+
+				got := run(t, "validate", "--touching", tc.target, "--if-managed")
+				assertExit(t, got, 0)
+				if got.stdout != "" || got.stderr != "" {
+					t.Errorf("got stdout=%q stderr=%q, want complete silence", got.stdout, got.stderr)
+				}
+			})
+		}
+	})
+
+	t.Run("no corpus at all exits 0 silently", func(t *testing.T) {
+		dir := writeDocs(t, map[string]string{
+			"README.md": "# No corpus here\n",
+		})
+		t.Chdir(dir)
+
+		got := run(t, "validate", "--touching", filepath.Join(dir, "README.md"), "--if-managed")
+		assertExit(t, got, 0)
+		if got.stdout != "" || got.stderr != "" {
+			t.Errorf("got stdout=%q stderr=%q, want complete silence", got.stdout, got.stderr)
+		}
+	})
+
+	t.Run("broken docdag.yaml still fails", func(t *testing.T) {
+		dir := writeDocs(t, map[string]string{
+			"docdag.yaml": "edges: 3\n",
+			"README.md":   "# Readme\n",
+		})
+		t.Chdir(dir)
+
+		got := run(t, "validate", "--touching", "README.md", "--if-managed")
+		assertExit(t, got, 3)
+		if got.stderr == "" {
+			t.Errorf("stderr is empty, want configuration error")
+		}
+	})
+
+	t.Run("parent directory config, --config, --dir, and paths with spaces", func(t *testing.T) {
+		dir := writeDocs(t, map[string]string{
+			"docdag.yaml":                           "preset: spec\n",
+			"spec/clauses/clause with spaces.md":    "---\ntitle: Broken\nid: UZ-V-001\nkind: clause\nmodality: MUST\nstatus: accepted\ndate: 2026-01-05\n---\n\n# Broken\n",
+			"sub dir/notes.md":                      "# Notes\n",
+			"other dir/0001-bad-decision-record.md": "---\ntitle: Bad\nstatus: accepted\nsupersedes:\n  - 0099\ndate: 2025-01-02\n---\n\n# Bad\n",
+		})
+		t.Chdir(filepath.Join(dir, "sub dir"))
+
+		gotManaged := run(t, "validate",
+			"--config", filepath.Join("..", "docdag.yaml"),
+			"--touching", filepath.Join(dir, "spec", "clauses", "clause with spaces.md"),
+			"--if-managed")
+		assertExit(t, gotManaged, 1)
+		if !strings.Contains(gotManaged.stdout, "ERROR") {
+			t.Errorf("stdout = %q, want validation error for managed file with spaces", gotManaged.stdout)
+		}
+
+		gotUnmanaged := run(t, "validate",
+			"--config", filepath.Join("..", "docdag.yaml"),
+			"--touching", "notes.md",
+			"--if-managed")
+		assertExit(t, gotUnmanaged, 0)
+		if gotUnmanaged.stdout != "" || gotUnmanaged.stderr != "" {
+			t.Errorf("got stdout=%q stderr=%q, want silence", gotUnmanaged.stdout, gotUnmanaged.stderr)
+		}
+
+		adrCfg := filepath.Join(dir, "adr.yaml")
+		if err := os.WriteFile(adrCfg, []byte("preset: adr\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		gotAdrDir := run(t, "validate",
+			"--config", adrCfg,
+			"--dir", filepath.Join(dir, "other dir"),
+			"--touching", filepath.Join(dir, "other dir", "0001-bad-decision-record.md"),
+			"--if-managed")
+		assertExit(t, gotAdrDir, 1)
+		if !strings.Contains(gotAdrDir.stdout, "ERROR dangling_ref") {
+			t.Errorf("stdout = %q, want dangling_ref with --dir override", gotAdrDir.stdout)
+		}
+	})
+}

@@ -359,52 +359,31 @@ func Query(g *model.Graph, id model.ID, opts QueryOptions) ([]QueryResult, error
 }
 
 // Binding reports whether a document is binding on the day asked about: it
-// satisfies the projection the configuration names under binding. A caller
-// asking about many documents wants BindingSet, which evaluates the
-// projections once.
+// satisfies the projection the configuration names under binding, falling back
+// on DefaultBindingProjection when no binding projection is configured. A caller
+// asking about many documents wants BindingSet, which evaluates the projections
+// once.
 func Binding(g *model.Graph, cfg config.Config, id model.ID, asOf time.Time) bool {
-	spec, ok := cfg.BindingProjection()
-	if !ok {
-		return bindingByStatus(g, cfg)[id]
-	}
-	return EvalProjections(g, cfg, asOf).Holds(spec.Name, id)
+	evalCfg, name := withDefaultBinding(cfg)
+	return EvalProjections(g, evalCfg, asOf).Holds(name, id)
 }
 
 // BindingSet lists every document binding on the day asked about, sorted.
 func BindingSet(g *model.Graph, cfg config.Config, asOf time.Time) []model.ID {
-	spec, ok := cfg.BindingProjection()
-	if ok {
-		return EvalProjections(g, cfg, asOf).Set(spec.Name)
-	}
-	held := bindingByStatus(g, cfg)
-	binding := []model.ID{}
-	for _, id := range g.NodeIDs() {
-		if held[id] {
-			binding = append(binding, id)
-		}
-	}
-	return binding
+	evalCfg, name := withDefaultBinding(cfg)
+	return EvalProjections(g, evalCfg, asOf).Set(name)
 }
 
-// bindingByStatus is the binding projection written in code: accepted, and
-// superseded by nothing. It answers for a configuration that resolves no
-// binding projection — one that cleared the preset's with an explicit empty
-// list, or that names none — because a corpus still has a current set, and
-// reporting every document as current would be worse than an opinion. Every
-// preset-derived configuration resolves a projection instead: the merge carries
-// the preset's binding down to it.
-func bindingByStatus(g *model.Graph, cfg config.Config) map[model.ID]bool {
-	superseded := make(map[model.ID]bool)
-	for _, e := range g.EdgesOfType(config.EdgeSupersedes) {
-		superseded[e.To] = true
+// withDefaultBinding returns cfg and its configured binding projection name, or
+// attaches DefaultBindingProjection over the configuration's status field when a
+// configuration cleared its projections or names no binding.
+func withDefaultBinding(cfg config.Config) (config.Config, string) {
+	if spec, ok := cfg.BindingProjection(); ok {
+		return cfg, spec.Name
 	}
-	binding := make(map[model.ID]bool, len(g.Nodes))
-	for id, n := range g.Nodes {
-		if superseded[id] {
-			continue
-		}
-		status, _ := canonicalKindStatus(cfg, n.Kind, n.Status)
-		binding[id] = strings.EqualFold(status, config.StatusAccepted)
-	}
-	return binding
+	spec := config.DefaultBindingProjection(statusField(cfg))
+	fallback := cfg
+	fallback.Projections = []config.ProjectionSpec{spec}
+	fallback.Binding = spec.Name
+	return fallback, spec.Name
 }

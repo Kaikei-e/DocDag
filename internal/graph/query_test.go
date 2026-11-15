@@ -568,26 +568,22 @@ func testDeepChainGraph(n int) *model.Graph {
 }
 
 func TestBindingSetAnswersTheBuiltInDefinition(t *testing.T) {
-	// The binding set moved from code into the ADR preset's projection. The two
-	// have to agree on every corpus the repository carries, or a preset change
-	// nobody asked for went out with it.
+	// A configuration that clears its projections or names no binding falls back
+	// on the exact same definition as the ADR preset's projection on every
+	// corpus the repository carries.
 	cfg := config.ADRPreset()
+	fallback := config.ADRPreset()
+	fallback.Projections = nil
+	fallback.Binding = ""
 	for _, name := range testFixtureNames(t) {
 		t.Run(name, func(t *testing.T) {
 			g, _ := testFixtureGraph(t, name)
 
-			written := bindingByStatus(g, cfg)
-			want := []model.ID{}
+			want := BindingSet(g, cfg, testAsOf)
+			testAssertIDs(t, "BindingSet", BindingSet(g, fallback, testAsOf), want)
 			for _, id := range g.NodeIDs() {
-				if written[id] {
-					want = append(want, id)
-				}
-			}
-
-			testAssertIDs(t, "BindingSet", BindingSet(g, cfg, testAsOf), want)
-			for _, id := range g.NodeIDs() {
-				if got := Binding(g, cfg, id, testAsOf); got != written[id] {
-					t.Fatalf("Binding(%s) = %v, want %v", id, got, written[id])
+				if got, expected := Binding(g, fallback, id, testAsOf), Binding(g, cfg, id, testAsOf); got != expected {
+					t.Fatalf("Binding(%s) = %v, want %v", id, got, expected)
 				}
 			}
 		})
@@ -622,6 +618,45 @@ func TestBindingWithoutABindingProjection(t *testing.T) {
 		testAssertIDs(t, "BindingSet", BindingSet(g, unnamed, testAsOf), testIDs("0002"))
 	})
 
+	t.Run("proposed successor does not un-bind on fallback path", func(t *testing.T) {
+		pg := testGraph(
+			[]*model.Node{
+				testNode("0001", config.StatusAccepted),
+				testNode("0002", config.StatusProposed),
+			},
+			[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			nil,
+		)
+		for _, mode := range []struct {
+			name string
+			cfg  config.Config
+		}{
+			{
+				name: "cleared projections",
+				cfg: func() config.Config {
+					c := config.ADRPreset()
+					c.Projections = []config.ProjectionSpec{}
+					return c
+				}(),
+			},
+			{
+				name: "unnamed binding",
+				cfg: func() config.Config {
+					c := config.ADRPreset()
+					c.Binding = ""
+					return c
+				}(),
+			},
+		} {
+			t.Run(mode.name, func(t *testing.T) {
+				testAssertIDs(t, "BindingSet", BindingSet(pg, mode.cfg, testAsOf), testIDs("0001"))
+				if !Binding(pg, mode.cfg, "0001", testAsOf) || Binding(pg, mode.cfg, "0002", testAsOf) {
+					t.Fatal("Binding disagrees with ADR preset on proposed successor")
+				}
+			})
+		}
+	})
+
 	t.Run("a projection of its own replaces the definition", func(t *testing.T) {
 		own := config.ADRPreset()
 		own.Projections = []config.ProjectionSpec{{
@@ -639,10 +674,10 @@ func TestBindingWithoutABindingProjection(t *testing.T) {
 	})
 }
 
-func TestBindingCountsAnInboundEdgeFromAnUnknownDocument(t *testing.T) {
+func TestBindingIgnoresAnInboundEdgeFromAnUnknownDocument(t *testing.T) {
 	// A "superseded by 0099" status derives an inbound supersedes edge from a
-	// document nobody wrote. The dangling reference is a finding of its own;
-	// what the edge says about this document stands either way.
+	// document nobody wrote. The dangling reference is a finding of its own, and
+	// an unknown successor cannot be accepted or in force, so it does not un-bind 0001.
 	g := testGraph(
 		[]*model.Node{testNode("0001", config.StatusAccepted)},
 		[]model.Edge{testDerivedEdge("0099", "0001", config.EdgeSupersedes)},
@@ -650,12 +685,10 @@ func TestBindingCountsAnInboundEdgeFromAnUnknownDocument(t *testing.T) {
 	)
 	cfg := config.ADRPreset()
 
-	if Binding(g, cfg, "0001", testAsOf) {
-		t.Fatal("Binding = true, want an inbound supersedes from an unknown document to un-bind it")
+	if !Binding(g, cfg, "0001", testAsOf) {
+		t.Fatal("Binding = false, want an inbound supersedes from an unknown document not to un-bind it")
 	}
-	if got := BindingSet(g, cfg, testAsOf); len(got) != 0 {
-		t.Fatalf("BindingSet = %v, want none", got)
-	}
+	testAssertIDs(t, "BindingSet", BindingSet(g, cfg, testAsOf), testIDs("0001"))
 }
 
 func TestResolveAtBindingStatus(t *testing.T) {
@@ -792,5 +825,177 @@ func TestResolveAtBindingStatus(t *testing.T) {
 			t.Fatalf("ResolveAt: %v", err)
 		}
 		testAssertIDs(t, "ResolveAt", atGot, testIDs("000970"))
+	})
+}
+
+func TestBindingSetMatchesResolveWithPendingInvariant(t *testing.T) {
+	periodFromDate := func() config.Config {
+		c := config.ADRPreset()
+		c.Period = &config.PeriodSpec{From: "date"}
+		return c
+	}
+	periodWithExpiry := func() config.Config {
+		c := config.ADRPreset()
+		c.Period = &config.PeriodSpec{From: "date", Until: "expires"}
+		return c
+	}
+	day := func(y int, m time.Month, d int) time.Time {
+		return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+	}
+
+	cases := []struct {
+		name        string
+		cfg         config.Config
+		asOf        time.Time
+		nodes       []*model.Node
+		edges       []model.Edge
+		wantBinding []string
+	}{
+		{
+			name: "accepted superseded by proposed",
+			cfg:  config.ADRPreset(),
+			nodes: []*model.Node{
+				testNode("0001", config.StatusAccepted),
+				testNode("0002", config.StatusProposed),
+			},
+			edges:       []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			wantBinding: []string{"0001"},
+		},
+		{
+			name: "accepted superseded by withdrawn",
+			cfg:  config.ADRPreset(),
+			nodes: []*model.Node{
+				testNode("0001", config.StatusAccepted),
+				testNode("0002", config.StatusWithdrawn),
+			},
+			edges:       []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			wantBinding: []string{"0001"},
+		},
+		{
+			name: "superseded by accepted",
+			cfg:  config.ADRPreset(),
+			nodes: []*model.Node{
+				testNode("0001", config.StatusSuperseded),
+				testNode("0002", config.StatusAccepted),
+			},
+			edges:       []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			wantBinding: []string{"0002"},
+		},
+		{
+			name: "three-link chain",
+			cfg:  config.ADRPreset(),
+			nodes: []*model.Node{
+				testNode("0001", config.StatusSuperseded),
+				testNode("0002", config.StatusSuperseded),
+				testNode("0003", config.StatusAccepted),
+			},
+			edges: []model.Edge{
+				testEdge("0002", "0001", config.EdgeSupersedes),
+				testEdge("0003", "0002", config.EdgeSupersedes),
+			},
+			wantBinding: []string{"0003"},
+		},
+		{
+			name: "drifting chain accepted <- superseded <- accepted",
+			cfg:  config.ADRPreset(),
+			nodes: []*model.Node{
+				testNode("0001", config.StatusAccepted),
+				testNode("0002", config.StatusSuperseded),
+				testNode("0003", config.StatusAccepted),
+			},
+			edges: []model.Edge{
+				testEdge("0002", "0001", config.EdgeSupersedes),
+				testEdge("0003", "0002", config.EdgeSupersedes),
+			},
+			wantBinding: []string{"0003"},
+		},
+		{
+			name: "period: future accepted successor leaves predecessor binding",
+			cfg:  periodFromDate(),
+			asOf: day(2026, time.June, 1),
+			nodes: []*model.Node{
+				testNodeAttrs("0001", config.StatusAccepted, map[string]any{"date": "2026-01-01"}),
+				testNodeAttrs("0002", config.StatusAccepted, map[string]any{"date": "2027-01-01"}),
+			},
+			edges:       []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			wantBinding: []string{"0001"},
+		},
+		{
+			name: "period: same corpus after successor starts",
+			cfg:  periodFromDate(),
+			asOf: day(2027, time.June, 1),
+			nodes: []*model.Node{
+				testNodeAttrs("0001", config.StatusAccepted, map[string]any{"date": "2026-01-01"}),
+				testNodeAttrs("0002", config.StatusAccepted, map[string]any{"date": "2027-01-01"}),
+			},
+			edges:       []model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			wantBinding: []string{"0002"},
+		},
+		{
+			name: "period: expired successor and expired predecessor leave independent doc binding",
+			cfg:  periodWithExpiry(),
+			asOf: day(2026, time.July, 1),
+			nodes: []*model.Node{
+				testNodeAttrs("0001", config.StatusAccepted, map[string]any{"date": "2025-01-01"}),
+				testNodeAttrs("0002", config.StatusAccepted, map[string]any{"date": "2025-01-02"}),
+				testNodeAttrs("0003", config.StatusAccepted, map[string]any{"date": "2025-01-03", "expires": "2026-06-01"}),
+			},
+			edges:       []model.Edge{testEdge("0003", "0001", config.EdgeSupersedes)},
+			wantBinding: []string{"0002"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := testGraph(tc.nodes, tc.edges, nil)
+			binding := BindingSet(g, tc.cfg, tc.asOf)
+			testAssertIDs(t, "BindingSet", binding, testIDs(tc.wantBinding...))
+
+			periods := EvalPeriods(g, tc.cfg, tc.asOf)
+			for _, n := range tc.nodes {
+				inBinding := slices.Contains(binding, n.ID)
+				status, ok := canonicalKindStatus(tc.cfg, n.Kind, n.Status)
+				resolved, _, err := ResolveWithPending(g, tc.cfg, n.ID, config.EdgeSupersedes, tc.asOf)
+				if err != nil {
+					t.Fatalf("ResolveWithPending(%s): %v", n.ID, err)
+				}
+				resolvesToSelf := len(resolved) == 1 && resolved[0] == n.ID
+				want := ok && status == config.StatusAccepted && periods.InForce(n.ID) && resolvesToSelf
+				if inBinding != want {
+					t.Errorf("doc %s (status=%s, inForce=%v): inBinding=%v, want=%v (resolved=%v)",
+						n.ID, n.Status, periods.InForce(n.ID), inBinding, want, resolved)
+				}
+			}
+		})
+	}
+
+	// Known one-hop limit: when an accepted document has an inbound supersedes
+	// edge from a superseded orphan (accepted <- superseded with no successor),
+	// the one-hop projection drops 0001 because 0002 says superseded and the
+	// condition language stays within one hop. Resolve walks past 0002, finds no
+	// binding sink, and answers 0001 with 0002 reported as pending. Validate
+	// already flags this shape under status_drift (0001) and superseded_orphan (0002).
+	t.Run("accepted superseded by superseded orphan diverges across one-hop limit", func(t *testing.T) {
+		cfg := config.ADRPreset()
+		g := testGraph(
+			[]*model.Node{
+				testNode("0001", config.StatusAccepted),
+				testNode("0002", config.StatusSuperseded),
+			},
+			[]model.Edge{testEdge("0002", "0001", config.EdgeSupersedes)},
+			nil,
+		)
+		if got := BindingSet(g, cfg, testAsOf); len(got) != 0 {
+			t.Fatalf("BindingSet = %v, want [] under one-hop projection", got)
+		}
+		resolved, pending, err := ResolveWithPending(g, cfg, "0001", config.EdgeSupersedes, testAsOf)
+		if err != nil {
+			t.Fatalf("ResolveWithPending(0001): %v", err)
+		}
+		testAssertIDs(t, "ResolveWithPending", resolved, testIDs("0001"))
+		wantPending := []PendingSuccessor{{ID: "0002", Predecessor: "0001", Status: config.StatusSuperseded}}
+		if !slices.Equal(pending, wantPending) {
+			t.Fatalf("pending = %+v, want %+v", pending, wantPending)
+		}
 	})
 }

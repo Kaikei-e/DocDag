@@ -22,10 +22,12 @@ command below answers for either.
   name the same node, and output is zero-padded to the configured width. Where a
   kind declares a pattern the identifier is that spelling exactly — `UZ-V-001`,
   never padded or folded.
-- **binding** — the document is `accepted` and nothing supersedes it. This is
-  what "in force right now" means. A `proposed` or `superseded` document is not
-  binding, whatever it says. `docdag.yaml` may name a different projection under
-  `binding:`; the `spec` preset does, adding the day and the clause's strength.
+- **binding** — the document is `accepted`, in force, and no `accepted`,
+  in-force or `superseded` document supersedes it. This is what "in force right
+  now" means. A `proposed`, `withdrawn`, or `superseded` document is not
+  binding, whatever it says, and a `proposed` or `withdrawn` successor does not
+  un-bind an `accepted` one. `docdag.yaml` may name a different projection under
+  `binding:`; the `spec` preset does, adding the clause's strength.
 - **kind** — where `docdag.yaml` declares `kinds:`, the directory a document
   sits in decides what it is and which identity pattern it answers to, so
   `spec/clauses/UZ-V-001.md` is a clause. Single-kind corpora have no kinds.
@@ -146,13 +148,15 @@ prompt each time:
 This plugin also installs a `SessionStart` hook that prints a one- or two-line
 `docdag validate` summary at session start when a corpus is present (or notices
 that `docdag` is not on `PATH`), and a `PostToolUse` hook that runs
-`docdag validate --touching <file>` after every `Edit` or `Write` inside the
-documents directory and reports back when the edit broke an invariant. An edit
-to `docdag.yaml` is linted instead, with `docdag lint`: what breaks when the
-configuration changes is the rules, not the documents. The `PostToolUse` hook
-reads its payload with `jq`; without `jq` or `docdag` on `PATH` it emits a
-non-blocking notice that enforcement is OFF. On unexpected docdag exits, it
-fails closed with exit 2.
+`docdag validate --touching <file> --if-managed` after every `Edit` or `Write`
+on a Markdown file, validating whenever the file sits in any configured or
+discovered document directory (including `preset: spec` and per-kind `dir:`
+directories) and exiting 0 silently otherwise. An edit to `docdag.yaml` is
+linted instead, with `docdag lint`: what breaks when the configuration changes
+is the rules, not the documents. The `PostToolUse` hook reads its payload with
+`jq`; without `jq` or `docdag` on `PATH` (or with an older `docdag` that lacks
+`--if-managed`) it emits a non-blocking notice that enforcement is OFF. On
+unexpected docdag exits, it fails closed with exit 2.
 
 ## Changing docdag.yaml
 

@@ -1,7 +1,8 @@
 #!/bin/sh
-# PostToolUse hook: validate the decision graph after a decision record is
-# edited. Reads the hook payload on stdin, exits 0 for anything that is not a
-# managed document, and exits 2 with the report on stderr so Claude sees it.
+# PostToolUse hook: validate the typed graph after a managed document is
+# edited, or lint docdag.yaml after the configuration is edited. Reads the hook
+# payload on stdin, exits 0 for anything that is not a managed document, and
+# exits 2 with the report on stderr so Claude sees it.
 set -u
 
 root=${CLAUDE_PROJECT_DIR:-$PWD}
@@ -56,40 +57,33 @@ case "$file_path" in
     *) exit 0 ;;
 esac
 
-# The configured documents directory wins; otherwise try the same well-known
-# names discovery does.
-docs_dirs=""
-if [ -f docdag.yaml ]; then
-    configured=$(sed -n 's/^dir:[[:space:]]*//p' docdag.yaml | head -n 1 | sed 's/[[:space:]]*#.*$//' | tr -d "\"'")
-    [ -n "$configured" ] && docs_dirs=$configured
-fi
-if [ -z "$docs_dirs" ]; then
-    docs_dirs="docs/adr doc/adr docs/decisions docs/ADR adr"
-fi
-
-under_docs=0
-for dir in $docs_dirs; do
-    [ -d "$dir" ] || continue
-    absolute=$(cd "$dir" && pwd) || continue
-    case "$file_path" in
-        "$absolute"/*) under_docs=1 ;;
-    esac
-done
-[ "$under_docs" -eq 1 ] || exit 0
-
 if ! command -v docdag >/dev/null 2>&1; then
     echo "docdag hook: docdag is not on PATH, enforcement is OFF" >&2
     exit 0
 fi
 
-report=$(docdag validate --touching "$file_path" 2>"$err_file")
+report=$(docdag validate --touching "$file_path" --if-managed 2>"$err_file")
 status=$?
 case $status in
-    1|2)
+    1)
         # docdag exits on the whole corpus; a failure with nothing to say about
         # this file is somebody else's edit, not this one.
         [ -n "$report" ] || exit 0
         printf '%s\n' "$report" >&2
+        exit 2
+        ;;
+    2)
+        # Older docdag binaries lack --if-managed; warn non-blockingly instead
+        # of breaking every Markdown edit with a usage error.
+        if grep -q 'unknown flag: --if-managed' "$err_file" 2>/dev/null; then
+            echo "docdag hook: docdag does not support --if-managed, enforcement is OFF" >&2
+            exit 0
+        fi
+        if [ -s "$err_file" ]; then
+            cat "$err_file" >&2
+        else
+            echo "docdag hook: docdag exited $status, run docdag validate to see why" >&2
+        fi
         exit 2
         ;;
     0) exit 0 ;;

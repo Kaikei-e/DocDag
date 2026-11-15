@@ -107,11 +107,39 @@ func TestADRPreset(t *testing.T) {
 		if cfg.Binding != ProjectionAcceptedUnsuperseded {
 			t.Errorf("binding = %q, want %q", cfg.Binding, ProjectionAcceptedUnsuperseded)
 		}
-		if spec.When.NotInbound != EdgeSupersedes.String() {
-			t.Errorf("projection not_inbound = %q, want %q", spec.When.NotInbound, EdgeSupersedes)
+		if spec.When.NotInbound != "" {
+			t.Errorf("projection not_inbound = %q, want empty", spec.When.NotInbound)
 		}
-		if got := testDeref(t, "projection attr eq", spec.When.Attr[cfg.StatusField].Eq); got != StatusAccepted {
-			t.Errorf("projection attr eq = %q, want %q", got, StatusAccepted)
+		if got := testDeref(t, "projection attr status eq", spec.When.Attr[cfg.StatusField].Eq); got != StatusAccepted {
+			t.Errorf("projection attr status eq = %q, want %q", got, StatusAccepted)
+		}
+		if got := testDeref(t, "projection attr in_force eq", spec.When.Attr[AttrInForce].Eq); got != ProjectionTrue {
+			t.Errorf("projection attr in_force eq = %q, want %q", got, ProjectionTrue)
+		}
+		if spec.When.Not == nil || len(spec.When.Not.AnyOf) != 2 {
+			t.Fatalf("projection not.any_of = %+v, want two alternatives", spec.When.Not)
+		}
+		alt0, alt1 := spec.When.Not.AnyOf[0].ViaInbound, spec.When.Not.AnyOf[1].ViaInbound
+		if alt0 == nil || alt1 == nil {
+			t.Fatalf("projection not.any_of via_inbound = (%+v, %+v), want non-nil pair", alt0, alt1)
+		}
+		if alt0.Edge != EdgeSupersedes.String() {
+			t.Errorf("alt0 via_inbound.edge = %q, want %q", alt0.Edge, EdgeSupersedes)
+		}
+		if got := testDeref(t, "alt0 attr status eq", alt0.Attr[cfg.StatusField].Eq); got != StatusAccepted {
+			t.Errorf("alt0 attr status eq = %q, want %q", got, StatusAccepted)
+		}
+		if got := testDeref(t, "alt0 attr in_force eq", alt0.Attr[AttrInForce].Eq); got != ProjectionTrue {
+			t.Errorf("alt0 attr in_force eq = %q, want %q", got, ProjectionTrue)
+		}
+		if alt1.Edge != EdgeSupersedes.String() {
+			t.Errorf("alt1 via_inbound.edge = %q, want %q", alt1.Edge, EdgeSupersedes)
+		}
+		if got := testDeref(t, "alt1 attr status eq", alt1.Attr[cfg.StatusField].Eq); got != StatusSuperseded {
+			t.Errorf("alt1 attr status eq = %q, want %q", got, StatusSuperseded)
+		}
+		if len(alt1.Attr) != 1 {
+			t.Errorf("alt1 attr len = %d, want 1", len(alt1.Attr))
 		}
 		if len(spec.AnyOf) != 0 {
 			t.Errorf("projection any_of = %+v, want none", spec.AnyOf)

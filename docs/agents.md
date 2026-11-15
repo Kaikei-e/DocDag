@@ -160,8 +160,10 @@ identifier rules.
 This repository is a Claude Code plugin. It installs a skill teaching the vocabulary above and which
 command answers which question, a `SessionStart` hook that injects a one- or two-line
 `docdag validate` summary at session start, and a `PostToolUse` hook that runs
-`docdag validate --touching` on every Markdown file written inside the documents directory and
-reports back when that document is what broke:
+`docdag validate --touching <file> --if-managed` on every Markdown file edited
+under any configured or discovered document directory (including `preset: spec`
+and per-kind `dir:` directories) and reports back when that document is what
+broke:
 
 ```sh
 claude plugin marketplace add Kaikei-e/DocDag
@@ -181,16 +183,20 @@ prints `docdag validate: <validate's OK summary line>`; exit 1 prints
 `run docdag validate to see the findings`; and any other exit prints
 `docdag validate: exited <N>: <first line of stderr>`.
 
-The `PostToolUse` hook reads what was edited: a Markdown file inside the documents directory is
-validated, and `docdag.yaml` itself is linted — `docdag lint --config <the file that was edited>`
-at layer 1, which reads no documents and costs milliseconds — so a rule that contradicts itself is
-reported in the same turn it was written. The edited file is named explicitly, so a nested
-configuration is linted rather than the project root's. An edit that leaves it unreadable at all
-says so on stderr instead of passing quietly. On unexpected docdag exit codes (such as exit 3 on
-configuration or I/O failure), the hook fails closed with exit code 2 and outputs docdag's stderr.
+The `PostToolUse` hook reads what was edited: a Markdown file is passed to
+`docdag validate --touching <file> --if-managed`, which validates when the file sits directly in a
+configured or discovered document directory (including `preset: spec` and per-kind `dir:`
+directories) and exits 0 silently otherwise; `docdag.yaml` itself is linted — `docdag lint --config
+<the file that was edited>` at layer 1, which reads no documents and costs milliseconds — so a rule
+that contradicts itself is reported in the same turn it was written. The edited file is named
+explicitly, so a nested configuration is linted rather than the project root's. An edit that leaves
+it unreadable at all says so on stderr instead of passing quietly. On unexpected docdag exit codes
+(such as exit 3 on configuration or I/O failure), the hook fails closed with exit code 2 and outputs
+docdag's stderr.
 
-The `PostToolUse` hook needs `docdag` and `jq` on `PATH`. If either tool is missing, it emits a
-non-blocking stderr notice that enforcement is OFF and exits 0. Allow the commands once with
+The `PostToolUse` hook needs `docdag` and `jq` on `PATH`. If either tool is missing (or `docdag`
+predates `--if-managed`), it emits a non-blocking stderr notice that enforcement is OFF and exits
+0. Allow the commands once with
 `"permissions": {"allow": ["Bash(docdag *)"]}` in `.claude/settings.json`:
 
 ```json

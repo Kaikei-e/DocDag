@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `validate --if-managed` (requires `--touching`) resolves the configuration without parsing any document and exits 0 silently when no corpus is discovered or no `--touching` path sits in a resolved document directory, so a caller can hand it any edited Markdown file.
+
+### Changed
+
+- **Breaking change: `adr` preset binding (`accepted_unsuperseded`) agrees with `resolve`.** `query --binding`, `stats`, and `context` now keep an `accepted` record when its `supersedes` successors are only `proposed`, `withdrawn`, or not yet in force (`period:`), and drop any record outside its own `in_force` period, matching `docdag resolve` (ADR 0009). The `adr` preset's `accepted_unsuperseded` projection now requires `status: accepted` and `in_force: "true"` on the record, and `not.any_of` over two `via_inbound` `supersedes` clauses (`status: accepted` with `in_force: "true"`, or `status: superseded`); `ADRPresetVersion` is bumped from `2` to `3`, and configurations without `projections:` or `binding:` now fall back on this same definition. Because `projections:` in `docdag.yaml` replaces the preset's list rather than merging by projection name, corpora restoring the previous `accepted_unsuperseded` definition must declare it under `projections:`:
+
+  ```yaml
+  projections:
+    - name: accepted_unsuperseded
+      when:
+        not_inbound: supersedes
+        attr:
+          status: { eq: accepted }
+  ```
+
+### Fixed
+
+- The Claude Code `PostToolUse` hook (`scripts/docdag-validate.sh`) validated edits only under a top-level `dir:` or the well-known ADR directories, so an edit under `preset: spec` or a per-kind `dir:` was never checked. It now runs `docdag validate --touching <file> --if-managed` and leaves the question of what is a managed document to `docdag`. A `docdag` that predates the flag makes the hook report that enforcement is OFF instead of validating.
+- `validate --touching` no longer prints the `as of <day>` line when the corpus fails and every finding is hidden, so a clean edit in a failing `period:` corpus leaves stdout empty and the hook stays silent about somebody else's failure.
+
 ## [0.7.0] - 2026-11-15
 
 v0.7.0 comes out of an audit of a 1009-record ADR corpus in which every structural check passed

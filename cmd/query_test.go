@@ -576,11 +576,11 @@ func TestQueryWhereFilters(t *testing.T) {
 			{name: "subset_of with comma-separated list", where: []string{"tags=subset_of:security,deprecated"}, want: []string{"0002", "0003"}},
 			{name: "AND of two where flags including same key twice", where: []string{"tags=contains:security", "tags=not_contains:deprecated"}, want: []string{"0002"}},
 			{name: "projection filter", where: []string{"accepted_unsuperseded=eq:true"}, want: []string{"0002", "0003"}},
-			{name: "in_force respects as-of", where: []string{"in_force=eq:true"}, want: []string{"0002"}},
+			{name: "in_force respects as-of", where: []string{"in_force=eq:true"}, want: []string{"0002", "0003"}},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				args := []string{"query", "--binding", "--as-of", "2026-07-01", "--dir", docsDir, "--config", cfgPath}
+				args := []string{"query", "--binding", "--as-of", "2026-05-01", "--dir", docsDir, "--config", cfgPath}
 				for _, w := range tt.where {
 					args = append(args, "--where", w)
 				}
@@ -591,10 +591,10 @@ func TestQueryWhereFilters(t *testing.T) {
 		}
 	})
 
-	t.Run("in_force before expiry", func(t *testing.T) {
-		got := run(t, "query", "--binding", "--as-of", "2026-05-01", "--where", "in_force=eq:true", "--dir", docsDir, "--config", cfgPath)
+	t.Run("in_force after expiry", func(t *testing.T) {
+		got := run(t, "query", "--binding", "--as-of", "2026-07-01", "--where", "in_force=eq:true", "--dir", docsDir, "--config", cfgPath)
 		assertExit(t, got, 0)
-		assertLines(t, "where", lines(got.stdout), []string{"0002", "0003"})
+		assertLines(t, "where", lines(got.stdout), []string{"0002"})
 	})
 
 	t.Run("walk mode with include-refs and colon/equals in value", func(t *testing.T) {
