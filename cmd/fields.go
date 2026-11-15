@@ -90,6 +90,15 @@ func withColumns(g *model.Graph, cfg config.Config, records []render.Record, fie
 	return records
 }
 
+// withAllColumns fills in every configured projection and every declared field
+// for a JSON listing, where every record carries the corpus's full schema
+// regardless of --fields. Projections still win over a frontmatter key of the
+// same name via cfgDeclaresProjection inside withColumns.
+func withAllColumns(g *model.Graph, cfg config.Config, records []render.Record, asOf time.Time) []render.Record {
+	all := append(cfg.ProjectionNames(), cfg.DeclaredFields()...)
+	return withColumns(g, cfg, records, all, asOf)
+}
+
 // cfgDeclaresProjection reports whether a column name is a projection, which
 // wins over a frontmatter key of the same name for the reason the evaluator
 // gives: a derived value must not be taken back by writing the key down.

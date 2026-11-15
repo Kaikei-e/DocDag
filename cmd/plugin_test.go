@@ -72,6 +72,13 @@ func TestPluginMarketplaceListsThePluginAtTheRepositoryRoot(t *testing.T) {
 func TestPluginHookRunsTheScriptAfterAnEditOrAWrite(t *testing.T) {
 	hooks := decodeJSON[struct {
 		Hooks struct {
+			SessionStart []struct {
+				Matcher string `json:"matcher"`
+				Hooks   []struct {
+					Type    string `json:"type"`
+					Command string `json:"command"`
+				} `json:"hooks"`
+			} `json:"SessionStart"`
 			PostToolUse []struct {
 				Matcher string `json:"matcher"`
 				Hooks   []struct {
@@ -81,6 +88,25 @@ func TestPluginHookRunsTheScriptAfterAnEditOrAWrite(t *testing.T) {
 			} `json:"PostToolUse"`
 		} `json:"hooks"`
 	}](t, string(readPluginFile(t, "hooks", "hooks.json")))
+
+	if len(hooks.Hooks.SessionStart) != 1 {
+		t.Fatalf("SessionStart = %+v, want one hook group", hooks.Hooks.SessionStart)
+	}
+	startGroup := hooks.Hooks.SessionStart[0]
+	if startGroup.Matcher != "" {
+		t.Errorf("SessionStart matcher = %q, want empty so every session-start source runs", startGroup.Matcher)
+	}
+	if len(startGroup.Hooks) != 1 || startGroup.Hooks[0].Type != "command" {
+		t.Fatalf("SessionStart hooks = %+v, want one command hook", startGroup.Hooks)
+	}
+	startCmd := startGroup.Hooks[0].Command
+	if !strings.Contains(startCmd, "${CLAUDE_PLUGIN_ROOT}") {
+		t.Errorf("SessionStart command = %q, want it rooted at the plugin directory", startCmd)
+	}
+	startScript := strings.ReplaceAll(strings.ReplaceAll(startCmd, `"${CLAUDE_PLUGIN_ROOT}"`, repoRoot(t)), "/", string(filepath.Separator))
+	if _, err := os.Stat(startScript); err != nil {
+		t.Errorf("SessionStart hook script: %v", err)
+	}
 
 	if len(hooks.Hooks.PostToolUse) != 1 {
 		t.Fatalf("PostToolUse = %+v, want one matcher group", hooks.Hooks.PostToolUse)
@@ -334,4 +360,151 @@ func TestPluginHookMissingNoticeSaysEnforcementOff(t *testing.T) {
 	if !strings.Contains(string(out), "enforcement is OFF") {
 		t.Errorf("output = %q, want it to say enforcement is OFF", out)
 	}
+}
+
+func buildTestDocdag(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go toolchain is not on PATH")
+	}
+	bin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(bin, 0o750); err != nil {
+		t.Fatalf("mkdir %s: %v", bin, err)
+	}
+	binary := filepath.Join(bin, "docdag")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	build := exec.Command("go", "build", "-o", binary, "./docdag")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build docdag: %v (output %q)", err, out)
+	}
+	return bin
+}
+
+func TestPluginSessionStartHookBehaviours(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the hook is a POSIX shell script")
+	}
+	script := filepath.Join(repoRoot(t), "scripts", "docdag-session-start.sh")
+	if info, err := os.Stat(script); err != nil {
+		t.Fatalf("hook script: %v", err)
+	} else if info.Mode().Perm()&0o100 == 0 {
+		t.Errorf("hook script mode = %v, want it executable", info.Mode().Perm())
+	}
+
+	t.Run("silent when project has no corpus", func(t *testing.T) {
+		project := t.TempDir()
+		cmd := exec.Command("sh", script)
+		cmd.Dir = project
+		cmd.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+project)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("hook failed: %v (output %q)", err, out)
+		}
+		if len(out) != 0 {
+			t.Errorf("output = %q, want silence without a corpus", out)
+		}
+	})
+
+	t.Run("missing docdag prints enforcement OFF notice to stdout", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			init func(t *testing.T, dir string)
+		}{
+			{
+				name: "docs/adr directory",
+				init: func(t *testing.T, dir string) {
+					if err := os.MkdirAll(filepath.Join(dir, "docs", "adr"), 0o750); err != nil {
+						t.Fatal(err)
+					}
+				},
+			},
+			{
+				name: "root docdag.yaml",
+				init: func(t *testing.T, dir string) {
+					if err := os.WriteFile(filepath.Join(dir, "docdag.yaml"), []byte("dir: decisions\n"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				project := t.TempDir()
+				tc.init(t, project)
+				cmd := exec.Command("sh", script)
+				cmd.Dir = project
+				cmd.Env = []string{"CLAUDE_PROJECT_DIR=" + project, "PATH=/nonexistent"}
+				var stdout, stderr strings.Builder
+				cmd.Stdout = &stdout
+				cmd.Stderr = &stderr
+				if err := cmd.Run(); err != nil {
+					t.Fatalf("hook failed: %v (stderr=%q)", err, stderr.String())
+				}
+				if stderr.Len() != 0 {
+					t.Errorf("stderr = %q, want empty", stderr.String())
+				}
+				if stdout.String() != "docdag: not on PATH, enforcement is OFF\n" {
+					t.Errorf("stdout = %q, want exact notice line", stdout.String())
+				}
+			})
+		}
+	})
+
+	bin := buildTestDocdag(t)
+	envWithBin := func(project string) []string {
+		return append(os.Environ(), "CLAUDE_PROJECT_DIR="+project, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	}
+
+	t.Run("passing corpus prints one summary line", func(t *testing.T) {
+		project := writeDocs(t, map[string]string{
+			"docs/adr/0001-first.md": "---\ntitle: First\nstatus: accepted\ndate: 2025-01-01\n---\n\n# First\n",
+		})
+		cmd := exec.Command("sh", script)
+		cmd.Dir = project
+		cmd.Env = envWithBin(project)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("hook failed: %v", err)
+		}
+		assertLines(t, "session-start passing", lines(string(out)), []string{
+			"docdag validate: OK: 1 docs, 0 typed edges, no cycles",
+		})
+	})
+
+	t.Run("failing corpus prints summary and follow-up line and exits 0", func(t *testing.T) {
+		project := writeDocs(t, map[string]string{
+			"docs/adr/0001-first.md":  "---\ntitle: First\nstatus: accepted\ndate: 2025-01-01\n---\n\n# First\n",
+			"docs/adr/0002-second.md": "---\ntitle: Second\nstatus: accepted\nsupersedes:\n  - 0001\ndate: 2025-01-02\n---\n\n# Second\n",
+		})
+		cmd := exec.Command("sh", script)
+		cmd.Dir = project
+		cmd.Env = envWithBin(project)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("hook failed: %v", err)
+		}
+		assertLines(t, "session-start failing", lines(string(out)), []string{
+			"docdag validate: FAILED: 1 error",
+			"run docdag validate to see the findings",
+		})
+	})
+
+	t.Run("unexpected exit prints exited N and first line of stderr and exits 0", func(t *testing.T) {
+		project := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(project, "docs", "adr"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", script)
+		cmd.Dir = project
+		cmd.Env = envWithBin(project)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("hook failed: %v", err)
+		}
+		got := lines(string(out))
+		if len(got) != 1 || !strings.HasPrefix(got[0], "docdag validate: exited 3: ") {
+			t.Errorf("stdout lines = %q, want one 'docdag validate: exited 3: ...' line", got)
+		}
+	})
 }

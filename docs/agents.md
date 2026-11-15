@@ -61,14 +61,24 @@ suppressed
 `resolve` and `query` take `--fields id,title,status,path` and print those columns, tab
 separated, in the order asked for; the default is `id` alone, so a pipeline reading identifiers is
 unaffected. A projection the configuration declares is a column too, printed as `true` or `false`,
-and so is a key it declares under `fields:`, printed as the document writes it and as `-` where the
-document writes nothing — see [configuration.md](configuration.md). Under `--format json` these
-commands answer with an array of objects carrying every field, plus `"reference": true` on a
-reference-layer hit — where v0.1 answered with an array of identifiers.
+and so is a key it declares under `fields:`, printed as the document writes it (scalar as a string,
+list items joined with `,` and no spaces, and `-` where the document writes nothing or a mapping) —
+see [configuration.md](configuration.md). Under `--format json` these commands answer with an array
+of objects carrying every configured projection under `projections` (`"true"` or `"false"`) and every
+declared field under `fields` (string, array of strings, or `null` when unwritten or a mapping;
+omitted when none are configured), whatever `--fields` says (`--fields` is still validated), plus
+`"reference": true` on a reference-layer hit — where v0.1 answered with an array of identifiers.
 
 `query --binding` has a default column set of its own: the identifier, and the `modality` beside it
 where the configuration declares one, because a set that spans the modalities cannot be read without
 it. Naming `--fields` replaces that default like any other.
+
+`query` also takes `--where <key>=<op>:<value>` (repeatable, ANDed) to filter results after the
+walk or binding set is computed, preserving order (including `--include-refs` hits). The operators
+are the rule `when: attr:` vocabulary — `eq`, `not`, `contains`, `not_contains`, `subset_of`
+(comma-separated list) — with identical case-insensitive, scalar-as-list, projection-shadowing,
+and `--as-of` semantics. Allowed keys are the configured status field, declared fields, configured
+projections, and `in_force`.
 
 ```console
 $ docdag query --binding --fields id,title,status
@@ -145,9 +155,10 @@ identifier rules.
 ## The plugin
 
 This repository is a Claude Code plugin. It installs a skill teaching the vocabulary above and which
-command answers which question, plus a `PostToolUse` hook that runs `docdag validate --touching` on
-every Markdown file written inside the documents directory and reports back when that document is
-what broke:
+command answers which question, a `SessionStart` hook that injects a one- or two-line
+`docdag validate` summary at session start, and a `PostToolUse` hook that runs
+`docdag validate --touching` on every Markdown file written inside the documents directory and
+reports back when that document is what broke:
 
 ```sh
 claude plugin marketplace add Kaikei-e/DocDag
@@ -158,17 +169,26 @@ Inside a session the same two steps are `/plugin marketplace add Kaikei-e/DocDag
 `/plugin install docdag@docdag`, entered as separate prompts: pasted together, they arrive as one
 command and the marketplace source is rejected.
 
-The hook reads what was edited: a Markdown file inside the documents directory is validated, and
-`docdag.yaml` itself is linted — `docdag lint --config <the file that was edited>` at layer 1, which
-reads no documents and costs milliseconds — so a rule that contradicts itself is reported in the same
-turn it was written. The edited file is named explicitly, so a nested configuration is linted rather
-than the project root's. An edit that leaves it unreadable at all says so on stderr instead of
-passing quietly. On unexpected docdag exit codes (such as exit 3 on configuration or I/O failure),
-the hook fails closed with exit code 2 and outputs docdag's stderr.
+The `SessionStart` hook (`scripts/docdag-session-start.sh`, no matcher) stays silent when the project
+has neither a root `docdag.yaml` nor a well-known documents directory (`docs/adr`, `doc/adr`,
+`docs/decisions`, `docs/ADR`, `adr`). When a corpus is present, it prints at most two lines to
+stdout and always exits 0: `docdag: not on PATH, enforcement is OFF` if `docdag` is missing; exit 0
+prints `docdag validate: <validate's OK summary line>`; exit 1 prints
+`docdag validate: FAILED: <N> error(s)[, <M> warning(s)]` and then
+`run docdag validate to see the findings`; and any other exit prints
+`docdag validate: exited <N>: <first line of stderr>`.
 
-The hook needs `docdag` and `jq` on `PATH`. If either tool is missing, it emits a non-blocking stderr
-notice that enforcement is OFF and exits 0. Allow the commands once
-with `"permissions": {"allow": ["Bash(docdag *)"]}` in `.claude/settings.json`:
+The `PostToolUse` hook reads what was edited: a Markdown file inside the documents directory is
+validated, and `docdag.yaml` itself is linted — `docdag lint --config <the file that was edited>`
+at layer 1, which reads no documents and costs milliseconds — so a rule that contradicts itself is
+reported in the same turn it was written. The edited file is named explicitly, so a nested
+configuration is linted rather than the project root's. An edit that leaves it unreadable at all
+says so on stderr instead of passing quietly. On unexpected docdag exit codes (such as exit 3 on
+configuration or I/O failure), the hook fails closed with exit code 2 and outputs docdag's stderr.
+
+The `PostToolUse` hook needs `docdag` and `jq` on `PATH`. If either tool is missing, it emits a
+non-blocking stderr notice that enforcement is OFF and exits 0. Allow the commands once with
+`"permissions": {"allow": ["Bash(docdag *)"]}` in `.claude/settings.json`:
 
 ```json
 {

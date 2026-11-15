@@ -22,9 +22,12 @@ const (
 var FieldNames = []string{FieldID, FieldTitle, FieldStatus, FieldPath}
 
 // Record is one document in a listing. Reference marks a hit reached through
-// the reference layer rather than a typed edge. Projections carries the derived
-// columns a listing was asked for and Fields the frontmatter ones the
-// configuration declares; both are empty unless a column asked for them.
+// the reference layer rather than a typed edge. Projections carries the
+// configured derived columns ("true"/"false") and Fields carries the declared
+// frontmatter columns (string for a scalar, []string for a list, or nil when
+// unwritten or a mapping). In text listings both hold the requested columns; in
+// JSON listings both carry every configured projection and declared field, and
+// each is omitted when the configuration declares none.
 type Record struct {
 	ID          model.ID          `json:"id"`
 	Title       string            `json:"title"`
@@ -32,7 +35,7 @@ type Record struct {
 	Path        string            `json:"path"`
 	Reference   bool              `json:"reference,omitempty"`
 	Projections map[string]string `json:"projections,omitempty"`
-	Fields      map[string]string `json:"fields,omitempty"`
+	Fields      map[string]any    `json:"fields,omitempty"`
 }
 
 // noField is what a column stands in with where the document writes nothing: a
@@ -55,9 +58,23 @@ func (r Record) field(name string) string {
 		return value
 	}
 	if value, ok := r.Fields[name]; ok {
-		return value
+		return formatField(value)
 	}
 	return r.ID.String()
+}
+
+func formatField(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case []string:
+		if len(v) == 0 {
+			return noField
+		}
+		return strings.Join(v, ",")
+	default:
+		return noField
+	}
 }
 
 // Records describes documents by identifier.
@@ -106,19 +123,20 @@ func WithProjections(records []Record, names []string, projections graph.Project
 }
 
 // WithFields fills the named frontmatter columns into a listing, in place, and
-// returns it. A key the document does not write, or writes as a list, has no
-// scalar to show and reads as the placeholder: the column is about what one
-// document says under one key.
+// returns it. A scalar is stored as a string, a list as its scalar items
+// ([]string, rendered comma-joined without spaces in text or "-" when empty),
+// and a key that is not written or is written as a mapping as nil (rendered as
+// "-" in text and null in JSON).
 func WithFields(records []Record, names []string, g *model.Graph) []Record {
 	if len(names) == 0 {
 		return records
 	}
 	for i := range records {
-		values := make(map[string]string, len(names))
+		values := make(map[string]any, len(names))
 		for _, name := range names {
-			values[name] = noField
+			values[name] = nil
 			if n, ok := g.Node(records[i].ID); ok {
-				if value, written := n.Attr(name); written {
+				if value, written := n.AttrValue(name); written {
 					values[name] = value
 				}
 			}

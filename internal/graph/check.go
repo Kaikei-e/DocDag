@@ -948,6 +948,32 @@ func MatchCondition(g *model.Graph, cfg config.Config, cond config.Condition, id
 	return newEvalContext(g, cfg, asOf).match(cond, id)
 }
 
+// AttrFilter pairs an attribute key with a rule-vocabulary condition to
+// evaluate against a document.
+type AttrFilter struct {
+	Key  string
+	Want config.AttrCondition
+}
+
+// MatchAttrs returns a predicate that reports whether a document satisfies every
+// attribute filter, reusing one evaluation context (periods, edges, projections)
+// across all documents checked.
+func MatchAttrs(g *model.Graph, cfg config.Config, filters []AttrFilter, asOf time.Time) func(model.ID) bool {
+	ctx := newEvalContext(g, cfg, asOf)
+	return func(id model.ID) bool {
+		n, ok := ctx.g.Nodes[id]
+		if !ok {
+			return false
+		}
+		for _, f := range filters {
+			if !ctx.matchAttr(n, f.Key, f.Want) {
+				return false
+			}
+		}
+		return true
+	}
+}
+
 // EvalRule evaluates one declarative rule over every node.
 func EvalRule(g *model.Graph, cfg config.Config, rule config.Rule, asOf time.Time) []model.Finding {
 	return evalRule(g, cfg, newEvalContext(g, cfg, asOf), rule)

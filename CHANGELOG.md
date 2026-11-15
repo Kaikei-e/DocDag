@@ -4,10 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-11-15
+
+v0.6.0 makes the fields a corpus declares readable from the command line. A harness asking which
+binding records name a given service could not get the answer from DocDag. A list-valued field
+printed as `-` under `--fields`, and `--format json` left declared fields and projections out unless
+`--fields` named them. Both now report what the document writes. `query --where` narrows a listing
+with the attribute vocabulary rules already use, so the question takes one command and no
+frontmatter parser on the caller's side. The Claude Code plugin also gains a `SessionStart` hook
+that puts the `validate` result into the session. The shape of the JSON `fields` object is the one
+change a consumer may have to act on; see Changed. There are no new dependencies.
+
+### Added
+
+- `query --where <key>=<op>:<value>` filters a walk or the binding set by a frontmatter attribute or a projection. The operators are the `when: attr:` vocabulary: `eq`, `not`, `contains`, `not_contains`, and `subset_of` with a comma-separated list. They are evaluated by the matcher rules use. Matching is case-insensitive, a scalar reads as a one-element list, a negative operator holds where the key is absent, and `--as-of` applies. The flag repeats and its clauses are ANDed. The allowed keys are the status field, the declared fields, the projections and `in_force`. Any other key, or an expression not of the form `key=op:value`, exits 2.
+- A Claude Code `SessionStart` hook (`scripts/docdag-session-start.sh`) prints at most two lines when a session starts. It prints `docdag validate: OK: …`, or `docdag validate: FAILED: N errors` and a pointer to the full report, or the exit code and the first line of stderr when validate could not run. It is silent in a project with no `docdag.yaml` and none of the well-known documents directories, and says enforcement is OFF when `docdag` is not on `PATH`.
+
+### Changed
+
+- Under `--format json`, `query` and `resolve` put every declared field under `fields` and every projection under `projections` on every record, whatever `--fields` names. `--fields` still rejects an unknown name, but it now selects text columns only. A `fields` value is a string for a scalar, an array of strings for a list, and `null` for a key the document does not write or writes as a mapping. Before, a field `--fields` did not name was missing, and a named one read `"-"` where the document wrote nothing or wrote a list. A consumer that compared a `fields` value with `"-"` should test for `null` instead.
 
 ### Fixed
 
+- `--fields` on `query` and `resolve` printed a list-valued declared field as `-` instead of its items, which docs/agents.md promised. The items are now joined with `,` (`alt-backend,alt-notifier`), and an empty list prints `-`.
 - `docdag context` text and Markdown output now reads `1 entry without an excerpt` instead of `1 entries without an excerpt` when the budget drops a single excerpt.
 
 ## [0.5.0] - 2026-09-27
@@ -502,7 +521,7 @@ unless the flag is given.
 
 First release. See the [GitHub release](https://github.com/Kaikei-e/DocDag/releases/tag/v0.1.0).
 
-[Unreleased]: https://github.com/Kaikei-e/DocDag/compare/v0.5.0...HEAD
+[0.6.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.5.0
 [0.4.1]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.4.1
 [0.4.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.4.0

@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -116,6 +117,39 @@ func TestNodeAttrList(t *testing.T) {
 			}
 			if !slices.Equal(got, tt.want) {
 				t.Errorf("AttrList(%q) = %q, want %q", tt.key, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNodeAttrValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		attrs map[string]any
+		key   string
+		want  any
+		ok    bool
+	}{
+		{name: "a scalar string", attrs: map[string]any{"status": "accepted"}, key: "status", want: "accepted", ok: true},
+		{name: "an integer scalar stringifies", attrs: map[string]any{"rev": 7}, key: "rev", want: "7", ok: true},
+		{name: "a list keeps scalar items", attrs: map[string]any{"tags": []any{"a", 2, []any{"nested"}}}, key: "tags", want: []string{"a", "2"}, ok: true},
+		{name: "an empty list is a non-nil slice", attrs: map[string]any{"tags": []any{}}, key: "tags", want: []string{}, ok: true},
+		{name: "a mapping is absent", attrs: map[string]any{"meta": map[string]any{"k": "v"}}, key: "meta"},
+		{name: "null is absent", attrs: map[string]any{"tags": nil}, key: "tags"},
+		{name: "missing key is absent", attrs: map[string]any{"status": "accepted"}, key: "tags"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			n := &Node{ID: "0001", Attrs: tt.attrs}
+
+			got, ok := n.AttrValue(tt.key)
+
+			if ok != tt.ok {
+				t.Fatalf("ok = %v, want %v", ok, tt.ok)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("AttrValue(%q) = %#v, want %#v", tt.key, got, tt.want)
 			}
 		})
 	}
