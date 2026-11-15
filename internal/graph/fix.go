@@ -43,6 +43,10 @@ func suggestion(f model.Finding, g *model.Graph, cfg config.Config, asOf time.Ti
 	switch f.Rule {
 	case model.RuleDanglingRef, model.RuleDanglingReference:
 		return didYouMean(g, f.Detail, f.ID)
+	case model.RuleUnmentionedEdge:
+		if match := quotedRef.FindStringSubmatch(f.Detail); match != nil {
+			return fmt.Sprintf("cite [[%s]] or link to it in the body", match[1])
+		}
 	case model.RuleStatusDrift:
 		return fmt.Sprintf("set %s: %s in %s", field, value, f.Location.Path)
 	case model.RuleSupersededOrphan:

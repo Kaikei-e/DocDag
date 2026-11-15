@@ -4,6 +4,54 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-15
+
+v0.7.0 comes out of an audit of a 1009-record ADR corpus in which every structural check passed
+and the graph was still wrong: a bulk edit had added `supersedes` entries to an accepted record,
+two of them to unrelated records still in force, which then dropped out of the binding set, and
+under `--immutable-since` nothing could put them back. The release adds a way to correct a frozen
+record with a record (`retracts:`), a way to see such a change before it merges
+(`docdag diff <rev>`, with the binding-set delta), two opt-in edge options (`appendable` and
+`require_mention`), and list-typed declared fields. It is a breaking release in two places: the
+`adr` preset's `status_drift` now waits for an accepted successor (preset revision 2), and
+`retracts` is a reserved frontmatter key; see Changed. There are no new dependencies.
+
+### Added
+
+- Built-in `retracts:` frontmatter key lets a record withdraw an existing typed edge (`from`, `edge`, `to`) without editing frozen records. Retractions take effect once the declaring record has status `accepted` or `superseded`, remove both structured and derived edges from the built graph, exempt retracted pairs from `inverse_mismatch`, and appear on involved documents in `docdag context` (an unprefixed `retracted` group in text and `## Retracted` in Markdown with `<edge> <from> -> <to> (by <by>)` lines, and a `retracted` array of `{"edge", "from", "to", "by"}` objects in JSON).
+- New structural rule `invalid_retraction` (error by default; configurable under `structural:`) checks every `retracts:` entry regardless of the declaring record's status, reporting non-list `retracts:` values, malformed entries, unknown edges, unresolved endpoints, and non-existent target edges.
+- `docdag diff <rev>` compares the typed graph built at `<rev>` against the working tree (or `--at <rev>`) under the current configuration, reporting typed edges added and removed (including edges voided by effective `retracts:` entries), status transitions on shared documents, documents added and removed with their status, and the binding-set delta under `--as-of` (defaulting to today). It supports `--format text|json|github` and exits `0` whenever the comparison completes, or `3` with the same diagnostics as `query --at` when git or either corpus fails.
+- Declared `edges:` entries now support `appendable: true` (default `false`; unset in built-in presets), letting frozen documents under `--immutable-since` add that frontmatter key or append new entries to it while still rejecting removals or attribute edits.
+- Declared `edges:` entries now support `require_mention: warn | error` (disabled when omitted), reporting `unmentioned_edge` when an edge target declared in frontmatter is not referenced in the declaring document's body.
+- Declared `fields:` entries now support `type: list` alongside the default `scalar`, `min_items: N` on list fields (`missing_field` when a written list holds fewer than `N` items), and `one_of:` per item on list fields (`unknown_field_value` per offending item). Writing a YAML mapping under a list field reports `missing_field`.
+
+### Changed
+
+- **Breaking change: `adr` preset `status_drift` waits for an agreed successor.** The `adr` preset rule `status_drift` now requires an `accepted` or `superseded` successor (`via_inbound` over `supersedes`), so a `proposed` or `withdrawn` successor no longer triggers `status_drift` on its predecessor, aligning `validate` with `resolve` (ADR 0009). `ADRPresetVersion` is bumped from `1` to `2`, and `status_field:` overrides now retarget `via`, `via_inbound`, `any_of`, and `not` rule clauses as well. Because `rules:` in `docdag.yaml` replaces the preset's rule list rather than merging by rule name, corpora restoring the previous `status_drift` behaviour must declare both `adr` rules:
+
+  ```yaml
+  rules:
+    - name: status_drift
+      severity: error
+      when: {inbound: supersedes, attr: {status: {not: superseded}}}
+      message: "has inbound supersedes but status is not superseded"
+    - name: superseded_orphan
+      severity: warn
+      when: {not_inbound: supersedes, attr: {status: {eq: superseded}}}
+      message: "status is superseded but no document supersedes it"
+  ```
+
+- **Breaking change: `retracts` is a reserved frontmatter key.** Configurations declaring an edge `key`, `inverse`, or `fields:` entry named `retracts` are rejected at load, and closed kinds accept `retracts` without triggering `unknown_field`. Any configuration declaring a custom `key`, `inverse`, or field named `retracts` must rename it.
+
+### Fixed
+
+- A `required: true` scalar field holding a YAML list or mapping now reports a shape-specific `missing_field` message (`frontmatter key "<name>" is declared as a scalar but holds a list; declare it with type: list`, or `holds a mapping`) on the key's own line rather than claiming the key is absent.
+
+### Migrating
+
+1. **Review `status_drift` expectations on `adr` corpora:** Under preset revision 2, a `proposed` or `withdrawn` successor no longer raises `status_drift` on its predecessor. To restore the previous behaviour, declare both `status_drift` and `superseded_orphan` under `rules:` in `docdag.yaml` as shown under `Changed`.
+2. **Rename any custom `retracts` configuration key:** Because `retracts` is now a reserved built-in frontmatter key, rename any `edges:` `key` or `inverse`, or any `fields:` entry, named `retracts` in `docdag.yaml` and update existing frontmatter to match.
+
 ## [0.6.0] - 2026-11-15
 
 v0.6.0 makes the fields a corpus declares readable from the command line. A harness asking which
@@ -521,6 +569,7 @@ unless the flag is given.
 
 First release. See the [GitHub release](https://github.com/Kaikei-e/DocDag/releases/tag/v0.1.0).
 
+[0.7.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.5.0
 [0.4.1]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.4.1

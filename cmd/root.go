@@ -232,7 +232,7 @@ func newRootCmd() *cobra.Command {
 	root.CompletionOptions.DisableDefaultCmd = true
 	root.PersistentFlags().String(flagDir, "", "documents directory (overrides config and discovery)")
 	root.PersistentFlags().String(flagConfig, "", "path to docdag.yaml")
-	root.PersistentFlags().String(flagFormat, formatText, "output format: text|json, plus github|rdjson on validate and lint, and md on context")
+	root.PersistentFlags().String(flagFormat, formatText, "output format: text|json, plus github on diff, github|rdjson on validate and lint, and md on context")
 	root.AddCommand(
 		newValidateCmd(),
 		newLintCmd(),
@@ -241,6 +241,7 @@ func newRootCmd() *cobra.Command {
 		newContextCmd(),
 		newExportCmd(),
 		newStatsCmd(),
+		newDiffCmd(),
 		newNewCmd(),
 	)
 	return root

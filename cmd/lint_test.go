@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/Kaikei-e/DocDag/config"
 )
 
 // lintCorpus writes a configuration file and a two-document corpus, and returns
@@ -142,7 +144,7 @@ func TestLintShippedFixtures(t *testing.T) {
 }
 
 func TestLintFormats(t *testing.T) {
-	config, docs := lintCorpus(t, `preset: adr
+	cfgPath, docs := lintCorpus(t, `preset: adr
 rules:
   - name: everything
     severity: warn
@@ -151,7 +153,7 @@ rules:
 `)
 
 	t.Run("json is a report of its own kind", func(t *testing.T) {
-		got := run(t, "lint", "--format", "json", "--config", config, "--dir", docs)
+		got := run(t, "lint", "--format", "json", "--config", cfgPath, "--dir", docs)
 
 		assertExit(t, got, 2)
 		var report struct {
@@ -183,8 +185,8 @@ rules:
 		if report.SchemaVersion != 1 {
 			t.Errorf("schema_version = %d, want 1", report.SchemaVersion)
 		}
-		if report.PresetVersion != 1 {
-			t.Errorf("preset_version = %d, want the revision the corpus is written against", report.PresetVersion)
+		if report.PresetVersion != config.ADRPresetVersion {
+			t.Errorf("preset_version = %d, want %d", report.PresetVersion, config.ADRPresetVersion)
 		}
 		if len(report.Findings) != 1 || report.Findings[0].Rule != "tautological_rule" {
 			t.Fatalf("findings = %+v, want the one tautological rule", report.Findings)
@@ -202,7 +204,7 @@ rules:
 	})
 
 	t.Run("github writes one annotation per finding", func(t *testing.T) {
-		got := run(t, "lint", "--format", "github", "--config", config, "--dir", docs)
+		got := run(t, "lint", "--format", "github", "--config", cfgPath, "--dir", docs)
 
 		assertExit(t, got, 2)
 		if !strings.Contains(got.stdout, "::warning file=") || !strings.Contains(got.stdout, "title=tautological_rule::") {
@@ -211,7 +213,7 @@ rules:
 	})
 
 	t.Run("rdjson writes a diagnostic result", func(t *testing.T) {
-		got := run(t, "lint", "--format", "rdjson", "--config", config, "--dir", docs)
+		got := run(t, "lint", "--format", "rdjson", "--config", cfgPath, "--dir", docs)
 
 		assertExit(t, got, 2)
 		var result struct {
@@ -238,7 +240,7 @@ rules:
 	})
 
 	t.Run("an unknown format is a usage error", func(t *testing.T) {
-		assertExit(t, run(t, "lint", "--format", "mermaid", "--config", config, "--dir", docs), 2)
+		assertExit(t, run(t, "lint", "--format", "mermaid", "--config", cfgPath, "--dir", docs), 2)
 	})
 }
 

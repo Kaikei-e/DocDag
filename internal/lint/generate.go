@@ -436,6 +436,8 @@ func (b *builder) neighbour(doc *fixtureDoc, l literal) {
 				continue
 			}
 			peer.todo = append(peer.todo, fmt.Sprintf("write a %s that is not %s", key, *want.Not))
+		case len(want.SubsetOf) > 0:
+			b.write(peer, key, want.SubsetOf[0])
 		default:
 			peer.todo = append(peer.todo, "answer the "+l.key+" clause: "+l.value)
 		}
@@ -512,11 +514,19 @@ func (b *builder) complete() {
 			if _, written := generated.attrs[name]; written || !spec.Required || spec.Deprecated {
 				continue
 			}
+			value := "fixture"
 			if len(spec.OneOf) > 0 {
-				generated.attrs[name] = spec.OneOf[0]
+				value = spec.OneOf[0]
+			}
+			if spec.FieldType() == config.FieldTypeList {
+				if _, listed := generated.lists[name]; listed {
+					continue
+				}
+				count := max(spec.MinItems, 1)
+				generated.lists[name] = slices.Repeat([]string{value}, count)
 				continue
 			}
-			generated.attrs[name] = "fixture"
+			generated.attrs[name] = value
 		}
 	}
 }

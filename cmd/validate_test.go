@@ -982,12 +982,12 @@ func TestValidateRDJSONReportsAnEmptyCorpusAsAnEmptyDiagnosticList(t *testing.T)
 
 func TestTheReportFormatsBelongToValidateAlone(t *testing.T) {
 	okBasic := fixture(t, "ok-basic")
-	for _, format := range []string{"github", "rdjson"} {
-		for _, args := range [][]string{
-			{"resolve", "0001"},
-			{"query", "--binding"},
-			{"stats"},
-		} {
+	cases := map[string][][]string{
+		"github": {{"resolve", "0001"}, {"query", "--binding"}, {"stats"}},
+		"rdjson": {{"resolve", "0001"}, {"query", "--binding"}, {"stats"}, {"diff", "HEAD"}},
+	}
+	for format, cmds := range cases {
+		for _, args := range cmds {
 			t.Run(format+" "+args[0], func(t *testing.T) {
 				got := run(t, append(append([]string{}, args...), "--format", format, "--dir", okBasic)...)
 
@@ -1306,7 +1306,7 @@ func TestValidateAMultiKindCorpus(t *testing.T) {
 	assertExit(t, got, 1)
 	assertLines(t, "findings", findingLines(got.stdout), []string{
 		`README.md:1: ERROR id_mismatch: "README" is not an identifier of kind "clause", which reads ^UZ-[A-Z]-\d{3}$`,
-		`UZ-V-004.md:5: ERROR unknown_field UZ-V-004: frontmatter key "owner" is not declared by the closed kind "clause", declared: date, deviates-from, enforces, id, kind, status, supersedes, title`,
+		`UZ-V-004.md:5: ERROR unknown_field UZ-V-004: frontmatter key "owner" is not declared by the closed kind "clause", declared: date, deviates-from, enforces, id, kind, retracts, status, supersedes, title`,
 		`UZ-V-005.md:3: ERROR kind_mismatch UZ-V-005: frontmatter kind "conform" disagrees with directory kind "clause"`,
 		`UZ-V-006.md:5: ERROR edge_kind_mismatch UZ-V-006: enforces source UZ-V-006 is kind "clause", want one of: conform`,
 		`missing-id.md:1: ERROR id_mismatch: "missing-id" is not an identifier of kind "conform", which reads ^conform/[a-z0-9-]+$`,
@@ -1613,6 +1613,89 @@ func TestValidateSectionsFixture(t *testing.T) {
 		}
 		if report.Findings[1].Rule != model.RuleSectionOrder || report.Findings[1].ID != "0002" {
 			t.Errorf("second finding = %+v, want RuleSectionOrder for 0002", report.Findings[1])
+		}
+	})
+}
+
+func TestValidateUnmentionedEdgeTouching(t *testing.T) {
+	dir := writeDocs(t, map[string]string{
+		"0001-base.md":      "---\ntitle: Base\nstatus: superseded\ndate: 2025-01-01\n---\n\n# Base\n",
+		"0002-new.md":       "---\ntitle: New\nstatus: accepted\nsupersedes: [\"0001\"]\ndate: 2025-01-02\n---\n\n# New\n\nNo citation.\n",
+		"0003-unrelated.md": "---\ntitle: Unrelated\nstatus: accepted\ndate: 2025-01-03\n---\n\n# Unrelated\n",
+		"docdag.yaml": `edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+    require_mention: warn
+`,
+	})
+	cfgPath := filepath.Join(dir, "docdag.yaml")
+
+	t.Run("untouched document filters out the finding", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir, "--config", cfgPath, "--touching", filepath.Join(dir, "0003-unrelated.md"))
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), nil)
+		if !strings.Contains(got.stderr, "(1 finding hidden)") {
+			t.Errorf("stderr = %q, want 1 finding hidden", got.stderr)
+		}
+	})
+
+	t.Run("touched document keeps the finding", func(t *testing.T) {
+		got := run(t, "validate", "--dir", dir, "--config", cfgPath, "--touching", filepath.Join(dir, "0002-new.md"))
+		assertExit(t, got, 0)
+		assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0002-new.md:4: WARN unmentioned_edge 0002:"})
+	})
+}
+
+func TestValidateRetractsCorrectsFrozenRecord(t *testing.T) {
+	doc0001 := "---\ntitle: Bulk update\nstatus: accepted\nsupersedes:\n  - \"0002\"\ndate: 2025-02-01\n---\n\n# Bulk update\n\nSupersedes [[0002]].\n"
+	doc0002Old := "---\ntitle: Original still wanted\nstatus: superseded\ndate: 2025-01-01\n---\n\n# Original\n\nSuperseded by [[0001]].\n"
+	doc0002Restored := "---\ntitle: Original still wanted\nstatus: accepted\ndate: 2025-01-01\n---\n\n# Original\n\nSuperseded by [[0001]].\n\nRetracted by 0003; still in force.\n"
+	doc0003Retract := "---\ntitle: Retract accidental supersession of 0002\nstatus: accepted\ndate: 2025-03-01\nretracts:\n  - from: \"0001\"\n    edge: supersedes\n    to: \"0002\"\n---\n\n# Retract accidental supersession\n\nRetracts [[0001]] -> [[0002]].\n"
+
+	t.Run("without retraction, restoring 0002 fails validation", func(t *testing.T) {
+		dir := gitRepo(t, map[string]string{
+			"docs/adr/0001-bulk.md":     doc0001,
+			"docs/adr/0002-original.md": doc0002Old,
+		})
+		t.Chdir(dir)
+		if err := os.WriteFile(filepath.Join(dir, "docs", "adr", "0002-original.md"), []byte(doc0002Restored), 0o600); err != nil {
+			t.Fatalf("write 0002: %v", err)
+		}
+
+		got := run(t, "validate", "--immutable-since", "HEAD")
+		assertExit(t, got, 1)
+		if !strings.Contains(got.stdout, "status_drift") {
+			t.Errorf("stdout = %q, want status_drift without 0003", got.stdout)
+		}
+	})
+
+	t.Run("with 0003 retracts, validate --immutable-since passes, resolve answers self, and query --binding includes 0002", func(t *testing.T) {
+		dir := gitRepo(t, map[string]string{
+			"docs/adr/0001-bulk.md":     doc0001,
+			"docs/adr/0002-original.md": doc0002Old,
+		})
+		t.Chdir(dir)
+		if err := os.WriteFile(filepath.Join(dir, "docs", "adr", "0002-original.md"), []byte(doc0002Restored), 0o600); err != nil {
+			t.Fatalf("write 0002: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "docs", "adr", "0003-retract.md"), []byte(doc0003Retract), 0o600); err != nil {
+			t.Fatalf("write 0003: %v", err)
+		}
+
+		gotVal := run(t, "validate", "--immutable-since", "HEAD")
+		assertExit(t, gotVal, 0)
+		assertPrefixes(t, "findings", findingLines(gotVal.stdout), nil)
+
+		gotRes := run(t, "resolve", "0002")
+		assertExit(t, gotRes, 0)
+		assertLines(t, "resolve", lines(gotRes.stdout), []string{"0002"})
+
+		gotQuery := run(t, "query", "--binding")
+		assertExit(t, gotQuery, 0)
+		if !strings.Contains(gotQuery.stdout, "0002") {
+			t.Errorf("query --binding = %q, want 0002 in binding set", gotQuery.stdout)
 		}
 	})
 }

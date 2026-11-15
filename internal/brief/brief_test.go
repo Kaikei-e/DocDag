@@ -210,3 +210,29 @@ func TestEntryLineNamesTheDocument(t *testing.T) {
 		t.Errorf("Line = %q, want %q", got, want)
 	}
 }
+
+func TestBuildSurfacesRetractionsOnInvolvedDocuments(t *testing.T) {
+	g, cfg := testCorpus(t, "ok-madr")
+	g.Retractions = []model.Retraction{
+		{From: "0003", To: "0002", Type: config.EdgeSupersedes, By: "0004"},
+	}
+
+	want := Retraction{Edge: config.EdgeSupersedes, From: "0003", To: "0002", By: "0004"}
+	for _, id := range []model.ID{"0003", "0002", "0004"} {
+		b, err := Build(g, cfg, id, Options{Depth: 1})
+		if err != nil {
+			t.Fatalf("Build(%s): %v", id, err)
+		}
+		if len(b.Retracted) != 1 || b.Retracted[0] != want {
+			t.Errorf("Build(%s).Retracted = %+v, want [%+v]", id, b.Retracted, want)
+		}
+	}
+
+	unaffected, err := Build(g, cfg, "0001", Options{Depth: 1})
+	if err != nil {
+		t.Fatalf("Build(0001): %v", err)
+	}
+	if len(unaffected.Retracted) != 0 {
+		t.Errorf("Build(0001).Retracted = %v, want empty", unaffected.Retracted)
+	}
+}

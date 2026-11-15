@@ -42,6 +42,7 @@ var ruleCoverageTable = []ruleCoverageEntry{
 	{rule: model.RuleIDMismatch, fixture: "kinds"},
 	{rule: model.RuleInvalidFrontmatter, fixture: "invalid-yaml"},
 	{rule: model.RuleInvalidRef, fixture: "rules/invalid_ref"},
+	{rule: model.RuleInvalidRetraction, fixture: "rules/invalid_retraction"},
 	{rule: model.RuleInverseMismatch, fixture: "inverse-mismatch"},
 	{rule: model.RuleKindMismatch, fixture: "kinds"},
 	{rule: model.RuleMissingField, fixture: "rules/missing_field"},
@@ -76,6 +77,7 @@ var ruleCoverageTable = []ruleCoverageEntry{
 	// Explicit additional rules
 	{rule: model.RuleDanglingReference, fixture: "dangling-reference"},
 	{rule: model.RuleImmutableViolation, coveredBy: "TestValidateImmutableSinceOnAppendOnlyKinds"},
+	{rule: model.RuleUnmentionedEdge, fixture: "unmentioned-edge"},
 }
 
 var (
@@ -141,6 +143,7 @@ func expectedRules() []string {
 	}
 	rules[model.RuleDanglingReference] = true
 	rules[model.RuleImmutableViolation] = true
+	rules[model.RuleUnmentionedEdge] = true
 	return slices.Sorted(maps.Keys(rules))
 }
 

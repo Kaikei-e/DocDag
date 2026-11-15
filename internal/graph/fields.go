@@ -47,20 +47,81 @@ func CheckFieldValues(g *model.Graph, cfg config.Config) []model.Finding {
 		fields := cfg.FieldSpecs(n.Kind)
 		for _, name := range slices.Sorted(maps.Keys(fields)) {
 			spec := fields[name]
-			value, written := n.Attr(name)
-			switch {
-			case written && !spec.Accepts(value):
-				findings = append(findings, unknownFieldValue(cfg, n, name, value, spec))
-			case !written && spec.Required:
-				// A key written as a list or a mapping is not a scalar and
-				// reads as absent, which is what a required scalar key
-				// carrying one is: the value it was to hold is not there.
-				findings = append(findings, missingField(cfg, n, name, spec))
+			if spec.FieldType() == config.FieldTypeList {
+				findings = append(findings, checkListField(cfg, n, name, spec)...)
+				continue
 			}
+			findings = append(findings, checkScalarField(cfg, n, name, spec)...)
 		}
 	}
 	SortFindings(findings)
 	return findings
+}
+
+func checkScalarField(cfg config.Config, n *model.Node, name string, spec config.FieldSpec) []model.Finding {
+	if value, written := n.Attr(name); written {
+		if !spec.Accepts(value) {
+			return []model.Finding{unknownFieldValue(cfg, n, name, value, spec)}
+		}
+		return nil
+	}
+	if !spec.Required {
+		return nil
+	}
+	if raw, present := n.Attrs[name]; present && raw != nil {
+		return []model.Finding{nonScalarField(cfg, n, name, raw)}
+	}
+	return []model.Finding{missingField(cfg, n, name, spec)}
+}
+
+func checkListField(cfg config.Config, n *model.Node, name string, spec config.FieldSpec) []model.Finding {
+	raw, present := n.Attrs[name]
+	if !present || raw == nil {
+		if spec.Required {
+			return []model.Finding{missingField(cfg, n, name, spec)}
+		}
+		return nil
+	}
+	items, ok := n.AttrList(name)
+	if !ok {
+		return []model.Finding{fieldShapeFinding(cfg, n, name,
+			fmt.Sprintf("frontmatter key %q is declared as a list but holds a mapping", name))}
+	}
+	var findings []model.Finding
+	if spec.MinItems > 0 && len(items) < spec.MinItems {
+		unit := "items"
+		if len(items) == 1 {
+			unit = "item"
+		}
+		findings = append(findings, fieldShapeFinding(cfg, n, name,
+			fmt.Sprintf("frontmatter key %q holds %d %s, want at least %d", name, len(items), unit, spec.MinItems)))
+	}
+	for _, item := range items {
+		if !spec.Accepts(item) {
+			findings = append(findings, unknownFieldValue(cfg, n, name, item, spec))
+		}
+	}
+	return findings
+}
+
+func nonScalarField(cfg config.Config, n *model.Node, name string, raw any) model.Finding {
+	if _, isList := raw.([]any); isList {
+		return fieldShapeFinding(cfg, n, name,
+			fmt.Sprintf("frontmatter key %q is declared as a scalar but holds a list; declare it with type: %s",
+				name, config.FieldTypeList))
+	}
+	return fieldShapeFinding(cfg, n, name,
+		fmt.Sprintf("frontmatter key %q is declared as a scalar but holds a mapping", name))
+}
+
+func fieldShapeFinding(cfg config.Config, n *model.Node, name, detail string) model.Finding {
+	return model.Finding{
+		Severity: cfg.Severity(model.RuleMissingField),
+		Rule:     model.RuleMissingField,
+		ID:       n.ID,
+		Detail:   detail,
+		Location: n.Location(name, statusField(cfg)),
+	}
 }
 
 // unknownFieldValue files a value outside the declared vocabulary on the line

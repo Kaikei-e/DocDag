@@ -8,8 +8,8 @@ share.
 ## Global flags
 
 `--dir <path>`, `--config <path>` and `--format text|json` are answered by every command.
-`validate` and `lint` also answer in `github` and `rdjson`, `context` in `md`, and `export` replaces
-the format flag with its own `mermaid|dot|json`.
+`validate` and `lint` also answer in `github` and `rdjson`, `diff` in `github`, `context` in `md`,
+and `export` replaces the format flag with its own `mermaid|dot|json`.
 
 Every read-only command takes the two time flags. `--as-of YYYY-MM-DD` (or `$DOCDAG_AS_OF`, which
 the flag beats) names the day the answer is about, and `--at <rev>` reads every managed document
@@ -17,8 +17,8 @@ from a revision instead of from the working tree. They are independent, so writi
 the vault at that revision said was in force on that day. `export` takes `--at` alone — a drawing of
 the graph does not depend on the day — and `new` takes neither, because it writes. The defaults are
 the day HEAD was committed on for `validate` and `lint --corpus`, and the day the command runs for
-`query`, `resolve`, `context` and `stats`; [configuration.md](configuration.md#the-day-a-command-answers-for)
-says why the two differ.
+`query`, `resolve`, `context`, `stats` and `diff`;
+[configuration.md](configuration.md#the-day-a-command-answers-for) says why the two differ.
 
 Without `--dir`, DocDag looks in `docs/adr`, `doc/adr`, `docs/decisions`, `docs/ADR`, `adr` — the
 first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 to 6 digits.
@@ -32,9 +32,10 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 | `docdag resolve <ref> [--as-of <day>] [--at <rev>] [--fields <list>]` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it — stops at successors that are not binding (e.g. proposed) and reports them on stderr (or under `pending` in JSON) | exit 1 on an unknown reference or a supersedes cycle |
 | `docdag query <ref> [--ancestors\|--descendants] [--edge <type>] [--include-refs] [--where <key>=<op>:<value>]... [--as-of <day>] [--at <rev>] [--fields <list>]` | the reachable set over typed edges, descendants by default; reference-layer hits are suffixed ` (reference)` | exit 1 unknown reference, exit 2 unknown edge type, invalid `--where`, or conflicting flags |
 | `docdag query --binding [--where <key>=<op>:<value>]... [--as-of <day>] [--at <rev>] [--fields <list>]` | every document binding on the day asked about, with its `modality` beside it where the configuration declares one | exit 2 if invalid `--where` or combined with `--ancestors`, `--descendants`, `--edge` or `--include-refs` |
-| `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all] [--as-of <day>] [--at <rev>]` | the document, what it resolves to and its neighbourhood, each quoting one section | exit 1 unknown reference, exit 2 unknown edge type |
+| `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all] [--as-of <day>] [--at <rev>]` | the document, what it resolves to, its neighbourhood (each quoting one section) and any active `retracts:` entries touching it | exit 1 unknown reference, exit 2 unknown edge type |
 | `docdag export [--format mermaid\|dot\|json] [--include-refs] [--connected] [--edge <type>]... [--at <rev>] [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 2 on an unknown edge type, exit 3 if the output file cannot be written |
 | `docdag stats [--fields] [--as-of <day>] [--at <rev>]` | the day the counts are about where some kind declares a `period:`, then document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree, and — where the configuration declares them — the modality distribution, the clauses per topic and the suppressed-conflict count; with `--fields`, the frontmatter fields instead | exit 3 without `--fields` if the configuration declares no `supersedes` edge |
+| `docdag diff <rev> [--as-of <day>] [--at <rev>] [--format text\|json\|github]` | typed edges added and removed, status transitions, documents added and removed, and the binding-set delta between `<rev>` and the working tree (or `--at <rev>`) | exit 3 on an unknown revision, outside a git repository, or when either side holds no managed documents |
 | `docdag new <title> [--kind <name>] [--id <ref>] [--supersedes <ref>]... [--depends-on <ref>]... [--dry-run]` | the path of the created document, or the plan under `--dry-run` | exit 1 on an unknown reference, a claimed identifier or a `--kind` the corpus cannot answer, exit 3 on a write error |
 | `docdag new --fixture <rule> [--fixtures <dir>]` | the files of the rule's generated `ruleid/` and `ok/` fixture, one path per line | exit 1 if no such rule is configured or it can never fire, exit 3 on a write error |
 
@@ -85,7 +86,7 @@ the rest of a cycle:
 ```json
 {
   "schema_version": 2,
-  "preset_version": 1,
+  "preset_version": 2,
   "as_of": "2026-09-02",
   "findings": [
     {
@@ -201,7 +202,7 @@ validation report:
 {
   "kind": "lint",
   "schema_version": 1,
-  "preset_version": 1,
+  "preset_version": 2,
   "as_of": "2026-09-02",
   "findings": [
     {
@@ -350,6 +351,67 @@ no edge type, so it answers for a corpus the degree statistics cannot describe. 
 writes `{"fields": [...]}` with the same values, `deprecated` always present and `last_change` left
 out where there is none.
 
+## diff
+
+`docdag diff <rev>` compares the typed graph built at base revision `<rev>` against the working
+tree (or against the revision named by `--at <rev>`), reading both sides under the current
+configuration (`docdag.yaml`, `--dir`, `--config`) just as `--at` does:
+
+```console
+$ docdag diff origin/main
++ supersedes 0940 -> 0877
+- depends-on 0012 -> 0003
+~ status     0877: accepted -> superseded
++ document   0990 [accepted]
+- document   0005 [accepted]
+binding: 944 -> 890 (-54)
+```
+
+It reports typed edges added and removed (so an edge voided by an active `retracts:` entry appears
+as removed; reference-layer links are not compared), status transitions on shared documents,
+documents added and removed with their status, and the size of the binding set (`query --binding`)
+on each side with its signed delta. When nothing differs, it prints only the binding line (for
+example `binding: 12 -> 12 (0)`). `--as-of <day>` (defaulting to today) applies to both sides when
+computing the binding set.
+
+Changes are sorted deterministically: added then removed typed edges by type, source, and target;
+status changes by document ID; added then removed documents by document ID; and the binding line
+last. `diff` is a report rather than a gate, so it exits `0` whenever the comparison completes;
+an unknown revision, a directory outside git, or an empty corpus on either side exits `3` using the
+same diagnostics as `query --at`.
+
+`--format github` emits one `::notice file=<path>,line=<line>,title=docdag diff::<text line>` per
+change (anchored to the declaring or changed document, omitting `line=` when absent), followed by
+the plain `binding:` summary line. `--format json` writes a versioned object (`[]` for empty lists):
+
+```json
+{
+  "schema_version": 1,
+  "preset_version": 2,
+  "as_of": "2026-09-02",
+  "edges": {
+    "added": [
+      {"type": "supersedes", "from": "0940", "to": "0877"}
+    ],
+    "removed": [
+      {"type": "depends-on", "from": "0012", "to": "0003"}
+    ]
+  },
+  "status": [
+    {"id": "0877", "path": "docs/ADR/0877-mid.md", "from": "accepted", "to": "superseded"}
+  ],
+  "documents": {
+    "added": [
+      {"id": "0990", "path": "docs/ADR/0990-extra.md", "status": "accepted"}
+    ],
+    "removed": [
+      {"id": "0005", "path": "docs/ADR/0005-gone.md", "status": "accepted"}
+    ]
+  },
+  "binding": {"before": 944, "after": 890, "delta": -54}
+}
+```
+
 ## new
 
 `docdag new` takes the next free identifier, writes `<id>-<kebab-title>.md` from the template with
@@ -464,16 +526,16 @@ running it again fills in what a first run could not and leaves hand-written fix
 
 ## JSON headers
 
-Three JSON reports are headed by a version — `validate --format json`, `context --format json` and
-`lint --format json` — a `schema_version` and, where the configuration names one, a
-`preset_version`. The first two are at `schema_version: 2`; the lint report is a different kind of
-report at `schema_version: 1` and says so in a `kind` field of its own. `stats --format json` is an
-object as well but carries no version, being a report of counts rather than of findings. The
+Four JSON reports are headed by a version — `validate --format json`, `context --format json`,
+`lint --format json` and `diff --format json` — a `schema_version` and, where the configuration names
+one, a `preset_version`. The first two are at `schema_version: 2`; `lint` and `diff` are at
+`schema_version: 1`, and `lint` names itself in a `kind` field of its own. `stats --format json` is
+an object as well but carries no version, being a report of counts rather than of findings. The
 listings are arrays of records rather than objects (`query`, `query --fields`, `resolve`), so they
 carry no header either; `preset_version` is read from `validate` beside them. The text, `md`,
 `github` and `rdjson` formats are unversioned: a header is a JSON affair.
 
-Those three and `stats --format json` also carry `as_of`, the day the run was about, and `at`, the
+Those four and `stats --format json` also carry `as_of`, the day the run was about, and `at`, the
 revision the documents were read from where one was named. They are what makes a report
 reproducible: the same documents, read at the same revision, asked about the same day, answer the
 same way.

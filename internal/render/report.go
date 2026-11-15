@@ -149,17 +149,23 @@ func FindingsGitHub(w io.Writer, findings []model.Finding, summary model.Summary
 // whichever report is being written.
 func writeAnnotations(out *errWriter, findings []model.Finding) {
 	for _, f := range findings {
-		level := githubLevel(f.Severity)
-		properties := []string{"file=" + escapeProperty(f.Location.Path)}
-		if f.Location.Line > 0 {
-			properties = append(properties, fmt.Sprintf("line=%d", f.Location.Line))
-		}
-		if f.Location.Column > 0 {
-			properties = append(properties, fmt.Sprintf("col=%d", f.Location.Column))
-		}
-		properties = append(properties, "title="+escapeProperty(f.Rule))
-		out.printf("::%s %s::%s\n", level, strings.Join(properties, ","), escapeData(subjectDetail(f)))
+		writeAnnotation(out, githubLevel(f.Severity), f.Location, f.Rule, subjectDetail(f))
 	}
+}
+
+func writeAnnotation(out *errWriter, level string, loc model.Location, title, detail string) {
+	properties := make([]string, 0, 4)
+	if loc.Path != "" {
+		properties = append(properties, "file="+escapeProperty(loc.Path))
+	}
+	if loc.Line > 0 {
+		properties = append(properties, fmt.Sprintf("line=%d", loc.Line))
+	}
+	if loc.Column > 0 {
+		properties = append(properties, fmt.Sprintf("col=%d", loc.Column))
+	}
+	properties = append(properties, "title="+escapeProperty(title))
+	out.printf("::%s %s::%s\n", level, strings.Join(properties, ","), escapeData(detail))
 }
 
 // githubLevel names the annotation level one severity is rendered at. An info

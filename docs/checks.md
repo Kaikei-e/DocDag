@@ -22,7 +22,7 @@ under. Periods come first among the groups because the checks below read the day
 - [Periods and the day a run is about](#periods-and-the-day-a-run-is-about) — `in_force`, and
   `period_invalid`, `period_conflict`, `expired_deviation`
 - [Document structure](#document-structure) — `invalid_frontmatter`, `missing_frontmatter`,
-  `id_collision`, `unknown_status`, `empty_edge`, `invalid_ref`, `dangling_ref`,
+  `id_collision`, `unknown_status`, `empty_edge`, `invalid_ref`, `invalid_retraction`, `dangling_ref`,
   `padding_mismatch`, `unmanaged_file`
 - [Sections](#sections) — `missing_section`, `section_order`
 - [Kinds](#kinds) — `id_mismatch`, `kind_mismatch`, `unknown_field`, `edge_kind_mismatch`
@@ -32,7 +32,7 @@ under. Periods come first among the groups because the checks below read the day
 - [The graph](#the-graph) — `cycle`, `cardinality`, `inverse_mismatch`, `derived_conflict`,
   `unstructured_supersedes`, `stale_target`, `path_mismatch`, `modality_conflict`, `excepts_strict`,
   and the preset rules `status_drift` and `superseded_orphan`
-- [The reference layer](#the-reference-layer) — `dangling_reference`
+- [The reference layer](#the-reference-layer) — `dangling_reference`, `unmentioned_edge`
 - [History](#history) — `immutable_violation`
 - [Lint findings](#lint-findings) — what `docdag lint` raises about the configuration itself
 - [The fixture corpora](#the-fixture-corpora) — the corpus under `testdata/` each finding is
@@ -44,12 +44,12 @@ under. Periods come first among the groups because the checks below read the day
 | --- | --- | --- |
 | **Structural** | a built-in default | `structural:` may raise one to `error`; it can never be lowered or disabled |
 | **Rule** | the rule's own `severity:` | `rules:` defines them; `adr` ships two and `spec` ten, and a config that writes `rules:` replaces the list |
-| **Reference and history** | `references.dangling`, or fixed | `dangling_reference` is off by default; `immutable_violation` needs `--immutable-since` |
+| **Reference and history** | `references.dangling`, `edges[].require_mention`, or fixed | `dangling_reference` and `unmentioned_edge` are off by default; `immutable_violation` needs `--immutable-since` |
 | **Lint** | fixed per finding | nothing configures them; `docdag lint` reports them and `validate` never does |
 
-`structural:` accepts exactly these thirty-three names: `cycle`, `dangling_ref`, `id_collision`,
+`structural:` accepts exactly these thirty-four names: `cycle`, `dangling_ref`, `id_collision`,
 `invalid_frontmatter`, `missing_frontmatter`, `unknown_status`, `derived_conflict`,
-`unstructured_supersedes`, `invalid_ref`, `padding_mismatch`, `empty_edge`, `inverse_mismatch`,
+`unstructured_supersedes`, `invalid_ref`, `invalid_retraction`, `padding_mismatch`, `empty_edge`, `inverse_mismatch`,
 `cardinality`,
 `edge_attr_unknown`, `edge_attr_missing`, `edge_attr_invalid`, `id_mismatch`, `kind_mismatch`,
 `unknown_field`, `unknown_field_value`, `missing_field`, `edge_kind_mismatch`, `deprecated_field`,
@@ -194,6 +194,14 @@ An entry under an edge key or an inverse key is not identifier-shaped: `<type> r
 an identifier`. `see 0042`, a sentence and a slug are all invalid refs. An Obsidian wikilink is
 unwrapped first, so `supersedes: ["[[0042]]"]` and `[[0042|alias]]` name document 0042 like everyone
 else. No fix suggestion — the entry has to be rewritten by hand.
+
+### `invalid_retraction` — error, structural
+
+A `retracts:` block in frontmatter is malformed, names an undeclared `edge`, names a `from` or `to`
+reference that does not resolve to an existing document, or names an edge that does not exist
+between those two documents before retractions are applied (for example `retracts names supersedes
+0940 -> 0877, but 0940 declares no such edge`). It runs regardless of the declaring record's status,
+so typos are caught while the correction record is still `proposed`. No fix suggestion.
 
 ### `dangling_ref` — error, structural
 
@@ -342,24 +350,33 @@ not a mistake.
 
 ### `unknown_field_value` — error, structural
 
-A document writes a declared field whose value is outside the `one_of` the configuration gives it:
+A document writes a declared field whose value (or list item under `type: list`) is outside the
+`one_of` the configuration gives it:
 `modality "SHALL" is outside the vocabulary MUST, MUST_NOT, SHOULD, SHOULD_NOT, MAY`. One finding
-per key per document, on the line the key is written on, and the vocabulary is listed in the order
-the configuration declares it.
+per offending scalar or list item, on the line the key is written on, and the vocabulary is listed in
+the order the configuration declares it.
 
 The comparison is **exact**, case included, for the reason an edge attribute's `one_of` is: a
 declared vocabulary is a closed machine vocabulary a preset revision renames wholesale, where a
-`status` is prose a person writes by hand. A value that is not a scalar at all — a list, a mapping —
-is not a value under that key, and is reported as `missing_field` where the field is required. No
-fix suggestion: the detail already names the whole vocabulary.
+`status` is prose a person writes by hand. On a `scalar` field, a non-scalar value under a
+`required: true` key is reported as `missing_field` (identifying the list or mapping on the key's
+line); non-required scalar fields ignore non-scalar values. On a `type: list` field, a scalar reads
+as a one-element list, while a mapping is always reported as `missing_field`. No fix suggestion: the
+detail already names the whole vocabulary.
 
 ### `missing_field` — error, structural
 
 A document of a kind whose `fields:` declares `required: true` does not write that key:
-`frontmatter key "modality" is required, one of: MUST, MUST_NOT, SHOULD, SHOULD_NOT, MAY`. The
-vocabulary is named where the declaration has one. There is no line of its own to point at, so the
-finding lands on the status field and then on the frontmatter block itself: the reader is being sent
-to a document, not to a mistake in it. No fix suggestion.
+`frontmatter key "modality" is required, one of: MUST, MUST_NOT, SHOULD, SHOULD_NOT, MAY` (the
+vocabulary is named where the declaration has one; since there is no key line to point at, the
+finding lands on the status field and then on the frontmatter block). Under the same rule, on the
+key's own line:
+
+- A `required: true` scalar field holding a list or mapping reports `frontmatter key "tags" is declared as a scalar but holds a list; declare it with type: list` (or `holds a mapping`).
+- A `type: list` field holding a mapping reports `frontmatter key "affected_services" is declared as a list but holds a mapping` (even when `required` is false).
+- A written `type: list` field with fewer items than `min_items` reports `frontmatter key "affected_services" holds 0 items, want at least 1` (`min_items` constrains written keys only; absence is `required`'s job).
+
+No fix suggestion.
 
 Both read the declarations a document of its own **kind** sees — the corpus's, with the kind's
 winning by name — and both answer for open kinds as well as closed ones: `closed: true` is about
@@ -367,8 +384,9 @@ which keys may appear, and these two are about what the declared ones say. `docd
 offers a required or closed-vocabulary field as a commented stub naming the vocabulary, so the
 finding lands on a line the author is already looking at.
 
-`required` and `one_of` describe a field the corpus keeps, so writing either beside
-`deprecated: true` is a configuration error (exit 3), as is an empty or repeated `one_of` value.
+`type`, `required`, `min_items` and `one_of` describe a field the corpus keeps, so writing any of
+them beside `deprecated: true` is a configuration error (exit 3), as is an unknown `type`, a
+negative `min_items`, `min_items` without `type: list`, or an empty or repeated `one_of` value.
 
 ## Edge attributes
 
@@ -450,7 +468,8 @@ An edge spec declares `inverse:` and the two sides disagree — either the targe
 source under the inverse key (`<inverse> does not list 0001, which declares supersedes`), or the
 inverse key lists a document that declares no such edge back (`<inverse> lists 0001, which declares
 no supersedes edge to this document`). Filed on the inverse key's owner, with the peer under
-`related`. No fix suggestion.
+`related`. Pairs covered by an effective `retracts:` entry are excluded so a stale inverse on a
+frozen record stays silent. No fix suggestion.
 
 ### `derived_conflict` — error, structural
 
@@ -600,17 +619,19 @@ exception is.
 
 ### `status_drift` — error, preset rule
 
-The document has an inbound `supersedes` edge and a status other than `superseded`: `has inbound
-supersedes but status is not superseded`. An absent status counts. Fix: `set status: superseded in
-<path>`.
+The document has an inbound `supersedes` edge from an `accepted` (or `superseded`) successor and a
+status other than `superseded`: `has inbound supersedes but status is not superseded`. An absent
+status counts. Retracting a wrong `supersedes` edge via `retracts:` drops it from the graph so the
+predecessor can be returned to `accepted` without triggering `status_drift`. Fix: `set status: superseded in <path>`.
 
 **The two presets read this name differently, on purpose.** The `adr` preset's rule is
-time-independent: the moment a successor exists, the predecessor has to say `superseded`. The
-`spec` preset's rule is about the day — `an in-force successor supersedes it but status is not
-superseded` — so a successor that is `proposed`, in `trial`, or accepted but dated next quarter
-leaves its predecessor alone until it takes over. An `adr` corpus that declares a `period:` gets
-the time-independent reading until it replaces the rule; the three rules to replace it with are in
-[configuration.md](configuration.md#time-dependent-status-checks).
+time-independent: once an `accepted` successor exists (or a `superseded` intermediary in a longer
+chain), the predecessor has to say `superseded`, while a `proposed` or `withdrawn` successor leaves
+it alone until accepted. The `spec` preset's rule is about the day — `an in-force successor
+supersedes it but status is not superseded` — so a successor that is `proposed`, in `trial`, or
+accepted but dated next quarter leaves its predecessor alone until it takes over. An `adr` corpus
+that declares a `period:` gets the `adr` preset's rule until it replaces the rules; the three rules
+to replace it with are in [configuration.md](configuration.md#time-dependent-status-checks).
 
 ### `superseded_orphan` — warn, preset rule
 
@@ -673,6 +694,21 @@ reference-layer link whose target is identifier-shaped but names no document rep
 reference %q does not name a document`, or `markdown` for a Markdown link. Duplicate identical links
 on one line are reported once. Fix: the same `did you mean …?` as `dangling_ref`.
 
+### `unmentioned_edge` — off by default
+
+Severity comes from `require_mention:` on an edge declaration (`warn` or `error`; omitted disables
+the check) and is not listed under `structural:`. For every structured edge declared under that
+edge's `key:` that resolves to a document, the declaring document's body must contain at least one
+reference to the target recognised by the reference layer (a wikilink or relative Markdown link,
+under `references.pattern`). Links inside frontmatter do not count, regardless of `references.scan`,
+and the check still runs when `references.dangling` is `off`. Unresolved targets, edges derived from
+the body, and mirror entries under an `inverse:` key are skipped.
+
+Reports `<edge> target %q is never referenced in the body` at the edge entry's frontmatter line,
+with `related` naming the target. Fix: `cite [[<target>]] or link to it in the body`. Precision is
+modest — a valid supersession often does not cite its target in prose — which is why the check is
+opt-in per edge and best read on changed documents with `--touching`.
+
 ## History
 
 ### `immutable_violation` — error, only under `--immutable-since`
@@ -690,6 +726,14 @@ frontmatter key "title" changed
 amended_by no longer lists 0004
 the body changed at line 11, which append-only history forbids
 ```
+
+Edges marked `appendable: true` reuse the same append-only rule as `inverse:` keys: a frozen
+document may add the edge's `key:` or gain entries, while removing or editing an existing entry
+(including changing attributes on a mapping entry) still fails with `<key> no longer lists …`.
+This option is meant for amendment-style edges; making `supersedes` appendable removes the
+protection against bulk re-linking of accepted records. Wrong edges on frozen records are corrected
+by issuing a new record with `retracts:` rather than editing frozen frontmatter, and `retracts:`
+itself is frozen once its declaring record is agreed.
 
 No fix suggestion. [ci.md](ci.md) covers what the check allows and how to wire it into a workflow.
 
@@ -892,14 +936,14 @@ testdata/fixtures/status-drift/0001-serve-images-from-the-application-server.md:
 
 That run exits 1. The other directories are named for the finding or the behaviour they exercise —
 `cycle`, `union-cycle`, `union-cycle-shadowed`, `superseded-orphan`, `id-collision`, `dangling`,
-`dangling-reference`, `empty-edge`, `invalid-yaml`, `inverse-mismatch`, `cardinality`, `withdrawn`,
-`any-of`, `list-attrs`, `fan-in`, `depends-impact`, `projections`, `edge-attrs`, `target`,
-`path-constraints`, `kinds`, `spec-vault`, `unquoted-refs`.
+`dangling-reference`, `unmentioned-edge`, `empty-edge`, `invalid-yaml`, `inverse-mismatch`,
+`cardinality`, `withdrawn`, `any-of`, `list-attrs`, `fan-in`, `depends-impact`, `projections`,
+`edge-attrs`, `target`, `path-constraints`, `kinds`, `spec-vault`, `unquoted-refs`, and `rules/invalid_retraction`.
 
-Thirteen of them carry a `docdag.yaml` of their own, because the finding they exercise only exists
+Fourteen of them carry a `docdag.yaml` of their own, because the finding they exercise only exists
 where a configuration declares it: `any-of`, `cardinality`, `dangling-reference`, `edge-attrs`,
 `inverse-mismatch`, `kinds`, `list-attrs`, `path-constraints`, `projections`, `spec-vault`,
-`target`, `union-cycle` and `union-cycle-shadowed`. Run one of those with **both** flags —
+`target`, `union-cycle`, `union-cycle-shadowed` and `unmentioned-edge`. Run one of those with **both** flags —
 `--dir <dir> --config <dir>/docdag.yaml` — since a configuration that names no directory falls back
 on discovery and reads this repository's own decisions instead. The two exceptions are `kinds` and
 `spec-vault`, whose configurations name their directories themselves and are run by `--config`

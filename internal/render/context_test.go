@@ -136,10 +136,55 @@ func TestContextRendersTheNormativeNeighbourhood(t *testing.T) {
 			t.Fatalf("ContextText: %v", err)
 		}
 
-		for _, unwanted := range []string{"related", "suppressed"} {
+		for _, unwanted := range []string{"related", "suppressed", "retracted"} {
 			if strings.Contains(buf.String(), unwanted) {
 				t.Errorf("context = %q, want no %q group", buf.String(), unwanted)
 			}
+		}
+	})
+
+	t.Run("text, markdown, and json render retracted edges", func(t *testing.T) {
+		rb := testBrief()
+		rb.Retracted = []brief.Retraction{{Edge: "supersedes", From: "0940", To: "0877", By: "0990"}}
+
+		var textBuf bytes.Buffer
+		if err := ContextText(&textBuf, rb); err != nil {
+			t.Fatalf("ContextText: %v", err)
+		}
+		wantText := "retracted\n  supersedes 0940 -> 0877 (by 0990)\n"
+		if !strings.Contains(textBuf.String(), wantText) {
+			t.Errorf("ContextText = %q, want %q", textBuf.String(), wantText)
+		}
+		if strings.Contains(textBuf.String(), "retracted: ") {
+			t.Errorf("ContextText = %q, want no redundant 'retracted: ' prefix", textBuf.String())
+		}
+
+		var mdBuf bytes.Buffer
+		if err := ContextMarkdown(&mdBuf, rb); err != nil {
+			t.Fatalf("ContextMarkdown: %v", err)
+		}
+		for _, want := range []string{"## Retracted", "- supersedes 0940 -> 0877 (by 0990)"} {
+			if !strings.Contains(mdBuf.String(), want) {
+				t.Errorf("ContextMarkdown = %q, want %q", mdBuf.String(), want)
+			}
+		}
+
+		var jsonBuf bytes.Buffer
+		if err := ContextJSON(&jsonBuf, rb); err != nil {
+			t.Fatalf("ContextJSON: %v", err)
+		}
+		for _, want := range []string{`"retracted": [`, `"edge": "supersedes"`, `"from": "0940"`, `"to": "0877"`, `"by": "0990"`} {
+			if !strings.Contains(jsonBuf.String(), want) {
+				t.Errorf("ContextJSON = %q, want %q", jsonBuf.String(), want)
+			}
+		}
+
+		var emptyJSON bytes.Buffer
+		if err := ContextJSON(&emptyJSON, testBrief()); err != nil {
+			t.Fatalf("ContextJSON empty: %v", err)
+		}
+		if strings.Contains(emptyJSON.String(), `"retracted"`) {
+			t.Errorf("ContextJSON empty = %q, want retracted omitted", emptyJSON.String())
 		}
 	})
 }

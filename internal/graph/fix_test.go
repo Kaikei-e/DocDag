@@ -56,6 +56,15 @@ func TestSuggestNamesWhatToType(t *testing.T) {
 			want: "did you mean 0042, 0003 or 0002?",
 		},
 		{
+			name: "an unmentioned edge suggests citing the target in the body",
+			finding: model.Finding{
+				Rule:   model.RuleUnmentionedEdge,
+				ID:     "0002",
+				Detail: `supersedes target "0001" is never referenced in the body`,
+			},
+			want: "cite [[0001]] or link to it in the body",
+		},
+		{
 			name: "a drifted status names the value and the file",
 			finding: model.Finding{
 				Rule:     model.RuleStatusDrift,

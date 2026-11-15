@@ -1763,7 +1763,7 @@ func TestCheckDocumentsAcrossKinds(t *testing.T) {
 				t.Errorf("%s location = %+v, want line %d", key, findings[i].Location, docs[0].KeyLines[key])
 			}
 		}
-		if want := "declared: date, enforces, id, kind, status, supersedes, title"; !strings.HasSuffix(findings[0].Detail, want) {
+		if want := "declared: date, enforces, id, kind, retracts, status, supersedes, title"; !strings.HasSuffix(findings[0].Detail, want) {
 			t.Errorf("detail = %q, want it to end with %q", findings[0].Detail, want)
 		}
 	})

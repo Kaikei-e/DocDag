@@ -430,7 +430,8 @@ func (a analyzer) readEdges(units []unit) map[string]bool {
 		// three edge_attr checks, acyclic is cycle, and an inverse key is
 		// inverse_mismatch.
 		if len(spec.From) > 0 || len(spec.To) > 0 || spec.Acyclic || spec.Inverse != "" ||
-			spec.MaxInbound > 0 || spec.MaxOutbound > 0 || spec.MinOutbound > 0 || len(spec.Attrs) > 0 {
+			spec.MaxInbound > 0 || spec.MaxOutbound > 0 || spec.MinOutbound > 0 || len(spec.Attrs) > 0 ||
+			spec.RequireMention != "" {
 			read[spec.Name] = true
 		}
 		if spec.Target == nil {

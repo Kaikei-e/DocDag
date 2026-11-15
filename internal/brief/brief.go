@@ -81,6 +81,19 @@ type Budget struct {
 	Degraded int `json:"degraded"`
 }
 
+// Retraction describes an effective edge retraction touching the queried document.
+type Retraction struct {
+	Edge model.EdgeType `json:"edge"`
+	From model.ID       `json:"from"`
+	To   model.ID       `json:"to"`
+	By   model.ID       `json:"by"`
+}
+
+// Line renders a retraction for text and Markdown context output.
+func (r Retraction) Line() string {
+	return fmt.Sprintf("%s %s -> %s (by %s)", r.Edge, r.From, r.To, r.By)
+}
+
 // Brief is the assembled context of one document. PresetVersion is the revision
 // of the preset the corpus is written against, left out where the configuration
 // names none.
@@ -102,7 +115,10 @@ type Brief struct {
 	// exception defeats — the reading that says why a permission and a
 	// prohibition are allowed to stand side by side.
 	Suppressed []string `json:"suppressed,omitempty"`
-	Budget     Budget   `json:"budget"`
+	// Retracted lists effective edge retractions naming this document
+	// as either endpoint or as the retracting record.
+	Retracted []Retraction `json:"retracted,omitempty"`
+	Budget    Budget       `json:"budget"`
 }
 
 // entries flattens a brief into the order it is read and the budget is spent in.
@@ -166,6 +182,7 @@ func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief
 		return nil, err
 	}
 	b.Suppressed = suppressed(g, cfg, id, opts.AsOf)
+	b.Retracted = retracted(g, id)
 	ancestors := within(g, graph.Reverse(g, opts.Types...), id, opts.Depth)
 	if b.Ancestors, err = entries(g, opts, taken, binding, ancestors, false); err != nil {
 		return nil, err

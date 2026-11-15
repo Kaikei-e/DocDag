@@ -360,4 +360,172 @@ func TestCheckImmutable(t *testing.T) {
 			t.Fatalf("findings = %+v, want the path %q", got, want)
 		}
 	})
+
+	t.Run("appendable edge key allows adding key and appending entries while forbidding removals and edits", func(t *testing.T) {
+		amendsConfig := func(dir string, appendable bool, withAttr bool) config.Config {
+			cfg := testImmutableConfig(dir)
+			spec := config.EdgeSpec{
+				Name:       "amends",
+				Key:        "amends",
+				Direction:  config.DirectionForward,
+				Appendable: appendable,
+			}
+			if withAttr {
+				spec.Attrs = map[string]config.EdgeAttrSpec{
+					"reason": {OneOf: []string{"conflict", "vocabulary"}},
+				}
+			}
+			cfg.Edges = append(cfg.Edges, spec)
+			return cfg
+		}
+		docPath := "docs/adr/0001-serve-images-from-the-application.md"
+
+		t.Run("adding the key on a frozen document passes", func(t *testing.T) {
+			dir, repo := testImmutableRepo(t, corpus)
+			testWriteFiles(t, dir, map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted", "status: accepted\namends:\n  - 0002", 1),
+			})
+
+			findings, err := CheckImmutable(repo, amendsConfig(dir, true, false), "HEAD", dir)
+			if err != nil {
+				t.Fatalf("CheckImmutable: %v", err)
+			}
+			if len(findings) != 0 {
+				t.Fatalf("findings = %+v, want none", findings)
+			}
+		})
+
+		t.Run("appending an entry to an existing key passes", func(t *testing.T) {
+			initial := map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted", "status: accepted\namends:\n  - 0002", 1),
+			}
+			dir, repo := testImmutableRepo(t, initial)
+			testWriteFiles(t, dir, map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted", "status: accepted\namends:\n  - 0002\n  - 0003", 1),
+			})
+
+			findings, err := CheckImmutable(repo, amendsConfig(dir, true, false), "HEAD", dir)
+			if err != nil {
+				t.Fatalf("CheckImmutable: %v", err)
+			}
+			if len(findings) != 0 {
+				t.Fatalf("findings = %+v, want none", findings)
+			}
+		})
+
+		t.Run("removing an entry fails", func(t *testing.T) {
+			initial := map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted", "status: accepted\namends:\n  - 0002\n  - 0003", 1),
+			}
+			dir, repo := testImmutableRepo(t, initial)
+			testWriteFiles(t, dir, map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted", "status: accepted\namends:\n  - 0002", 1),
+			})
+
+			findings, err := CheckImmutable(repo, amendsConfig(dir, true, false), "HEAD", dir)
+			if err != nil {
+				t.Fatalf("CheckImmutable: %v", err)
+			}
+			f := testAssertSingleFinding(t, findings, model.RuleImmutableViolation, model.SeverityError, "0001")
+			if !strings.Contains(f.Detail, "amends") || !strings.Contains(f.Detail, "0003") {
+				t.Errorf("detail = %q, want it to name amends and 0003", f.Detail)
+			}
+		})
+
+		t.Run("replacing an entry fails", func(t *testing.T) {
+			initial := map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted", "status: accepted\namends:\n  - 0002", 1),
+			}
+			dir, repo := testImmutableRepo(t, initial)
+			testWriteFiles(t, dir, map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted", "status: accepted\namends:\n  - 0003", 1),
+			})
+
+			findings, err := CheckImmutable(repo, amendsConfig(dir, true, false), "HEAD", dir)
+			if err != nil {
+				t.Fatalf("CheckImmutable: %v", err)
+			}
+			f := testAssertSingleFinding(t, findings, model.RuleImmutableViolation, model.SeverityError, "0001")
+			if !strings.Contains(f.Detail, "amends") || !strings.Contains(f.Detail, "0002") {
+				t.Errorf("detail = %q, want it to name amends and 0002", f.Detail)
+			}
+		})
+
+		t.Run("same additions without appendable still fail", func(t *testing.T) {
+			dir, repo := testImmutableRepo(t, corpus)
+			testWriteFiles(t, dir, map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted", "status: accepted\namends:\n  - 0002", 1),
+			})
+
+			findings, err := CheckImmutable(repo, amendsConfig(dir, false, false), "HEAD", dir)
+			if err != nil {
+				t.Fatalf("CheckImmutable: %v", err)
+			}
+			testAssertSingleFinding(t, findings, model.RuleImmutableViolation, model.SeverityError, "0001")
+
+			initial := map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted", "status: accepted\namends:\n  - 0002", 1),
+			}
+			dir2, repo2 := testImmutableRepo(t, initial)
+			testWriteFiles(t, dir2, map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted", "status: accepted\namends:\n  - 0002\n  - 0003", 1),
+			})
+
+			findings2, err := CheckImmutable(repo2, amendsConfig(dir2, false, false), "HEAD", dir2)
+			if err != nil {
+				t.Fatalf("CheckImmutable: %v", err)
+			}
+			testAssertSingleFinding(t, findings2, model.RuleImmutableViolation, model.SeverityError, "0001")
+		})
+
+		t.Run("attributed entry appended passes and attributed entry modified fails", func(t *testing.T) {
+			initial := map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted",
+					"status: accepted\namends:\n  - ref: \"0002\"\n    reason: conflict", 1),
+			}
+			dir, repo := testImmutableRepo(t, initial)
+			testWriteFiles(t, dir, map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted",
+					"status: accepted\namends:\n  - ref: \"0002\"\n    reason: conflict\n  - ref: \"0003\"\n    reason: vocabulary", 1),
+			})
+			findings, err := CheckImmutable(repo, amendsConfig(dir, true, true), "HEAD", dir)
+			if err != nil {
+				t.Fatalf("CheckImmutable: %v", err)
+			}
+			if len(findings) != 0 {
+				t.Fatalf("findings = %+v, want none when appending attributed entry", findings)
+			}
+
+			testWriteFiles(t, dir, map[string]string{
+				docPath: strings.Replace(testAcceptedDoc, "status: accepted",
+					"status: accepted\namends:\n  - ref: \"0002\"\n    reason: vocabulary", 1),
+			})
+			findings, err = CheckImmutable(repo, amendsConfig(dir, true, true), "HEAD", dir)
+			if err != nil {
+				t.Fatalf("CheckImmutable: %v", err)
+			}
+			f := testAssertSingleFinding(t, findings, model.RuleImmutableViolation, model.SeverityError, "0001")
+			if !strings.Contains(f.Detail, "amends") || !strings.Contains(f.Detail, "0002") {
+				t.Errorf("detail = %q, want it to name amends and 0002", f.Detail)
+			}
+		})
+	})
+
+	t.Run("retracts on a frozen record cannot be rewritten", func(t *testing.T) {
+		docPath := filepath.ToSlash(filepath.Join("docs", "adr", "0003-retract.md"))
+		retractDoc := "---\ntitle: Retract wrong edge\nstatus: accepted\ndate: 2025-03-01\nretracts:\n  - from: \"0001\"\n    edge: supersedes\n    to: \"0002\"\n---\n\n# Retract wrong edge\n"
+		dir, repo := testImmutableRepo(t, map[string]string{docPath: retractDoc})
+
+		edited := strings.Replace(retractDoc, "to: \"0002\"", "to: \"0004\"", 1)
+		testWriteFiles(t, dir, map[string]string{docPath: edited})
+
+		findings, err := CheckImmutable(repo, testImmutableConfig(dir), "HEAD", dir)
+		if err != nil {
+			t.Fatalf("CheckImmutable: %v", err)
+		}
+		f := testAssertSingleFinding(t, findings, model.RuleImmutableViolation, model.SeverityError, "0003")
+		if !strings.Contains(f.Detail, config.KeyRetracts) {
+			t.Errorf("detail = %q, want it to name %q", f.Detail, config.KeyRetracts)
+		}
+	})
 }

@@ -207,7 +207,7 @@ func decodeJSON[T any](t *testing.T, payload string) T {
 func TestRootWithoutArgumentsPrintsHelp(t *testing.T) {
 	got := run(t)
 	assertExit(t, got, 0)
-	for _, name := range []string{"docdag", "validate", "resolve", "query", "context", "export", "stats", "new"} {
+	for _, name := range []string{"docdag", "validate", "resolve", "query", "context", "export", "stats", "diff", "new"} {
 		if !strings.Contains(got.stdout, name) {
 			t.Errorf("help output does not mention %q: %q", name, got.stdout)
 		}
@@ -228,6 +228,8 @@ func TestUsageErrorsExitTwo(t *testing.T) {
 		{name: "resolve without a reference", args: []string{"resolve"}},
 		{name: "resolve with two references", args: []string{"resolve", "0001", "0002"}},
 		{name: "validate with an argument", args: []string{"validate", "extra"}},
+		{name: "diff without a revision", args: []string{"diff"}},
+		{name: "diff with two revisions", args: []string{"diff", "HEAD~1", "HEAD"}},
 		{name: "new without a title", args: []string{"new"}},
 	}
 	for _, tt := range tests {
@@ -294,7 +296,7 @@ func TestConfigFileOverridesThePreset(t *testing.T) {
 }
 
 func TestTheCommandSetIsExactlyTheDocumentedOne(t *testing.T) {
-	want := []string{"validate", "lint", "resolve", "query", "context", "export", "stats", "new", "help"}
+	want := []string{"validate", "lint", "resolve", "query", "context", "export", "stats", "diff", "new", "help"}
 
 	// The help command is registered lazily, so ask for it before counting.
 	root := newRootCmd()
@@ -332,6 +334,7 @@ func TestARenamedStatusFieldCarriesThePresetRules(t *testing.T) {
 		"docs/adr/0001-first.md":   "---\ntitle: First\nstate: superseded\ndate: 2025-01-01\n---\n\n# First\n",
 		"docs/adr/0002-second.md":  "---\ntitle: Second\nstate: accepted\nsupersedes:\n  - \"0001\"\ndate: 2025-02-01\n---\n\n# Second\n",
 		"docs/adr/0003-derived.md": "---\ntitle: Derived\nstate: superseded by 0002\ndate: 2025-03-01\n---\n\n# Derived\n",
+		"docs/adr/0004-draft.md":   "---\ntitle: Draft\nstate: proposed\nsupersedes:\n  - \"0002\"\ndate: 2025-04-01\n---\n\n# Draft\n",
 	})
 	t.Chdir(dir)
 
@@ -339,7 +342,7 @@ func TestARenamedStatusFieldCarriesThePresetRules(t *testing.T) {
 
 	assertExit(t, got, 0)
 	assertPrefixes(t, "findings", findingLines(got.stdout), []string{"0003-derived.md:3: WARN unstructured_supersedes 0003:"})
-	want := "OK: 3 docs, 2 typed edges, no cycles"
+	want := "OK: 4 docs, 3 typed edges, no cycles"
 	if ls := lines(got.stdout); len(ls) == 0 || ls[len(ls)-1] != want {
 		t.Errorf("summary line = %q, want %q", got.stdout, want)
 	}

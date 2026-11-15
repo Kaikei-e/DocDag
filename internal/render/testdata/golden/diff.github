@@ -1,0 +1,6 @@
+::notice file=docs/ADR/0940-new.md,line=4,title=docdag diff::+ supersedes 0940 -> 0877
+::notice file=docs/ADR/0012-old.md,title=docdag diff::- depends-on 0012 -> 0003
+::notice file=docs/ADR/0877-mid.md,line=3,title=docdag diff::~ status     0877: accepted -> superseded
+::notice file=docs/ADR/0990-extra.md,line=2,title=docdag diff::+ document   0990 [accepted]
+::notice file=docs/ADR/0005-gone.md,title=docdag diff::- document   0005 [accepted]
+binding: 944 -> 890 (-54)

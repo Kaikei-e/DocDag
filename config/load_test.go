@@ -587,15 +587,59 @@ func TestMergeRetargetsThePresetOntoARenamedStatusField(t *testing.T) {
 		if _, ok := rule.When.Attr["state"]; !ok {
 			t.Errorf("rule %q inspects %v, want the configured status field", rule.Name, rule.When.Attr)
 		}
+		if rule.Name == model.RuleStatusDrift {
+			if rule.When.ViaInbound == nil {
+				t.Fatalf("status_drift via_inbound is nil")
+			}
+			if _, ok := rule.When.ViaInbound.Attr["state"]; !ok {
+				t.Errorf("status_drift via_inbound inspects %v, want the configured status field", rule.When.ViaInbound.Attr)
+			}
+			if _, ok := rule.When.ViaInbound.Attr[DefaultStatusField]; ok {
+				t.Errorf("status_drift via_inbound still inspects %q", DefaultStatusField)
+			}
+		}
 	}
 	for _, spec := range got.DerivedEdges {
 		if spec.Field != "state" {
 			t.Errorf("derived edge reads field %q, want the configured status field", spec.Field)
 		}
 	}
-	if base := ADRPreset(); base.Rules[0].When.Attr[DefaultStatusField].Not == nil {
+	base := ADRPreset()
+	if base.Rules[0].When.Attr[DefaultStatusField].Not == nil {
 		t.Error("Merge rewrote the preset it was given rather than a copy")
 	}
+	if _, ok := base.Rules[0].When.ViaInbound.Attr[DefaultStatusField]; !ok {
+		t.Error("Merge rewrote the preset's via_inbound attr rather than a copy")
+	}
+
+	t.Run("nested via, any_of and not clauses are retargeted too", func(t *testing.T) {
+		customBase := Config{
+			StatusField: DefaultStatusField,
+			Rules: []Rule{{
+				Name:     "nested",
+				Severity: model.SeverityWarn,
+				When: Condition{
+					Via: &ViaCondition{Edge: "depends-on", Attr: map[string]AttrCondition{DefaultStatusField: {Eq: ptr(StatusAccepted)}}},
+					AnyOf: []Condition{{
+						ViaInbound: &ViaCondition{Edge: "supersedes", Attr: map[string]AttrCondition{DefaultStatusField: {Eq: ptr(StatusAccepted)}}},
+					}},
+					Not: &Condition{Attr: map[string]AttrCondition{DefaultStatusField: {Eq: ptr(StatusWithdrawn)}}},
+				},
+				Message: "nested",
+			}},
+		}
+		retargeted := Merge(customBase, Config{StatusField: "state"})
+		cond := retargeted.Rules[0].When
+		if _, ok := cond.Via.Attr["state"]; !ok {
+			t.Errorf("via.attr = %v, want state", cond.Via.Attr)
+		}
+		if _, ok := cond.AnyOf[0].ViaInbound.Attr["state"]; !ok {
+			t.Errorf("any_of[0].via_inbound.attr = %v, want state", cond.AnyOf[0].ViaInbound.Attr)
+		}
+		if _, ok := cond.Not.Attr["state"]; !ok {
+			t.Errorf("not.attr = %v, want state", cond.Not.Attr)
+		}
+	})
 }
 
 func TestMergeKeepsAnExplicitRuleOverrideOnARenamedStatusField(t *testing.T) {

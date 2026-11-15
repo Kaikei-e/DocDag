@@ -121,15 +121,19 @@ func Build(docs []*parse.Document, cfg config.Config) *model.Graph {
 			recordEdge(records, doc.ID, target, t, derived.Spec.Direction, model.OriginDerived, nil)
 		}
 	}
+	findings = append(findings, applyRetractions(g, docs, cfg, records)...)
 	g.Edges = sortedEdges(records)
 
 	severity, validated := cfg.ReferenceSeverity()
 	refs := make(map[edgeKey]bool)
 	for _, doc := range docs {
+		bodyLinks := parse.Links(doc.Body)
+		recordBodyRefs(g, g.Nodes[doc.ID], cfg, normalizer, bodyLinks)
+
 		// One link written twice on a line is one thing to fix, and a second
 		// byte-identical finding only costs a reader time.
 		reported := make(map[refKey]bool)
-		for _, link := range referenceLinks(doc, cfg) {
+		for _, link := range referenceLinks(doc, cfg, bodyLinks) {
 			ref, ok := referenceTarget(cfg, link)
 			if !ok {
 				continue
@@ -276,12 +280,35 @@ func danglingReference(doc *parse.Document, link parse.Link, ref string, severit
 	}
 }
 
+func recordBodyRefs(g *model.Graph, n *model.Node, cfg config.Config, normalizer config.IDNormalizer, bodyLinks []parse.Link) {
+	if n == nil || len(bodyLinks) == 0 {
+		return
+	}
+	for _, link := range bodyLinks {
+		ref, ok := referenceTarget(cfg, link)
+		if !ok {
+			continue
+		}
+		target, ok := normalizer.Normalize(ref)
+		if !ok {
+			continue
+		}
+		if _, known := g.Nodes[target]; !known {
+			continue
+		}
+		if n.BodyRefs == nil {
+			n.BodyRefs = make(map[model.ID]bool)
+		}
+		n.BodyRefs[target] = true
+	}
+}
+
 // referenceLinks returns every link of a document that feeds the reference
 // layer, each carrying the file line it was written on.
-func referenceLinks(doc *parse.Document, cfg config.Config) []parse.Link {
+func referenceLinks(doc *parse.Document, cfg config.Config, bodyLinks []parse.Link) []parse.Link {
 	var links []parse.Link
 	if cfg.Scans(config.ScanBody) {
-		for _, link := range parse.Links(doc.Body) {
+		for _, link := range bodyLinks {
 			link.Line += doc.BodyLine - 1
 			links = append(links, link)
 		}

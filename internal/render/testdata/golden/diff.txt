@@ -1,0 +1,6 @@
++ supersedes 0940 -> 0877
+- depends-on 0012 -> 0003
+~ status     0877: accepted -> superseded
++ document   0990 [accepted]
+- document   0005 [accepted]
+binding: 944 -> 890 (-54)
