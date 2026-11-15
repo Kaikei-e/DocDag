@@ -101,7 +101,7 @@ structural boundaries:
 Install a pinned version locally:
 
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.5.0
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.6.0
 ```
 
 This installs `docdag` into `$(go env GOPATH)/bin`. Prebuilt binaries for tagged versions, and the
@@ -113,7 +113,7 @@ release's `checksums.txt`, and needs no Go toolchain:
 
 ```yaml
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.5.0
+      - uses: Kaikei-e/DocDag@v0.6.0
         with:
           args: validate --format github   # this is the default
 ```
@@ -290,7 +290,7 @@ command and the marketplace source is rejected.
   checking, bitemporal in-force periods, the public `config`/`model`/`lint` packages and
   `append_only` kinds, fail-closed enforcement, opt-in body `sections:`, and `resolve` stopping at
   non-binding successors.
-- [CHANGELOG.md](CHANGELOG.md) — what each release changed across v0.1.0–v0.5.0, including the
+- [CHANGELOG.md](CHANGELOG.md) — what each release changed across v0.1.0–v0.6.0, including the
   v0.5.0 fail-closed breaking changes and migration steps.
 
 ## MADR compatibility
