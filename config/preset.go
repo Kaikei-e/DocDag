@@ -12,13 +12,56 @@ import (
 const DerivedSupersededPattern = `(?i)^superseded[\s-]+by[\s-]+(\S+)`
 
 // ProjectionAcceptedUnsuperseded is the ADR preset's definition of what is in
-// force: accepted, and superseded by nothing. It is a projection rather than
-// code so another preset can hold a different notion of force.
+// force: accepted, in force, and superseded by no accepted and in-force or
+// superseded successor. It is a projection rather than code so another preset
+// can hold a different notion of force.
 const ProjectionAcceptedUnsuperseded = "accepted_unsuperseded"
 
 // ADRPresetVersion is the revision the built-in ADR configuration is at.
 // Revision 2 conditions status_drift on an accepted or superseded successor.
-const ADRPresetVersion = 2
+// Revision 3 conditions accepted_unsuperseded on in_force and requires an
+// accepted and in-force (or superseded) successor to un-bind a predecessor.
+const ADRPresetVersion = 3
+
+// DefaultBindingProjection returns the built-in ADR binding projection over
+// statusField (defaulting to DefaultStatusField when empty). Both ADRPreset
+// and the no-projection fallback share this definition.
+func DefaultBindingProjection(statusField string) ProjectionSpec {
+	if statusField == "" {
+		statusField = DefaultStatusField
+	}
+	eq := func(v string) AttrCondition { return AttrCondition{Eq: &v} }
+	return ProjectionSpec{
+		Name: ProjectionAcceptedUnsuperseded,
+		When: Condition{
+			Attr: map[string]AttrCondition{
+				statusField: eq(StatusAccepted),
+				AttrInForce: eq(ProjectionTrue),
+			},
+			Not: &Condition{
+				AnyOf: []Condition{
+					{
+						ViaInbound: &ViaCondition{
+							Edge: EdgeSupersedes.String(),
+							Attr: map[string]AttrCondition{
+								statusField: eq(StatusAccepted),
+								AttrInForce: eq(ProjectionTrue),
+							},
+						},
+					},
+					{
+						ViaInbound: &ViaCondition{
+							Edge: EdgeSupersedes.String(),
+							Attr: map[string]AttrCondition{
+								statusField: eq(StatusSuperseded),
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
 
 // ADRPreset returns the built-in Architecture Decision Record configuration.
 func ADRPreset() Config {
@@ -59,16 +102,8 @@ func ADRPreset() Config {
 				Direction: DirectionReverse,
 			},
 		},
-		Projections: []ProjectionSpec{
-			{
-				Name: ProjectionAcceptedUnsuperseded,
-				When: Condition{
-					NotInbound: EdgeSupersedes.String(),
-					Attr:       map[string]AttrCondition{DefaultStatusField: eq(StatusAccepted)},
-				},
-			},
-		},
-		Binding: ProjectionAcceptedUnsuperseded,
+		Projections: []ProjectionSpec{DefaultBindingProjection(DefaultStatusField)},
+		Binding:     ProjectionAcceptedUnsuperseded,
 		Rules: []Rule{
 			{
 				Name:     model.RuleStatusDrift,

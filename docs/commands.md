@@ -27,7 +27,7 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 
 | Command | What it prints | Notable failures |
 | --- | --- | --- |
-| `docdag validate [--touching <path>]... [--show-suppressed] [--immutable-since <rev>] [--as-of <day>] [--at <rev>] [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` when nothing errored — with `, as of <day>` where a kind declares a `period:` | exit 1 if any finding is an error, exit 3 if `--immutable-since` or `--at` is given outside a git repository or without `git` |
+| `docdag validate [--touching <path>]... [--if-managed] [--show-suppressed] [--immutable-since <rev>] [--as-of <day>] [--at <rev>] [--format text\|json\|github\|rdjson]` | one line per finding, each followed by an indented `fix:` where there is a remedy, then `OK: N docs, M typed edges, no cycles` when nothing errored — with `, as of <day>` where a kind declares a `period:` | exit 1 if any finding is an error, exit 3 if `--immutable-since` or `--at` is given outside a git repository or without `git` |
 | `docdag lint [--corpus] [--fixtures <dir>] [--all] [--since <rev>] [--strict] [--as-of <day>] [--at <rev>] [--format text\|json\|github\|rdjson]` | one line per lint finding, then the counts, or `OK: no lint findings` | exit 1 on any error (or on any warning with `--strict`), exit 2 on warnings alone, exit 3 if the configuration does not validate |
 | `docdag resolve <ref> [--as-of <day>] [--at <rev>] [--fields <list>]` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it — stops at successors that are not binding (e.g. proposed) and reports them on stderr (or under `pending` in JSON) | exit 1 on an unknown reference or a supersedes cycle |
 | `docdag query <ref> [--ancestors\|--descendants] [--edge <type>] [--include-refs] [--where <key>=<op>:<value>]... [--as-of <day>] [--at <rev>] [--fields <list>]` | the reachable set over typed edges, descendants by default; reference-layer hits are suffixed ` (reference)` | exit 1 unknown reference, exit 2 unknown edge type, invalid `--where`, or conflicting flags |
@@ -52,9 +52,11 @@ a configuration that lints with warnings is neither a failure nor nothing; `--st
 ## validate
 
 `validate` builds the graph, runs the structural checks and the configured rules over the whole of
-it, and exits 1 if any finding is an error. The four format sections below are the shapes that
-report takes, and the fifth is the findings it deliberately leaves out;
-[checks.md](checks.md) is what each finding means.
+it, and exits 1 if any finding is an error. With `--if-managed` (which requires `--touching`),
+`validate` resolves the configuration first and exits 0 silently without parsing any documents when
+no corpus is discovered or none of the `--touching` paths sits inside a resolved document
+directory. The four format sections below are the shapes that report takes, and the fifth is the
+findings it deliberately leaves out; [checks.md](checks.md) is what each finding means.
 
 Every finding names a file and, wherever a frontmatter key carries the fault, the line of that key:
 
@@ -86,7 +88,7 @@ the rest of a cycle:
 ```json
 {
   "schema_version": 2,
-  "preset_version": 2,
+  "preset_version": 3,
   "as_of": "2026-09-02",
   "findings": [
     {
@@ -387,7 +389,7 @@ the plain `binding:` summary line. `--format json` writes a versioned object (`[
 ```json
 {
   "schema_version": 1,
-  "preset_version": 2,
+  "preset_version": 3,
   "as_of": "2026-09-02",
   "edges": {
     "added": [
@@ -544,7 +546,7 @@ same way.
 $ docdag validate --format json --at v1.2.0 --as-of 2026-06-01 | head -5
 {
   "schema_version": 2,
-  "preset_version": 2,
+  "preset_version": 3,
   "as_of": "2026-06-01",
   "at": "v1.2.0",
 ```

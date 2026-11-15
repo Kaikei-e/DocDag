@@ -157,6 +157,8 @@ func TestPluginHookIgnoresPathsOutsideTheDocumentsDirectory(t *testing.T) {
 		t.Errorf("hook script mode = %v, want it executable", info.Mode().Perm())
 	}
 
+	bin := buildTestDocdag(t)
+	env := append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	for _, payload := range []string{
 		`{"tool_name":"Edit","tool_input":{"file_path":"/tmp/somewhere/main.go"}}`,
 		`{"tool_name":"Write","tool_input":{"file_path":"/tmp/somewhere/notes.md"}}`,
@@ -165,6 +167,7 @@ func TestPluginHookIgnoresPathsOutsideTheDocumentsDirectory(t *testing.T) {
 		cmd := exec.Command("sh", script)
 		cmd.Stdin = strings.NewReader(payload)
 		cmd.Dir = repoRoot(t)
+		cmd.Env = env
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			t.Errorf("hook on %s: %v (output %q)", payload, err, out)
@@ -505,6 +508,232 @@ func TestPluginSessionStartHookBehaviours(t *testing.T) {
 		got := lines(string(out))
 		if len(got) != 1 || !strings.HasPrefix(got[0], "docdag validate: exited 3: ") {
 			t.Errorf("stdout lines = %q, want one 'docdag validate: exited 3: ...' line", got)
+		}
+	})
+}
+
+func TestPluginPostToolUseHookBehaviours(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the hook is a POSIX shell script")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("the hook reads its payload with jq")
+	}
+	script := filepath.Join(repoRoot(t), "scripts", "docdag-validate.sh")
+	bin := buildTestDocdag(t)
+
+	runHook := func(t *testing.T, project, pathEnv, filePath string) (int, string, string) {
+		t.Helper()
+		cmd := exec.Command("sh", script)
+		cmd.Stdin = strings.NewReader(`{"tool_name":"Edit","tool_input":{"file_path":"` + filePath + `"}}`)
+		cmd.Dir = project
+		cmd.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+project, "PATH="+pathEnv)
+		var stdout, stderr strings.Builder
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		code := 0
+		if err != nil {
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Fatalf("run hook: %v", err)
+			}
+			code = exitErr.ExitCode()
+		}
+		return code, stdout.String(), stderr.String()
+	}
+
+	pathWithBin := bin + string(os.PathListSeparator) + os.Getenv("PATH")
+
+	t.Run("spec preset validates edited clause under per-kind directory", func(t *testing.T) {
+		project := writeDocs(t, map[string]string{
+			"docdag.yaml":              "preset: spec\n",
+			"spec/clauses/UZ-V-001.md": "---\ntitle: Broken clause\nkind: clause\nmodality: MUST\nstatus: accepted\ndate: 2026-01-05\n---\n\n# Broken clause\n",
+		})
+		clause := filepath.Join(project, "spec", "clauses", "UZ-V-001.md")
+		code, stdout, stderr := runHook(t, project, pathWithBin, clause)
+		if code != 2 {
+			t.Fatalf("exit code = %d, want 2 (stdout=%q stderr=%q)", code, stdout, stderr)
+		}
+		if stdout != "" {
+			t.Errorf("stdout = %q, want empty", stdout)
+		}
+		if !strings.Contains(stderr, "ERROR orphan_must") {
+			t.Errorf("stderr = %q, want validation finding for broken clause", stderr)
+		}
+	})
+
+	t.Run("user-declared per-kind dir validates edited document", func(t *testing.T) {
+		cfg := `kinds:
+  clause:
+    dir: custom/clauses
+    id: '^UZ-[A-Z]-\d{3}$'
+    status_values: [proposed, accepted, superseded]
+edges:
+  - name: supersedes
+    key: supersedes
+    acyclic: true
+    direction: forward
+    from: [clause]
+    to: [clause]
+`
+		project := writeDocs(t, map[string]string{
+			"docdag.yaml":                cfg,
+			"custom/clauses/UZ-V-001.md": "---\ntitle: Broken clause\nkind: clause\nstatus: accepted\nsupersedes:\n  - UZ-V-999\n---\n\n# Broken clause\n",
+		})
+		clause := filepath.Join(project, "custom", "clauses", "UZ-V-001.md")
+		code, stdout, stderr := runHook(t, project, pathWithBin, clause)
+		if code != 2 {
+			t.Fatalf("exit code = %d, want 2 (stdout=%q stderr=%q)", code, stdout, stderr)
+		}
+		if stdout != "" {
+			t.Errorf("stdout = %q, want empty", stdout)
+		}
+		if !strings.Contains(stderr, "ERROR dangling_ref") {
+			t.Errorf("stderr = %q, want validation finding for broken clause", stderr)
+		}
+	})
+
+	t.Run("top-level dir validates edited document", func(t *testing.T) {
+		project := writeDocs(t, map[string]string{
+			"docdag.yaml":             "dir: decisions\n",
+			"decisions/0001-first.md": "---\ntitle: First\nstatus: accepted\ndate: 2025-01-01\n---\n\n# First\n",
+			"decisions/0002-bad.md":   "---\ntitle: Bad\nstatus: accepted\nsupersedes:\n  - 0099\ndate: 2025-01-02\n---\n\n# Bad\n",
+		})
+		doc := filepath.Join(project, "decisions", "0002-bad.md")
+		code, stdout, stderr := runHook(t, project, pathWithBin, doc)
+		if code != 2 {
+			t.Fatalf("exit code = %d, want 2 (stdout=%q stderr=%q)", code, stdout, stderr)
+		}
+		if !strings.Contains(stderr, "ERROR dangling_ref") {
+			t.Errorf("stderr = %q, want validation finding", stderr)
+		}
+	})
+
+	t.Run("well-known adr directory validates without docdag.yaml", func(t *testing.T) {
+		project := writeDocs(t, map[string]string{
+			"docs/decisions/0001-first.md": "---\ntitle: First\nstatus: accepted\ndate: 2025-01-01\n---\n\n# First\n",
+			"docs/decisions/0002-bad.md":   "---\ntitle: Bad\nstatus: accepted\nsupersedes:\n  - 0099\ndate: 2025-01-02\n---\n\n# Bad\n",
+		})
+		doc := filepath.Join(project, "docs", "decisions", "0002-bad.md")
+		code, stdout, stderr := runHook(t, project, pathWithBin, doc)
+		if code != 2 {
+			t.Fatalf("exit code = %d, want 2 (stdout=%q stderr=%q)", code, stdout, stderr)
+		}
+		if !strings.Contains(stderr, "ERROR dangling_ref") {
+			t.Errorf("stderr = %q, want validation finding", stderr)
+		}
+	})
+
+	t.Run("unrelated markdown outside document directories exits 0 silently", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			files map[string]string
+		}{
+			{
+				name: "spec corpus with failing clause",
+				files: map[string]string{
+					"docdag.yaml":              "preset: spec\n",
+					"spec/clauses/UZ-V-001.md": "---\ntitle: Broken clause\nkind: clause\nmodality: MUST\nstatus: accepted\ndate: 2026-01-05\n---\n\n# Broken clause\n",
+					"README.md":                "# Readme\n",
+				},
+			},
+			{
+				name: "adr corpus with failing decision",
+				files: map[string]string{
+					"docs/adr/0001-bad.md": "---\ntitle: Bad\nstatus: accepted\nsupersedes:\n  - 0099\ndate: 2025-01-02\n---\n\n# Bad\n",
+					"README.md":            "# Readme\n",
+				},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				project := writeDocs(t, tc.files)
+				readme := filepath.Join(project, "README.md")
+				code, stdout, stderr := runHook(t, project, pathWithBin, readme)
+				if code != 0 || stdout != "" || stderr != "" {
+					t.Errorf("got code=%d stdout=%q stderr=%q, want exit 0 with silence", code, stdout, stderr)
+				}
+			})
+		}
+	})
+
+	t.Run("docdag.yaml edit runs lint instead of validate", func(t *testing.T) {
+		cfg := `rules:
+  - name: tautological_rule
+    severity: warn
+    when:
+      attr:
+        status:
+          eq: accepted
+    message: constrains nothing
+`
+		project := writeDocs(t, map[string]string{
+			"docdag.yaml": cfg,
+		})
+		cfgPath := filepath.Join(project, "docdag.yaml")
+		code, stdout, stderr := runHook(t, project, pathWithBin, cfgPath)
+		if code != 2 {
+			t.Fatalf("exit code = %d, want 2 (stdout=%q stderr=%q)", code, stdout, stderr)
+		}
+		if stdout != "" {
+			t.Errorf("stdout = %q, want empty", stdout)
+		}
+		if !strings.Contains(stderr, "docdag.yaml") {
+			t.Errorf("stderr = %q, want lint report", stderr)
+		}
+	})
+
+	t.Run("clean clause exits 0 silently when another clause in spec corpus fails", func(t *testing.T) {
+		project := writeDocs(t, map[string]string{
+			"docdag.yaml":              "preset: spec\n",
+			"spec/topics/evidence.md":  "---\ntitle: Evidence\nkind: topic\nid: topic/evidence\ndate: 2026-01-03\n---\n\n# Evidence\n",
+			"spec/pm/pm-0001.md":       "---\ntitle: Incident\nkind: pm\nstatus: published\ndate: 2026-02-14\n---\n\n# Incident\n",
+			"spec/conform/uz-v-001.md": "---\ntitle: Test 001\nkind: conform\nid: conform/uz-v-001\nenforces:\n  - UZ-V-001\ndate: 2026-02-01\ntest: test.sh\n---\n\n# Test 001\n",
+			"spec/clauses/UZ-V-001.md": "---\ntitle: Clean clause\nkind: clause\nmodality: MUST\nstatus: accepted\nabout:\n  - topic/evidence\ncounterexample:\n  - pm-0001\ndate: 2026-01-05\n---\n\n# Clean clause\n",
+			"spec/clauses/UZ-V-002.md": "---\ntitle: Broken clause\nkind: clause\nmodality: MUST\nstatus: accepted\nabout:\n  - topic/evidence\ncounterexample:\n  - pm-0001\ndate: 2026-01-05\n---\n\n# Broken clause\n",
+		})
+		clean := filepath.Join(project, "spec", "clauses", "UZ-V-001.md")
+		code, stdout, stderr := runHook(t, project, pathWithBin, clean)
+		if code != 0 || stdout != "" || stderr != "" {
+			t.Fatalf("got code=%d stdout=%q stderr=%q, want silent exit 0 when only another document fails", code, stdout, stderr)
+		}
+	})
+
+	t.Run("older docdag without --if-managed does not block markdown edits", func(t *testing.T) {
+		project := writeDocs(t, map[string]string{
+			"README.md": "# Readme\n",
+		})
+		oldBin := filepath.Join(t.TempDir(), "bin")
+		if err := os.MkdirAll(oldBin, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		stub := "#!/bin/sh\necho 'Error: unknown flag: --if-managed' >&2\nexit 2\n"
+		if err := os.WriteFile(filepath.Join(oldBin, "docdag"), []byte(stub), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		readme := filepath.Join(project, "README.md")
+		code, stdout, stderr := runHook(t, project, oldBin+string(os.PathListSeparator)+os.Getenv("PATH"), readme)
+		if code != 0 {
+			t.Fatalf("exit code = %d, want 0 (stdout=%q stderr=%q)", code, stdout, stderr)
+		}
+		if !strings.Contains(stderr, "enforcement is OFF") {
+			t.Errorf("stderr = %q, want non-blocking enforcement OFF notice", stderr)
+		}
+	})
+
+	t.Run("paths with spaces validate cleanly", func(t *testing.T) {
+		project := writeDocs(t, map[string]string{
+			"docdag.yaml":                          "dir: my decisions\n",
+			"my decisions/0001-first-decision.md":  "---\ntitle: First\nstatus: accepted\ndate: 2025-01-01\n---\n\n# First\n",
+			"my decisions/0002-broken-decision.md": "---\ntitle: Broken\nstatus: accepted\nsupersedes:\n  - 0099\ndate: 2025-01-02\n---\n\n# Broken\n",
+		})
+		doc := filepath.Join(project, "my decisions", "0002-broken-decision.md")
+		code, stdout, stderr := runHook(t, project, pathWithBin, doc)
+		if code != 2 {
+			t.Fatalf("exit code = %d, want 2 (stdout=%q stderr=%q)", code, stdout, stderr)
+		}
+		if !strings.Contains(stderr, "ERROR dangling_ref") {
+			t.Errorf("stderr = %q, want dangling_ref for path with spaces", stderr)
 		}
 	})
 }

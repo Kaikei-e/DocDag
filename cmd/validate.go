@@ -1,8 +1,12 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -15,6 +19,7 @@ import (
 
 const (
 	flagTouching       = "touching"
+	flagIfManaged      = "if-managed"
 	flagImmutableSince = "immutable-since"
 	flagShowSuppressed = "show-suppressed"
 )
@@ -33,9 +38,32 @@ func newValidateCmd() *cobra.Command {
 			if err != nil {
 				return usageErr("%v", err)
 			}
+			ifManaged, err := cmd.Flags().GetBool(flagIfManaged)
+			if err != nil {
+				return usageErr("%v", err)
+			}
+			if ifManaged && len(touching) == 0 {
+				return usageErr("--%s requires --%s", flagIfManaged, flagTouching)
+			}
 			showSuppressed, err := cmd.Flags().GetBool(flagShowSuppressed)
 			if err != nil {
 				return usageErr("%v", err)
+			}
+			if ifManaged {
+				cfg, err := resolveEffectiveConfig(cmd)
+				if err != nil {
+					if errors.Is(err, model.ErrNoDocuments) {
+						return nil
+					}
+					var ce *cliError
+					if errors.As(err, &ce) {
+						return err
+					}
+					return ioErr(err)
+				}
+				if !touchesManagedDir(touching, cfg) {
+					return nil
+				}
 			}
 			asOf, err := asOfCommitted(cmd)
 			if err != nil {
@@ -83,6 +111,12 @@ func newValidateCmd() *cobra.Command {
 			case formatRDJSON:
 				err = render.FindingsRDJSON(out, reported, summary)
 			default:
+				// Suppress the trailing "as of" line when --touching hid every
+				// finding on a failing corpus so stdout stays empty, matching
+				// corpora without period:.
+				if len(touching) > 0 && len(reported) == 0 && summary.Errors > 0 {
+					day = ""
+				}
 				err = render.FindingsText(out, reported, summary, day)
 			}
 			if err != nil {
@@ -98,6 +132,7 @@ func newValidateCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringArray(flagTouching, nil, "report only the findings about these files or directories (repeatable)")
+	cmd.Flags().Bool(flagIfManaged, false, "exit 0 silently when --touching names no managed document")
 	addAsOfFlag(cmd, "the day HEAD was committed on")
 	addAtFlag(cmd)
 	cmd.Flags().String(flagImmutableSince, "", "check that documents closed at <rev> only grew since")
@@ -166,4 +201,69 @@ func immutableFindings(cmd *cobra.Command, cfg config.Config) ([]model.Finding, 
 		return nil, ioErr(fmt.Errorf("--%s: %w", flagImmutableSince, err))
 	}
 	return findings, nil
+}
+
+// touchesManagedDir reports whether any path in paths names a Markdown file
+// directly inside a resolved corpus directory, or a directory containing one,
+// matching parse.Documents' non-recursive .md collection.
+func touchesManagedDir(paths []string, cfg config.Config) bool {
+	dirs := corpusDirs(cfg)
+	if len(dirs) == 0 {
+		return false
+	}
+	normDirs := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		normDirs = append(normDirs, normalizeDir(d))
+	}
+	for _, p := range paths {
+		if p == "" {
+			continue
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			continue
+		}
+		if info, err := os.Stat(abs); err == nil && info.IsDir() {
+			dirNorm := normalizeDir(abs)
+			prefix := dirNorm + string(filepath.Separator)
+			for _, d := range normDirs {
+				if d == dirNorm || strings.HasPrefix(d, prefix) {
+					return true
+				}
+			}
+			continue
+		}
+		if filepath.Ext(abs) != ".md" {
+			continue
+		}
+		if slices.Contains(normDirs, normalizeDir(filepath.Dir(abs))) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizeDir returns a cleaned, symlink-resolved path for dir, walking up to
+// the nearest existing ancestor when dir itself does not exist on disk yet.
+func normalizeDir(dir string) string {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return filepath.Clean(dir)
+	}
+	cur := abs
+	var tail []string
+	for {
+		if real, err := filepath.EvalSymlinks(cur); err == nil {
+			for i := len(tail) - 1; i >= 0; i-- {
+				real = filepath.Join(real, tail[i])
+			}
+			return filepath.Clean(real)
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return filepath.Clean(abs)
+		}
+		tail = append(tail, filepath.Base(cur))
+		cur = parent
+	}
 }

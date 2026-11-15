@@ -265,3 +265,26 @@ func TestResolveChainAcceptedToProposed(t *testing.T) {
 		}
 	})
 }
+
+func TestQueryBindingAgreesWithResolveOnNonBindingSuccessors(t *testing.T) {
+	for _, status := range []string{"proposed", "withdrawn"} {
+		t.Run(status, func(t *testing.T) {
+			dir := writeDocs(t, map[string]string{
+				"0001-use-postgres.md": "---\ntitle: Use Postgres\nstatus: accepted\ndate: 2026-01-01\n---\n\n# Use Postgres\n",
+				"0002-use-sqlite.md":   "---\ntitle: Use SQLite\nstatus: " + status + "\nsupersedes:\n  - 0001\ndate: 2026-02-01\n---\n\n# Use SQLite\n",
+			})
+
+			qGot := run(t, "query", "--binding", "--dir", dir)
+			assertExit(t, qGot, 0)
+			assertLines(t, "query --binding", lines(qGot.stdout), []string{"0001"})
+
+			rGot := run(t, "resolve", "0001", "--dir", dir)
+			assertExit(t, rGot, 0)
+			assertLines(t, "resolve 0001", lines(rGot.stdout), []string{"0001"})
+			wantNote := "note: 0002 supersedes 0001 but is " + status + "; not yet binding"
+			if !strings.Contains(rGot.stderr, wantNote) {
+				t.Errorf("stderr = %q, want note %q", rGot.stderr, wantNote)
+			}
+		})
+	}
+}

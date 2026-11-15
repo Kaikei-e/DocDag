@@ -541,8 +541,8 @@ graph LR
 Solid arrows are typed edges and are checked. Dotted arrows are body links and are only reported.
 
 Status is read against that graph rather than trusted on its own. A record is *binding* when its
-status is `accepted` and nothing in force supersedes it, and a status the edges contradict is a
-finding, not a matter of opinion.
+status is `accepted`, it is in force, and nothing `accepted` and in force (or `superseded`)
+supersedes it, and a status the edges contradict is a finding, not a matter of opinion.
 
 The rule language is deliberately small, so that every configuration can be checked without a
 solver: no expression language, conditions that look at most one hop away, and path constraints of

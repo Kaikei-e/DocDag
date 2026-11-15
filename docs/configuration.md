@@ -37,7 +37,7 @@ The file below is the `adr` preset in full — what DocDag applies with no confi
 
 ```yaml
 preset: adr
-preset_version: 2              # the revision this configuration is at
+preset_version: 3              # the revision this configuration is at
 dir: docs/decisions            # default: discovered, see above
 id_width: 4
 status_field: status
@@ -63,9 +63,20 @@ derived_edges:
 projections:                   # derived boolean attributes, see below
   - name: accepted_unsuperseded
     when:
-      not_inbound: supersedes
       attr:
         status: { eq: accepted }
+        in_force: { eq: "true" }
+      not:
+        any_of:
+          - via_inbound:
+              edge: supersedes
+              attr:
+                status: { eq: accepted }
+                in_force: { eq: "true" }
+          - via_inbound:
+              edge: supersedes
+              attr:
+                status: { eq: superseded }
 
 binding: accepted_unsuperseded  # the projection `query --binding` answers with
 
@@ -498,9 +509,10 @@ written in any order. A reference cycle among them is a configuration error (exi
 duplicate name, a nameless projection and a `binding:` naming a projection nobody declared.
 
 `binding:` names the projection that defines the documents in force — what `query --binding` lists,
-what `stats` counts and what `context` keeps. A configuration that declares no projections at all
-falls back on the built-in definition, accepted and superseded by nothing, which is what the `adr`
-preset's `accepted_unsuperseded` projection writes down.
+what `stats` counts and what `context` keeps. A configuration that declares no projections or names
+no `binding:` falls back on the same built-in definition as the `adr` preset's
+`accepted_unsuperseded` projection: `accepted`, in force (`in_force: "true"`), and superseded by no
+`accepted`, in-force or `superseded` successor.
 
 ## Target conditions
 
@@ -617,7 +629,7 @@ cannot reach.
 `preset_version:` is the revision of the configuration a corpus is written against. It is a plain
 integer the configuration carries and DocDag never interprets: it is written into the JSON output
 headers — `validate --format json` and `context --format json` — so a repository can pin the
-revision its documents were checked under. The `adr` preset is revision 2, and a corpus that
+revision its documents were checked under. The `adr` preset is revision 3, and a corpus that
 overrides it says so by writing its own number.
 
 `fields:` declares the frontmatter keys the documents write: their shape (`scalar` or `list`), the
@@ -805,9 +817,13 @@ rules:
 ```
 
 Writing `rules:` replaces the preset's list, so the rules a corpus keeps are written out with them.
-A binding projection that should follow the same reading adds `in_force: {eq: "true"}` and the
-absence of `has_inforce_successor` to its own condition, which is what the `spec` preset's
-`effective` does.
+Likewise, `projections:` replaces the preset's list, so a corpus that declares
+`has_inforce_successor` while keeping `binding: accepted_unsuperseded` must also include
+`accepted_unsuperseded` in `projections:`. Under the `adr` preset, `accepted_unsuperseded` already
+requires `in_force: {eq: "true"}` and only lets an `accepted`, `in_force` (or `superseded`)
+successor replace a record; a custom binding projection that should follow the same reading adds
+`in_force: {eq: "true"}` and the absence of `has_inforce_successor` to its own condition, which is
+what the `spec` preset's `effective` does.
 
 ## Sections
 

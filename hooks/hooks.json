@@ -20,7 +20,7 @@
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/scripts/docdag-validate.sh",
             "timeout": 30,
-            "statusMessage": "Validating the decision graph"
+            "statusMessage": "Validating the document graph"
           }
         ]
       }

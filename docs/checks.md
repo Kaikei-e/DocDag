@@ -62,9 +62,11 @@ one.
 ## Status is a projection
 
 Status is a projection of the graph, not an independent fact. Under the `adr` preset, an inbound
-`supersedes` edge and a status other than `superseded` is an error (`status_drift`); `superseded`
-with nothing superseding it is a warning (`superseded_orphan`). A document is *binding* when its
-status is `accepted` and no document supersedes it.
+`supersedes` edge from an `accepted` or `superseded` document and a status other than `superseded`
+is an error (`status_drift`); `superseded` with nothing superseding it is a warning
+(`superseded_orphan`). Under the `adr` preset, a document is *binding* when its status is
+`accepted`, it is in force (`in_force: "true"`), and no `accepted`, in-force or `superseded`
+successor supersedes it.
 
 Both are ordinary rules, so a configuration that writes its own `rules:` list replaces them — which
 is what the `spec` preset does, reading the same two questions against a day rather than against the

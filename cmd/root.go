@@ -105,6 +105,21 @@ func outputFormat(cmd *cobra.Command, allowed ...string) (string, error) {
 
 // effectiveConfig resolves preset, config file and flags into one config.
 func effectiveConfig(cmd *cobra.Command) (config.Config, error) {
+	cfg, err := resolveEffectiveConfig(cmd)
+	if err != nil {
+		var ce *cliError
+		if errors.As(err, &ce) {
+			return config.Config{}, err
+		}
+		return config.Config{}, ioErr(err)
+	}
+	return cfg, nil
+}
+
+// resolveEffectiveConfig resolves preset, config file and flags into one
+// config, preserving underlying configuration/discovery errors for callers that
+// inspect sentinel errors such as model.ErrNoDocuments.
+func resolveEffectiveConfig(cmd *cobra.Command) (config.Config, error) {
 	dir, err := cmd.Flags().GetString(flagDir)
 	if err != nil {
 		return config.Config{}, usageErr("%v", err)
@@ -115,11 +130,11 @@ func effectiveConfig(cmd *cobra.Command) (config.Config, error) {
 	}
 	root, err := os.Getwd()
 	if err != nil {
-		return config.Config{}, ioErr(fmt.Errorf("working directory: %w", err))
+		return config.Config{}, fmt.Errorf("working directory: %w", err)
 	}
 	cfg, err := config.Resolve(config.Options{Root: root, Dir: dir, ConfigPath: path})
 	if err != nil {
-		return config.Config{}, ioErr(fmt.Errorf("resolve configuration: %w", err))
+		return config.Config{}, fmt.Errorf("resolve configuration: %w", err)
 	}
 	return cfg, nil
 }
