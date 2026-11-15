@@ -3,165 +3,496 @@
 [![CI](https://github.com/Kaikei-e/DocDag/actions/workflows/ci.yml/badge.svg)](https://github.com/Kaikei-e/DocDag/actions/workflows/ci.yml)
 [![Release](https://github.com/Kaikei-e/DocDag/actions/workflows/release.yml/badge.svg)](https://github.com/Kaikei-e/DocDag/actions/workflows/release.yml)
 
-DocDag reads a directory of Markdown documents with YAML frontmatter, extracts a **typed directed
-graph** from it, enforces DAG invariants on that graph, and answers queries about it as a single Go
-binary (`github.com/goccy/go-yaml` is the only external dependency) and as public Go packages
-(`config`, `model`, `lint`). Decision records and normative specifications rot in ways prose review
-does not catch: a decision superseded twice with the status never updated, a supersession cycle, a
-`supersedes: 0042` pointing at a file nobody wrote, a `MUST` clause with no conformance test, or a
-test still pointing at a superseded clause. Those are graph properties, so a deterministic graph
-check can enforce them, and `docdag validate` exits 1 on any error — and exits 3 if a check could
-not actually run — in one CI line.
+**DocDag checks your decision records the way a compiler checks code.** It reads a directory of
+Markdown documents with YAML frontmatter, builds the graph they declare — what supersedes what, what
+depends on what — and fails the build where the records contradict each other.
+
+Decision records rot in ways a prose review does not catch:
+
+- a decision was replaced, and its status still says `accepted`
+- `supersedes: 0042` points at a file nobody wrote
+- two decisions supersede each other in a cycle
+- an accepted record was quietly edited months later
+- nobody can say which decisions are in force today without reading all of them
+
+Each of these is a property of a graph, so a deterministic check can enforce it.
+
+```mermaid
+flowchart LR
+  files["Markdown records<br/>docs/adr/*.md"] --> fm["YAML frontmatter<br/>status, supersedes, depends-on"]
+  fm --> dag(("typed<br/>graph"))
+  dag --> check["validate<br/>fail CI on contradictions"]
+  dag --> ask["resolve, query, context<br/>answer questions"]
+  dag --> see["export, diff<br/>show the graph and what changed"]
+```
+
+DocDag is one static binary, needs no configuration for a conventional ADR directory, and runs in
+one CI line.
 
 ![docdag validate reporting a status_drift error with its fix, passing once the fix is applied, then docdag context 0002 --budget 120 showing that 0002 was superseded by 0003 and quoting both decisions](docs/demo.svg)
 
-`docdag export` draws the same four decisions as Mermaid by default, which GitHub renders in place:
-
-```mermaid
-graph LR
-  0001["0001 Cache rendered thumbnails"]
-  0002["0002 Store thumbnails on the local disk"]
-  0003["0003 Store thumbnails in object storage"]
-  0004["0004 Expire thumbnails after thirty days"]
-  0003 -->|depends-on| 0001
-  0003 -->|supersedes| 0002
-  0004 -->|depends-on| 0003
-```
-
-DocDag ships two presets. `adr` is the default: one directory of Architecture Decision Records,
-identified by a digit run, superseding one another. `spec` is a normative standard as a graph —
-eight kinds, among them the clauses, the conformance tests that enforce them and the deviations
-recorded against them, each in a directory of its own and with an identifier shape of its own —
-where a `MUST` that no test enforces is a finding rather than a rule. Both are plain configuration:
-[docs/configuration.md](docs/configuration.md) prints each in full, and `docdag.yaml` overrides
-either.
-
-## Assembling a configuration in Go
-
-A program that owns a vault can import `config`, `model` and `lint` to build the same configuration
-the YAML file describes, validate it without writing a file, and marshal it deterministically into
-`docdag.yaml`. The field names and YAML tags of `config.Config` are the contract; see
-[docs/ADR/0006](docs/ADR/0006-public-config-yaml-roundtrip-and-append-only.md) for what is stable.
-
-```go
-import (
-    "github.com/goccy/go-yaml"
-    "github.com/Kaikei-e/DocDag/config"
-)
-
-cfg := config.SpecPreset()
-cfg.PresetVersion = 3
-// … add kinds, edges, rules …
-if err := cfg.Validate(); err != nil {
-    return err
-}
-out, err := yaml.Marshal(cfg)
-```
-
-`lint.Check(cfg, vaultDir, fixturesDir)` runs the three lint layers in process and returns
-`[]model.Finding`. An empty `vaultDir` answers only the inherent layer.
-
-## The model
-
-DocDag keeps two layers apart. The **constraint layer** is the typed edges declared in frontmatter
-(`supersedes:`, `depends-on:`) plus the edges derived from configured field patterns; only these
-carry invariants, acyclicity and rules. The **reference layer** is the untyped links found in
-bodies — `[[wikilink]]` and relative Markdown links to other managed documents — surfaced by
-`--include-refs` and `stats`, never part of a constraint, and unvalidated unless `references.dangling`
-asks for it.
-
-A document's identity is its digit run, so `339`, `ADR-339`, `000339` and `0339-use-postgres.md` all
-name the same node, displayed zero-padded to `id_width` (and unquoted leading-zero tokens such as
-`0011` are read as literal text rather than YAML octal); renaming a file's title suffix therefore
-does not change what it is, and two files that normalize alike are an `id_collision` error. Where a
-corpus declares `kinds:`, identity is per kind — a pattern of its own, such as `UZ-V-001` (with
-`padding_mismatch` reporting a reference whose only fault is its zero width), or the digit run where
-a kind declares none — because the directory a document sits in is what chose the rules it was read
-under. Status is a projection of that graph rather than an independent fact: a document is *binding*
-when its status is `accepted`, nothing in force supersedes it and, where a kind declares a `period:`,
-the day being asked about falls inside it; a status the edges contradict is a finding rather than a
-matter of opinion.
-
-To keep every configuration decidable and verifiable without a solver, the engine enforces four
-structural boundaries:
-
-- **No expression language** — rules, projections and target checks use a closed declarative
-  condition vocabulary (`attr`, `inbound`, `outbound`, `via`, `via_inbound`, `any_of`, `not`) over
-  finite declared domains.
-- **Modal depth fixed at 2** — `via` and `via_inbound` inspect one hop (an edge and a local
-  condition on the neighbour) and never nest.
-- **1–2 step path constraints** — `path_constraints:` compares two paths of one or two steps each
-  (`equals: none` or `subset_of:`); paths of three or more steps turn implication into an
-  undecidable regular-path problem, while transitive supersession reach is answered by `resolve`.
-- **Zero new runtime dependencies** — single static binary built on the Go standard library plus
-  `github.com/goccy/go-yaml`.
+**Contents:** [Install](#install) · [Five-minute tour](#five-minute-tour) ·
+[Command cheat sheet](#command-cheat-sheet) · [CI](#put-it-in-ci) ·
+[Correcting an accepted record](#when-an-accepted-record-is-wrong) ·
+[What it checks](#what-it-checks) · [Configuration](#configuration) ·
+[Coding agents](#for-coding-agents) · [Specifications](#beyond-adrs-a-specification-as-a-graph) ·
+[How it works](#how-it-works) · [Documentation](#documentation)
 
 ## Install
 
-Install a pinned version locally:
+With Go:
 
 ```sh
 go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.7.0
 ```
 
-This installs `docdag` into `$(go env GOPATH)/bin`. Prebuilt binaries for tagged versions, and the
-`checksums.txt` that covers them, are attached to the repository's Releases page. `docdag --version`
-reports the tag the binary was built from, and `dev` for one built from a checkout.
+Without Go, on Linux or macOS — download the release binary and verify it against the release's
+checksums:
 
-In CI, use the composite action, which downloads the release binary, verifies it against that
-release's `checksums.txt`, and needs no Go toolchain:
+```sh
+VERSION=0.7.0
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+curl -fsSLO "https://github.com/Kaikei-e/DocDag/releases/download/v${VERSION}/docdag_${VERSION}_${OS}_${ARCH}.tar.gz"
+curl -fsSLO "https://github.com/Kaikei-e/DocDag/releases/download/v${VERSION}/checksums.txt"
+sha256sum --ignore-missing -c checksums.txt    # macOS: shasum -a 256 --ignore-missing -c checksums.txt
+tar -xzf "docdag_${VERSION}_${OS}_${ARCH}.tar.gz" docdag
+sudo mv docdag /usr/local/bin/
+```
+
+Windows archives are on the [Releases page](https://github.com/Kaikei-e/DocDag/releases). Check the
+install:
+
+```sh
+docdag --version
+```
+
+Already have a directory of ADRs? Run this from the repository root and you are done:
+
+```sh
+docdag validate
+```
+
+DocDag looks in `docs/adr`, `doc/adr`, `docs/decisions`, `docs/ADR` and `adr`, takes the first that
+holds files named `NNNN.md` or `NNNN-kebab-title.md`, and applies the built-in `adr` preset. Point
+it somewhere else with `docdag --dir path/to/records validate`.
+
+## Five-minute tour
+
+No ADRs at hand? Each block below can be pasted into a terminal as it is. The tour builds a
+two-record sandbox, breaks it, fixes it and asks it questions.
+
+**1. Make two records.** The second replaces the first, but nobody updated the first one's status.
+
+```sh
+cd "$(mktemp -d)" && mkdir -p docs/adr
+
+cat > docs/adr/0001-use-postgresql.md <<'EOF'
+---
+title: Use PostgreSQL
+status: accepted
+date: 2026-01-10
+---
+
+# Use PostgreSQL
+
+## Decision
+
+Orders are stored in PostgreSQL.
+EOF
+
+cat > docs/adr/0002-use-sqlite-at-the-edge.md <<'EOF'
+---
+title: Use SQLite at the edge
+status: accepted
+date: 2026-03-02
+supersedes: ["0001"]
+---
+
+# Use SQLite at the edge
+
+## Decision
+
+Edge nodes store orders in SQLite, replacing [[0001]].
+EOF
+```
+
+```mermaid
+graph LR
+  0002["0002 Use SQLite at the edge<br/>status: accepted"] -->|supersedes| 0001["0001 Use PostgreSQL<br/>status: accepted — but it was replaced"]
+  classDef wrong stroke:#d1242f,stroke-width:2px
+  class 0001 wrong
+```
+
+**2. Validate.** DocDag reports the contradiction, names the line and says how to fix it.
+
+```sh
+docdag validate
+```
+
+```text
+docs/adr/0001-use-postgresql.md:3: ERROR status_drift 0001: has inbound supersedes but status is not superseded
+  fix: set status: superseded in docs/adr/0001-use-postgresql.md
+```
+
+Every finding has this shape — `<path>:<line>: <SEVERITY> <rule> <id>: <detail>` — and the exit code
+is 1, which is what stops a CI job.
+
+**3. Apply the fix and validate again.**
+
+```sh
+sed -i.bak 's/^status: accepted/status: superseded/' docs/adr/0001-use-postgresql.md
+rm docs/adr/0001-use-postgresql.md.bak
+docdag validate
+```
+
+```text
+OK: 2 docs, 1 typed edges, no cycles
+```
+
+**4. Ask the graph.**
+
+```sh
+docdag resolve 0001        # what replaced this decision?
+docdag query --binding     # what is in force right now?
+docdag context 0001        # the record, what it resolves to, and the decision text of each
+```
+
+```text
+0002
+0002
+ref
+  0001  Use PostgreSQL  [superseded]  docs/adr/0001-use-postgresql.md
+    Orders are stored in PostgreSQL.
+
+resolves to (0001 is superseded)
+  0002  Use SQLite at the edge  [accepted]  docs/adr/0002-use-sqlite-at-the-edge.md
+    Edge nodes store orders in SQLite, replacing [[0001]].
+```
+
+**5. Write the next decision.** `docdag new` creates the record and marks the one it replaces,
+touching nothing else in that file. Commit first, so that step 6 has something to compare with.
+
+```sh
+git init -q && git add -A
+git -c user.name=demo -c user.email=demo@example.com commit -qm "decisions so far"
+
+docdag new "Move orders to DynamoDB" --supersedes 0002
+```
+
+```text
+docs/adr/0003-move-orders-to-dynamodb.md
+```
+
+**6. See what the change does to the graph.** This is what a reviewer wants from a pull request.
+
+```sh
+docdag diff HEAD
+```
+
+```text
++ supersedes 0003 -> 0002
+~ status     0002: accepted -> superseded
++ document   0003 [proposed]
+binding: 1 -> 0 (-1)
+```
+
+The last line says a decision went out of force and nothing took its place: `0003` is still
+`proposed`. Accept it and the number comes back.
+
+```sh
+sed -i.bak 's/^status: proposed/status: accepted/' docs/adr/0003-move-orders-to-dynamodb.md
+rm docs/adr/0003-move-orders-to-dynamodb.md.bak
+docdag diff HEAD | tail -1
+docdag resolve 0001
+```
+
+```text
+binding: 1 -> 1 (0)
+0003
+```
+
+**7. Draw it.** `docdag export` prints Mermaid, which GitHub renders in a Markdown file as it is.
+
+```sh
+docdag export
+```
+
+```mermaid
+graph LR
+  0001["0001 Use PostgreSQL"]
+  0002["0002 Use SQLite at the edge"]
+  0003["0003 Move orders to DynamoDB"]
+  0002 -->|supersedes| 0001
+  0003 -->|supersedes| 0002
+```
+
+## Command cheat sheet
+
+| I want to know… | Run |
+| --- | --- |
+| Are the records consistent? | `docdag validate` |
+| What is in force today? | `docdag query --binding` |
+| What replaced decision 12? | `docdag resolve 0012` |
+| What does decision 12 build on? | `docdag query 0012 --edge depends-on` |
+| What would break if decision 12 changed? | `docdag query 0012 --ancestors --edge depends-on` |
+| Everything about decision 12, briefly | `docdag context 0012 --budget 400` |
+| What does this branch change? | `docdag diff origin/main` |
+| What can this one edit break? | `docdag validate --touching docs/adr/0012-some-title.md` |
+| What would `new` write? | `docdag new "Some title" --supersedes 0012 --dry-run` |
+| Are my rules themselves sound? | `docdag lint` |
+| How big and how connected is the corpus? | `docdag stats` |
+
+Recipes for scripts — every reading command takes `--format json`:
+
+```sh
+# One line per finding, for a report or a dashboard
+docdag validate --format json \
+  | jq -r '.findings[] | "\(.severity)\t\(.rule)\t\(.id)\t\(.location.path):\(.location.line)"'
+
+# The decisions in force, with their titles
+docdag query --binding --fields id,title
+
+# The same as JSON
+docdag query --binding --format json | jq -r '.[] | "\(.id)\t\(.title)"'
+
+# Only the supersession chains, written to a file
+docdag export --connected --edge supersedes --out supersedes.mmd
+
+# An SVG, with Graphviz installed
+docdag export --format dot | dot -Tsvg > decisions.svg
+
+# The corpus as it was at a tag
+docdag query --binding --at v1.0.0
+```
+
+[docs/commands.md](docs/commands.md) documents every command, flag, exit code and output shape.
+
+## Put it in CI
+
+```mermaid
+flowchart LR
+  pr["pull request"] --> v["docdag validate<br/>are the records consistent?"]
+  pr --> i["validate --immutable-since<br/>was an accepted record rewritten?"]
+  pr --> d["docdag diff<br/>what moved in or out of force?"]
+  v --> gate{"errors?"}
+  i --> gate
+  gate -->|no| merge["merge"]
+  gate -->|yes| ann["annotations on the changed lines"]
+  d --> review["a reviewer reads the delta"]
+```
+
+Save this as `.github/workflows/decisions.yml`. The composite action downloads the release binary,
+verifies it against the release's `checksums.txt`, and needs no Go toolchain.
+
+```yaml
+name: decisions
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  docdag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # --immutable-since and diff read history
+
+      - name: Records are consistent, and accepted ones were not rewritten
+        uses: Kaikei-e/DocDag@v0.7.0
+        with:
+          version: v0.7.0
+          args: validate --format github --immutable-since origin/${{ github.base_ref || github.event.repository.default_branch }}
+
+      - name: Show what the change does to the graph
+        if: github.event_name == 'pull_request'
+        uses: Kaikei-e/DocDag@v0.7.0
+        with:
+          version: v0.7.0
+          args: diff origin/${{ github.base_ref }} --format github
+```
+
+What each part buys you:
+
+- **`validate`** exits 1 if any finding is an error, and exits 3 if the check could not actually
+  run — no documents found, a misspelled key in `docdag.yaml`, a directory that does not exist. A
+  job that checked nothing does not pass.
+- **`--immutable-since`** freezes accepted records: a pull request may change an accepted record's
+  `status` and append to it, and nothing else.
+- **`diff`** annotates each added or removed edge and each status change, and ends with the
+  `binding:` line. A change that takes decisions out of force says so in a number, which a
+  900-file diff does not.
+
+The simplest possible gate is two lines in an existing job:
 
 ```yaml
       - uses: actions/checkout@v4
       - uses: Kaikei-e/DocDag@v0.7.0
-        with:
-          args: validate --format github   # this is the default
 ```
 
-## Quickstart
+Prefer to catch it before the push? Add the [pre-commit](https://pre-commit.com) hooks:
 
-No configuration is needed. From the root of a repository whose decisions live in `docs/decisions`:
-
-```console
-$ docdag validate
-docs/decisions/0002-store-thumbnails-on-the-local-disk.md:3: WARN unstructured_supersedes 0002: supersedes edge 0003 -> 0002 comes from a field value; declare it in frontmatter
-  fix: declare supersedes: 0002 in 0003
-OK: 4 docs, 3 typed edges, no cycles
-
-$ docdag resolve 0002          # what replaced this decision? (stops at proposed successors)
-0003
-
-$ docdag query --binding       # what is in force right now?
-0001
-0003
-
-$ docdag query 0001 --ancestors --edge depends-on   # what rests on this decision?
-0003
-0004
-
-$ docdag new "Use read-through caching" --supersedes 0003   # creates 0005 and rewrites 0003 status in place
-docs/decisions/0005-use-read-through-caching.md
-
-$ docdag export --connected --edge supersedes       # Mermaid (default), Graphviz DOT, or JSON
+```yaml
+repos:
+  - repo: https://github.com/Kaikei-e/DocDag
+    rev: v0.7.0
+    hooks:
+      - id: docdag-validate      # any .md or docdag.yaml edit: the invariants
+      - id: docdag-lint          # a docdag.yaml edit: the rules themselves
 ```
 
-DocDag looks in `docs/adr`, `doc/adr`, `docs/decisions`, `docs/ADR`, `adr` — the first that exists
-and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 to 6 digits; `--dir` overrides it.
-`docdag new` rewrites **only** the `status:` value of each superseded document in place, keeping
-bodies and line endings byte-identical and computing every rewrite before any file is touched
-(`--dry-run` prints the plan without writing). `docdag export` emits the typed graph as `mermaid`
-(on stdout by default), `dot`, or `json`.
+[docs/ci.md](docs/ci.md) covers SHA pinning, `reviewdog` output, step summaries and scheduled runs.
 
-### The spec preset
+## When an accepted record is wrong
 
-One line adopts the second preset whole, and the eight directories it names appear as the corpus
-grows into them. The corpus below holds three clauses, the conformance test enforcing one of them,
-the subject all three speak to and the post-mortem they cite as their counterexample:
+Freezing accepted records raises a question: what if a wrong edge is already in one? Suppose `0012`
+lists `0007` under `supersedes` by mistake. `0007` is still the rule, but it has dropped out of
+`query --binding`, and the gate forbids editing `0012`. The correction is a record of its own:
+
+```sh
+cat > docs/adr/0015-0012-did-not-replace-0007.md <<'EOF'
+---
+title: 0012 did not replace 0007
+status: accepted
+date: 2026-11-15
+retracts:
+  - from: "0012"
+    edge: supersedes
+    to: "0007"
+---
+
+# 0012 did not replace 0007
+
+## Decision
+
+The supersedes entry for [[0007]] in [[0012]] was added by mistake. 0007 remains in force.
+EOF
+```
+
+```mermaid
+graph LR
+  0012["0012"] -->|supersedes| 0009["0009"]
+  0012 -. "supersedes, retracted" .-> 0007["0007<br/>in force again"]
+  0015["0015 correction record"] -->|retracts| 0012
+  classDef fixed stroke:#1a7f37,stroke-width:2px
+  class 0007 fixed
+```
+
+Once `0015` is accepted, the edge is void everywhere — `validate`, `resolve`, `query` and `export`
+all read the corrected graph — and `0007` can go back to `status: accepted`. Nothing was rewritten.
+`docdag context 0007` shows the retraction, and withdrawing `0015` undoes it. A retraction that
+names an edge that does not exist is itself a finding (`invalid_retraction`), so a typo cannot
+silently do nothing.
+
+## What it checks
+
+| Area | Findings |
+| --- | --- |
+| Files and frontmatter | `invalid_frontmatter`, `missing_frontmatter`, `id_collision`, `unknown_status`, `unmanaged_file` |
+| Edges | `dangling_ref`, `invalid_ref`, `empty_edge`, `cycle`, `cardinality`, `inverse_mismatch`, `stale_target`, `invalid_retraction` |
+| Status against the graph | `status_drift` (replaced, but not marked superseded), `superseded_orphan` (marked superseded, but nothing replaced it) |
+| History | `immutable_violation`, under `--immutable-since` |
+| Opt-in | required body `sections:`, declared `fields:` (vocabularies, required keys, lists), `require_mention` on an edge, dangling body links, kinds with their own identifier shapes, in-force periods |
+
+The `adr` preset knows six statuses. DocDag does not police how a record moves between them; it
+checks that the status agrees with the edges.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> proposed
+  proposed --> accepted
+  proposed --> rejected
+  proposed --> withdrawn
+  accepted --> superseded: a newer accepted record supersedes it
+  accepted --> deprecated
+  note right of accepted
+    binding: what query --binding lists
+  end note
+```
+
+[docs/checks.md](docs/checks.md) gives every finding its severity, its trigger and its remedy.
+
+Rules are configuration, so they can be wrong too. `docdag lint` checks the rules rather than the
+documents: a rule that can never fire, one that fires on everything, two that say the same thing,
+and — with `--corpus` or `--fixtures` — a rule your records have never triggered.
+
+## Configuration
+
+`docdag.yaml` is optional. Add one at the repository root when the defaults stop being enough;
+everything in it is opt-in. This one is a reasonable start for a MADR repository:
+
+```yaml
+preset: adr
+dir: docs/decisions
+
+fields:
+  date: {required: true}
+  tags: {type: list, min_items: 1}
+
+edges:
+  - {name: supersedes, key: supersedes, acyclic: true, direction: forward, require_mention: warn}
+  - {name: depends-on, key: depends-on, acyclic: true, direction: forward}
+
+sections:
+  required: ["Context and Problem Statement", "Decision Outcome"]
+
+references:
+  dangling: error
+```
+
+It asks for a date on every record, at least one tag where tags are written, the two MADR headings,
+no broken links in bodies, and a warning when a record claims to supersede another without ever
+mentioning it. After editing the file, check the rules and the corpus:
+
+```sh
+docdag lint && docdag validate
+```
+
+[docs/configuration.md](docs/configuration.md) is the full reference, including custom edges,
+custom rules and both presets printed in full.
+
+## For coding agents
+
+An agent that reads forty ADR files to answer "what is in force?" spends its context on the wrong
+thing. One command replaces the fan-out:
+
+```sh
+# A record, what it resolves to and its neighbourhood, capped at 400 tokens
+docdag context 0012 --budget 400 --format md
+
+# The decisions in force that touch one service (needs affected_services declared under fields:)
+docdag query --binding --where affected_services=contains:billing --fields id,title
+
+# After editing a record: only what that edit can break
+docdag validate --touching docs/adr/0012-some-title.md
+```
+
+This repository is also a Claude Code plugin. It installs a skill and a hook that validates a
+decision record as it is written:
+
+```sh
+claude plugin marketplace add Kaikei-e/DocDag
+claude plugin install docdag@docdag
+```
+
+Inside a session the same two steps are `/plugin marketplace add Kaikei-e/DocDag` and then
+`/plugin install docdag@docdag`, entered as separate prompts. [docs/agents.md](docs/agents.md)
+covers the flags, the output shapes and what the hook requires.
+
+## Beyond ADRs: a specification as a graph
+
+The second preset, `spec`, treats a normative standard the same way: clauses, the conformance tests
+that enforce them and the deviations recorded against them, each kind in its own directory with its
+own identifier shape. One line adopts it:
+
+```sh
+echo "preset: spec" > docdag.yaml
+```
 
 ```console
-$ cat docdag.yaml
-preset: spec
-
 $ docdag validate
 spec/clauses/UZ-V-002.md:4: ERROR orphan_must UZ-V-002: is MUST or MUST_NOT and accepted but nothing enforces it
 as of 2026-09-02
@@ -174,146 +505,86 @@ UZ-V-003	SHOULD
 $ docdag query --binding --as-of 2027-06-01   # UZ-V-003 runs out on 2027-01-01
 UZ-V-001	MUST
 UZ-V-002	MUST
-
-$ docdag new --kind clause --id UZ-V-004 "A report names its grader"
-spec/clauses/UZ-V-004.md
 ```
 
-`UZ-V-002` claims a `MUST` that no conformance test enforces, which is a standard saying one thing
-and checking another; the remedy is the test or a weaker modality, so the finding carries no `fix:`
-line — which of the two is right is a decision rather than an edit. The modality column is there
-because a set spanning permissions and prohibitions cannot be read without it. And the closing
-`as of` line is the `--as-of` run's premise: where a corpus declares a `period:`, what is in force
-is an answer about a day, `--at <rev>` moves the revision the documents are read from, and the two
-compose into "what the vault at that revision said was in force on that day". The `adr` preset
-declares no period, so the corpus above answers the same way on every day.
+A `MUST` that no test enforces is a finding. Clauses can carry an in-force period, so "what is
+binding" is a question about a day: `--as-of <day>` picks the day and `--at <rev>` picks the
+revision the documents are read from.
 
-## What it checks
+## Works with the records you already have
 
-`validate` prints one line per finding, followed by an indented `fix:` wherever there is a
-mechanical remedy, in `--format text|json|github|rdjson` (including GitHub Actions workflow commands
-and [reviewdog](https://github.com/reviewdog/reviewdog) `rdjson` diagnostics), and exits 1 if any
-finding is an error:
+- **A MADR repository validates as it is.** Filenames `NNNN-kebab-title.md` and bare `NNNN.md` are
+  recognized, 3 to 6 digits. Frontmatter keys DocDag does not know are ignored, so another tool's
+  fields are safe.
+- **`status: superseded by 0003` is understood.** It yields the same `supersedes` edge as declaring
+  it in frontmatter, with a warning that suggests the structured form.
+- **References are forgiving.** `339`, `ADR-339`, `000339` and `0339-use-postgres.md` all name the
+  same record, so renaming a file's title does not break anything that points at it.
+- **Body links cannot fail a build** unless `references.dangling` asks for that.
 
+## How it works
+
+DocDag keeps two layers apart. The **constraint layer** is the typed edges written in frontmatter
+(`supersedes:`, `depends-on:`, and any you declare). Only these carry invariants. The **reference
+layer** is the untyped `[[wikilinks]]` and relative Markdown links in bodies; it is reported by
+`stats` and `--include-refs` and never constrains anything by default.
+
+```mermaid
+graph LR
+  0003["0003"] -->|supersedes| 0002["0002"]
+  0003 -->|depends-on| 0001["0001"]
+  0004["0004"] -->|depends-on| 0003
+  0004 -. "mentions [[0002]]" .-> 0002
+  0002 -. "links to 0001" .-> 0001
 ```
-<path>:<line>: <SEVERITY> <rule> <id>: <detail>
-```
 
-- **Structural** — `invalid_frontmatter`, `missing_frontmatter`, `id_collision`, `unknown_status`,
-  `empty_edge`, `invalid_ref`, `dangling_ref`, `padding_mismatch`, `unmanaged_file`, `unstructured_supersedes`,
-  `derived_conflict`, `invalid_retraction`, `unmentioned_edge` (when an edge sets
-  `require_mention: warn | error`), and, for an edge that declares `attrs:`, `edge_attr_unknown`,
-  `edge_attr_missing`, `edge_attr_invalid`.
-- **Sections** — for a corpus that opts into `sections:`, `missing_section` and `section_order`
-  (with `|` heading alternatives, heading `level:`, `ordered: true`, and `when: {status: [...]}`).
-- **Kinds and declared fields** — for a corpus that declares `kinds:` or `fields:`, an identity its
-  kind's pattern rejects, a `kind:` its directory disagrees with, an undeclared key on a closed
-  kind, an endpoint of the wrong kind and a field value the vocabulary does not hold:
-  `id_mismatch`, `kind_mismatch`, `unknown_field`, `edge_kind_mismatch`, `unknown_field_value`,
-  `missing_field`, `deprecated_field`.
-- **Graph, target leaf and modality** — `cycle`, `cardinality`, `inverse_mismatch`, and, for an edge
-  that declares `target:` (such as `leaf_of: supersedes`, flagging references to superseded
-  intermediate nodes with a `fix:` naming the current leaf) or a corpus that declares
-  `path_constraints:`, `stale_target` and `path_mismatch`; for one that declares a `modality`
-  vocabulary, `modality_conflict` (with weak conflicts answered by a scoped `excepts:` edge
-  suppressed and inspectable via `validate --show-suppressed`) and `excepts_strict`; plus the two
-  status rules `adr` ships, `status_drift` and `superseded_orphan`, which `spec` replaces with ten of
-  its own (including inbound coverage rules such as `orphan_must` built on `inbound`/`via_inbound`).
-- **Periods (bitemporal valid/transaction time)** — for a kind that declares `period:`, the interval
-  a document writes (or the end day derived from its earliest accepted successor, never written back
-  to frontmatter) is evaluated against `--as-of <day>` and `--at <rev>`: `period_invalid`,
-  `period_conflict`, `expired_deviation`.
-- **Reference layer** — `dangling_reference`, off until `references.dangling` asks for it.
-- **Append-only history** — `immutable_violation`, under `--immutable-since <rev>` (scoped to
-  `append_only: true` kinds such as `conform` and `measure` on multi-kind corpora): a settled
-  document may only change its `status`, gain entries under an `inverse:` or `appendable: true` edge
-  key, or append lines to the end of its body.
-- **Fail-closed execution (exit 3)** — every reading command exits 3 (`model.ErrEmptyCorpus`) when
-  zero managed documents match; `docdag.yaml` rejects unknown keys (`DisallowUnknownField`) and
-  unknown `structural:` check names; and explicit `dir:` / kind `dir:` paths must exist on disk with
-  exact case.
+Solid arrows are typed edges and are checked. Dotted arrows are body links and are only reported.
 
-[docs/checks.md](docs/checks.md) gives each finding its severity, its trigger and its remedy.
+Status is read against that graph rather than trusted on its own. A record is *binding* when its
+status is `accepted` and nothing in force supersedes it, and a status the edges contradict is a
+finding, not a matter of opinion.
 
-`docdag lint` asks the other question — whether the rules themselves hold up — and emits the same
-`text|json|github|rdjson` formats. Layer 1 expands conditions to disjunctive normal form over the
-declared finite vocabularies and reports a rule that can never fire (`unfirable_rule`), one that
-fires on every document (`always_fires`), one that says what another rule already says
-(`duplicate_rule`), conflicting remedies (`conflicting_fix`), and unused declarations. Layer 2
-(`--corpus`, `--since <rev>`) reports rules the vault never fires, and Layer 3 (`--fixtures <dir>`,
-seeded by `docdag new --fixture <rule>`) runs each rule against its own `ruleid/` and `ok/` fixtures
-to prove a silent rule can still ring. `validate` never runs it: a configuration's health and a
-corpus's state have different lifecycles.
+The rule language is deliberately small, so that every configuration can be checked without a
+solver: no expression language, conditions that look at most one hop away, and path constraints of
+one or two steps. The binary is the Go standard library plus `github.com/goccy/go-yaml`. The
+[decision records](docs/ADR/) explain each of these choices; they are validated by DocDag in this
+repository's own CI.
 
-## For agents
+## Go packages
 
-An agent should ask the graph rather than read the directory: one command replaces a fan-out of file
-reads. `docdag context <ref>` prints a document, what it resolves to (stopping at non-binding
-`proposed` successors and reporting them as pending) and its neighbourhood, each entry quoting the
-first paragraph of its `Decision` section, with `--budget N` capping the prose in tokens and
-`--format text|md|json` shaping the output; `--fields id,title,status,path` gives `resolve` and
-`query` tab-separated columns; `docdag stats` (and `stats --fields`) summarises corpus degrees,
-modalities and frontmatter field freshness; `docdag validate --touching <path>` reports only what
-one edit can break; and `docdag lint` answers for an edit to `docdag.yaml` rather than to a
-document. This repository is also a Claude Code plugin, installing a skill and a fail-closed
-`PostToolUse` hook that validates a decision record as it is written and lints the configuration when
-that is what changed:
+The `config`, `model` and `lint` packages are public, for a program that wants to build a
+configuration, validate it and write `docdag.yaml` without shelling out:
 
 ```sh
-claude plugin marketplace add Kaikei-e/DocDag
-claude plugin install docdag@docdag
+go get github.com/Kaikei-e/DocDag@v0.7.0
 ```
 
-Inside a session the same two steps are `/plugin marketplace add Kaikei-e/DocDag` and then
-`/plugin install docdag@docdag`, entered as separate prompts: pasted together, they arrive as one
-command and the marketplace source is rejected.
+```go
+cfg := config.SpecPreset()
+// … add kinds, edges, rules …
+if err := cfg.Validate(); err != nil {
+    return err
+}
+out, err := yaml.Marshal(cfg)
+```
 
-[docs/agents.md](docs/agents.md) covers the flags, the output shapes and the hook's requirements.
+The field names and YAML tags of `config.Config` are the contract;
+[ADR 0006](docs/ADR/0006-public-config-yaml-roundtrip-and-append-only.md) says what is stable.
 
 ## Documentation
 
 - [docs/commands.md](docs/commands.md) — every command (`validate`, `lint`, `resolve`, `query`,
-  `context`, `export`, `stats`, `diff`, `new`), the global `--as-of` / `--at` time flags, the exit codes and
-  the `text|json|github|rdjson` and `mermaid|dot|json` output formats.
-- [docs/configuration.md](docs/configuration.md) — the `docdag.yaml` reference: the `adr` and `spec`
-  presets in full, every optional key (`kinds:`, `fields:`, `edges:`, `target:`, `path_constraints:`,
-  `projections:`, `period:`, `sections:`, `structural:`), the closed rule vocabulary, and the Go API.
-- [docs/checks.md](docs/checks.md) — one entry per finding (34 structural checks, preset rules,
-  reference and history checks, and `lint` findings): what triggers it and what clears it.
-- [docs/ci.md](docs/ci.md) — the composite action, `github` and `rdjson` annotations, append-only
-  history (`--immutable-since`), scheduled `--as-of` expiry runs, linting the configuration and the
-  pre-commit hooks.
-- [docs/agents.md](docs/agents.md) — `context --budget`, `--fields`, `--touching`, `--as-of` /
-  `--at`, `lint`, `new --fixture` and the Claude Code plugin.
-- [docs/ADR/](docs/ADR/) — the nine architecture decision records (0001–0009) behind the design,
-  indexed and in reading order: the `spec` preset without an expression language, target conditions
-  and 1–2 step path constraints, modality and exception suppression, three-layer `lint` vacuity
-  checking, bitemporal in-force periods, the public `config`/`model`/`lint` packages and
-  `append_only` kinds, fail-closed enforcement, opt-in body `sections:`, and `resolve` stopping at
-  non-binding successors.
-- [CHANGELOG.md](CHANGELOG.md) — what each release changed across v0.1.0–v0.7.0, including the
-  v0.5.0 fail-closed and v0.7.0 breaking changes and migration steps.
-
-## MADR compatibility
-
-A conventional MADR repository needs no changes — the invariants hold as the files already are:
-
-- Filenames `NNNN-kebab-title.md` and bare `NNNNNN.md` are both recognized, 3 to 6 digits, and
-  unrecognized frontmatter keys on open kinds are ignored, so another tool's fields are safe
-  (`docdag.yaml` itself is decoded strictly, and kinds with `closed: true` reject undeclared
-  frontmatter keys). Stray `.md` files in the documents directory not matching the filename pattern
-  are warned as `unmanaged_file` (exempt: `README.md`, `index.md`, `template.md`, and files starting
-  with `_` or `.`).
-- `status: superseded by 0003` derives the `supersedes` edge with `0003` as the newer document and
-  makes the containing one count as superseded, raising an `unstructured_supersedes` warning — a
-  suggestion to declare the edge in frontmatter, not a failure. The graph is the same either way.
-- Body links stay in the reference layer, so prose cannot fail a build unless `references.dangling`
-  opts in.
-- Optional `sections:` configuration can enforce standard MADR or Nygard headings and ordering.
-
-[docs/checks.md](docs/checks.md) has the rest: how `withdrawn` differs from `superseded`, what makes
-a `supersedes:` entry `invalid_ref` rather than `dangling_ref`, and which links never join the
-reference layer at all.
+  `context`, `export`, `stats`, `diff`, `new`), its flags, exit codes and output formats.
+- [docs/configuration.md](docs/configuration.md) — the `docdag.yaml` reference and both presets in
+  full.
+- [docs/checks.md](docs/checks.md) — one entry per finding: what triggers it and what clears it.
+- [docs/ci.md](docs/ci.md) — the action, annotations, append-only history, correcting a frozen
+  record, scheduled expiry runs and pre-commit hooks.
+- [docs/agents.md](docs/agents.md) — `context`, `--fields`, `--where`, `--touching` and the Claude
+  Code plugin.
+- [docs/ADR/](docs/ADR/) — the decision records behind the design.
+- [CHANGELOG.md](CHANGELOG.md) — what each release changed, with migration steps for the breaking
+  ones (v0.5.0 and v0.7.0).
 
 ## License
 
