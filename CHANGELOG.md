@@ -6,29 +6,7 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-### Added
-
-- `validate --if-managed` (requires `--touching`) resolves the configuration without parsing any document and exits 0 silently when no corpus is discovered or no `--touching` path sits in a resolved document directory, so a caller can hand it any edited Markdown file.
-
-### Changed
-
-- **Breaking change: `adr` preset binding (`accepted_unsuperseded`) agrees with `resolve`.** `query --binding`, `stats`, and `context` now keep an `accepted` record when its `supersedes` successors are only `proposed`, `withdrawn`, or not yet in force (`period:`), and drop any record outside its own `in_force` period, matching `docdag resolve` (ADR 0009). The `adr` preset's `accepted_unsuperseded` projection now requires `status: accepted` and `in_force: "true"` on the record, and `not.any_of` over two `via_inbound` `supersedes` clauses (`status: accepted` with `in_force: "true"`, or `status: superseded`); `ADRPresetVersion` is bumped from `2` to `3`, and configurations without `projections:` or `binding:` now fall back on this same definition. Because `projections:` in `docdag.yaml` replaces the preset's list rather than merging by projection name, corpora restoring the previous `accepted_unsuperseded` definition must declare it under `projections:`:
-
-  ```yaml
-  projections:
-    - name: accepted_unsuperseded
-      when:
-        not_inbound: supersedes
-        attr:
-          status: { eq: accepted }
-  ```
-
-### Fixed
-
-- The Claude Code `PostToolUse` hook (`scripts/docdag-validate.sh`) validated edits only under a top-level `dir:` or the well-known ADR directories, so an edit under `preset: spec` or a per-kind `dir:` was never checked. It now runs `docdag validate --touching <file> --if-managed` and leaves the question of what is a managed document to `docdag`. A `docdag` that predates the flag makes the hook report that enforcement is OFF instead of validating.
-- `validate --touching` no longer prints the `as of <day>` line when the corpus fails and every finding is hidden, so a clean edit in a failing `period:` corpus leaves stdout empty and the hook stays silent about somebody else's failure.
-
-## [0.7.0] - 2026-11-15
+## [0.7.0] - 2026-11-17
 
 v0.7.0 comes out of an audit of a 1009-record ADR corpus in which every structural check passed
 and the graph was still wrong: a bulk edit had added `supersedes` entries to an accepted record,
@@ -36,9 +14,11 @@ two of them to unrelated records still in force, which then dropped out of the b
 under `--immutable-since` nothing could put them back. The release adds a way to correct a frozen
 record with a record (`retracts:`), a way to see such a change before it merges
 (`docdag diff <rev>`, with the binding-set delta), two opt-in edge options (`appendable` and
-`require_mention`), and list-typed declared fields. It is a breaking release in two places: the
-`adr` preset's `status_drift` now waits for an accepted successor (preset revision 2), and
-`retracts` is a reserved frontmatter key; see Changed. There are no new dependencies.
+`require_mention`), list-typed declared fields, and a Claude Code hook that validates every
+managed document rather than only ADR directories. It is a breaking release in three places: the
+`adr` preset's `status_drift` now waits for an accepted successor, and its binding set
+(`accepted_unsuperseded`) now agrees with `resolve` (preset revision 3), and `retracts` is a
+reserved frontmatter key; see Changed. There are no new dependencies.
 
 ### Added
 
@@ -48,10 +28,12 @@ record with a record (`retracts:`), a way to see such a change before it merges
 - Declared `edges:` entries now support `appendable: true` (default `false`; unset in built-in presets), letting frozen documents under `--immutable-since` add that frontmatter key or append new entries to it while still rejecting removals or attribute edits.
 - Declared `edges:` entries now support `require_mention: warn | error` (disabled when omitted), reporting `unmentioned_edge` when an edge target declared in frontmatter is not referenced in the declaring document's body.
 - Declared `fields:` entries now support `type: list` alongside the default `scalar`, `min_items: N` on list fields (`missing_field` when a written list holds fewer than `N` items), and `one_of:` per item on list fields (`unknown_field_value` per offending item). Writing a YAML mapping under a list field reports `missing_field`.
+- `validate --if-managed` (requires `--touching`) resolves the configuration without parsing any document and exits 0 silently when no corpus is discovered or no `--touching` path sits in a resolved document directory, so a caller can hand it any edited Markdown file.
 
 ### Changed
 
-- **Breaking change: `adr` preset `status_drift` waits for an agreed successor.** The `adr` preset rule `status_drift` now requires an `accepted` or `superseded` successor (`via_inbound` over `supersedes`), so a `proposed` or `withdrawn` successor no longer triggers `status_drift` on its predecessor, aligning `validate` with `resolve` (ADR 0009). `ADRPresetVersion` is bumped from `1` to `2`, and `status_field:` overrides now retarget `via`, `via_inbound`, `any_of`, and `not` rule clauses as well. Because `rules:` in `docdag.yaml` replaces the preset's rule list rather than merging by rule name, corpora restoring the previous `status_drift` behaviour must declare both `adr` rules:
+- `ADRPresetVersion` goes from `1` (v0.6.0) to `3`. Revision 2 is the `status_drift` change and revision 3 the binding change below; both ship together in this release, so no released build reports revision 2.
+- **Breaking change: `adr` preset `status_drift` waits for an agreed successor.** The `adr` preset rule `status_drift` now requires an `accepted` or `superseded` successor (`via_inbound` over `supersedes`), so a `proposed` or `withdrawn` successor no longer triggers `status_drift` on its predecessor, aligning `validate` with `resolve` (ADR 0009). `status_field:` overrides now retarget `via`, `via_inbound`, `any_of`, and `not` rule clauses as well. Because `rules:` in `docdag.yaml` replaces the preset's rule list rather than merging by rule name, corpora restoring the previous `status_drift` behaviour must declare both `adr` rules:
 
   ```yaml
   rules:
@@ -65,16 +47,31 @@ record with a record (`retracts:`), a way to see such a change before it merges
       message: "status is superseded but no document supersedes it"
   ```
 
+- **Breaking change: `adr` preset binding (`accepted_unsuperseded`) agrees with `resolve`.** `query --binding`, `stats`, and `context` now keep an `accepted` record when its `supersedes` successors are only `proposed`, `withdrawn`, or not yet in force (`period:`), and drop any record outside its own `in_force` period, matching `docdag resolve` (ADR 0009). The `adr` preset's `accepted_unsuperseded` projection now requires `status: accepted` and `in_force: "true"` on the record, and `not.any_of` over two `via_inbound` `supersedes` clauses (`status: accepted` with `in_force: "true"`, or `status: superseded`), and configurations without `projections:` or `binding:` now fall back on this same definition. Because `projections:` in `docdag.yaml` replaces the preset's list rather than merging by projection name, corpora restoring the previous `accepted_unsuperseded` definition must declare it under `projections:`:
+
+  ```yaml
+  projections:
+    - name: accepted_unsuperseded
+      when:
+        not_inbound: supersedes
+        attr:
+          status: { eq: accepted }
+  ```
+
 - **Breaking change: `retracts` is a reserved frontmatter key.** Configurations declaring an edge `key`, `inverse`, or `fields:` entry named `retracts` are rejected at load, and closed kinds accept `retracts` without triggering `unknown_field`. Any configuration declaring a custom `key`, `inverse`, or field named `retracts` must rename it.
 
 ### Fixed
 
 - A `required: true` scalar field holding a YAML list or mapping now reports a shape-specific `missing_field` message (`frontmatter key "<name>" is declared as a scalar but holds a list; declare it with type: list`, or `holds a mapping`) on the key's own line rather than claiming the key is absent.
+- The Claude Code `PostToolUse` hook (`scripts/docdag-validate.sh`) validated edits only under a top-level `dir:` or the well-known ADR directories, so an edit under `preset: spec` or a per-kind `dir:` was never checked. It now runs `docdag validate --touching <file> --if-managed` and leaves the question of what is a managed document to `docdag`. A `docdag` that predates the flag makes the hook report that enforcement is OFF instead of validating.
+- `validate --touching` no longer prints the `as of <day>` line when the corpus fails and every finding is hidden, so a clean edit in a failing `period:` corpus leaves stdout empty and the hook stays silent about somebody else's failure.
 
 ### Migrating
 
-1. **Review `status_drift` expectations on `adr` corpora:** Under preset revision 2, a `proposed` or `withdrawn` successor no longer raises `status_drift` on its predecessor. To restore the previous behaviour, declare both `status_drift` and `superseded_orphan` under `rules:` in `docdag.yaml` as shown under `Changed`.
-2. **Rename any custom `retracts` configuration key:** Because `retracts` is now a reserved built-in frontmatter key, rename any `edges:` `key` or `inverse`, or any `fields:` entry, named `retracts` in `docdag.yaml` and update existing frontmatter to match.
+1. **Review `status_drift` expectations on `adr` corpora:** Under preset revision 3, a `proposed` or `withdrawn` successor no longer raises `status_drift` on its predecessor. To restore the previous behaviour, declare both `status_drift` and `superseded_orphan` under `rules:` in `docdag.yaml` as shown under `Changed`.
+2. **Review the binding set on `adr` corpora:** `query --binding`, `stats`, and `context` now keep a predecessor whose successors are not yet accepted and in force, and drop records outside their own `period:`. Compare `docdag query --binding` before and after upgrading (or run `docdag diff <rev>`); to restore the previous set, declare the old `accepted_unsuperseded` under `projections:` as shown under `Changed`.
+3. **Rename any custom `retracts` configuration key:** Because `retracts` is now a reserved built-in frontmatter key, rename any `edges:` `key` or `inverse`, or any `fields:` entry, named `retracts` in `docdag.yaml` and update existing frontmatter to match.
+4. **Upgrade `docdag` together with the Claude Code plugin:** The plugin's `PostToolUse` hook now calls `validate --if-managed`; with an older `docdag` on `PATH` it reports that enforcement is OFF.
 
 ## [0.6.0] - 2026-11-15
 
