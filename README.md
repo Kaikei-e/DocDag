@@ -1,7 +1,9 @@
 # DocDag
 
 [![CI](https://github.com/Kaikei-e/DocDag/actions/workflows/ci.yml/badge.svg)](https://github.com/Kaikei-e/DocDag/actions/workflows/ci.yml)
-[![Release](https://github.com/Kaikei-e/DocDag/actions/workflows/release.yml/badge.svg)](https://github.com/Kaikei-e/DocDag/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/Kaikei-e/DocDag)](https://github.com/Kaikei-e/DocDag/releases/latest)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Kaikei-e/DocDag.svg)](https://pkg.go.dev/github.com/Kaikei-e/DocDag)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 **DocDag checks your decision records the way a compiler checks code.** It reads a directory of
 Markdown documents with YAML frontmatter, builds the graph they declare — what supersedes what, what
@@ -14,6 +16,8 @@ Decision records rot in ways a prose review does not catch:
 - two decisions supersede each other in a cycle
 - an accepted record was quietly edited months later
 - nobody can say which decisions are in force today without reading all of them
+- a coding agent reads a replaced decision and follows it, because nothing in the file says it is
+  out of force
 
 Each of these is a property of a graph, so a deterministic check can enforce it.
 
@@ -27,7 +31,11 @@ flowchart LR
 ```
 
 DocDag is one static binary, needs no configuration for a conventional ADR directory, and runs in
-one CI line.
+one CI line. It is tested on real corpora as well as fixtures: it checks the decision records of
+[Alt](https://github.com/Kaikei-e/Alt) (over 1,000 ADRs),
+[PlectoProxy](https://github.com/Kaikei-e/PlectoProxy) and
+[MatrixWhale](https://github.com/Kaikei-e/MatrixWhale), and this repository's CI checks
+[its own](docs/ADR/).
 
 ![docdag validate reporting a status_drift error with its fix, passing once the fix is applied, then docdag context 0002 --budget 120 showing that 0002 was superseded by 0003 and quoting both decisions](docs/demo.svg)
 
@@ -36,7 +44,8 @@ one CI line.
 [Correcting an accepted record](#when-an-accepted-record-is-wrong) ·
 [What it checks](#what-it-checks) · [Configuration](#configuration) ·
 [Coding agents](#for-coding-agents) · [Specifications](#beyond-adrs-a-specification-as-a-graph) ·
-[How it works](#how-it-works) · [Documentation](#documentation)
+[Existing records](#works-with-the-records-you-already-have) · [How it works](#how-it-works) ·
+[Status and support](#status-and-support) · [Documentation](#documentation)
 
 ## Install
 
@@ -67,7 +76,7 @@ install:
 docdag --version
 ```
 
-Already have a directory of ADRs? Run this from the repository root and you are done:
+Already have a directory of ADRs? Run this from the repository root:
 
 ```sh
 docdag validate
@@ -76,6 +85,11 @@ docdag validate
 DocDag looks in `docs/adr`, `doc/adr`, `docs/decisions`, `docs/ADR` and `adr`, takes the first that
 holds files named `NNNN.md` or `NNNN-kebab-title.md`, and applies the built-in `adr` preset. Point
 it somewhere else with `docdag --dir path/to/records validate`.
+
+If your records keep `status` in YAML frontmatter, as MADR 3 and 4 do, that is all the setup there
+is. If they keep it in the body instead — adr-tools and other Nygard-style records use a
+`## Status` section — read [Records without frontmatter](#records-without-frontmatter) first:
+DocDag passes such a corpus with warnings but cannot see its edges.
 
 ## Five-minute tour
 
@@ -482,6 +496,19 @@ Inside a session the same two steps are `/plugin marketplace add Kaikei-e/DocDag
 `/plugin install docdag@docdag`, entered as separate prompts. [docs/agents.md](docs/agents.md)
 covers the flags, the output shapes and what the hook requires.
 
+Any other agent that can run a shell gets the same answers. A few lines in `AGENTS.md` (or
+`CLAUDE.md`) are enough to make it ask the graph instead of reading the directory:
+
+```markdown
+## Architecture decisions
+
+- Decision records live in `docs/adr` and are checked by DocDag.
+- Before changing a design, run `docdag query --binding --fields id,title` to list the decisions
+  in force, then `docdag context <id> --budget 400 --format md` for the ones you touch.
+- Treat binding decisions as rules. A superseded record is history, not guidance.
+- After editing a record, run `docdag validate --touching <file>` and fix what it reports.
+```
+
 ## Beyond ADRs: a specification as a graph
 
 The second preset, `spec`, treats a normative standard the same way: clauses, the conformance tests
@@ -513,14 +540,46 @@ revision the documents are read from.
 
 ## Works with the records you already have
 
-- **A MADR repository validates as it is.** Filenames `NNNN-kebab-title.md` and bare `NNNN.md` are
-  recognized, 3 to 6 digits. Frontmatter keys DocDag does not know are ignored, so another tool's
-  fields are safe.
+- **A MADR 3 or 4 repository validates as it is.** Filenames `NNNN-kebab-title.md` and bare
+  `NNNN.md` are recognized, 3 to 6 digits. Frontmatter keys DocDag does not know are ignored, so
+  another tool's fields are safe.
 - **`status: superseded by 0003` is understood.** It yields the same `supersedes` edge as declaring
   it in frontmatter, with a warning that suggests the structured form.
 - **References are forgiving.** `339`, `ADR-339`, `000339` and `0339-use-postgres.md` all name the
   same record, so renaming a file's title does not break anything that points at it.
 - **Body links cannot fail a build** unless `references.dangling` asks for that.
+
+### Records without frontmatter
+
+DocDag reads status and typed edges from YAML frontmatter only. A record without a `---` block —
+the layout adr-tools writes, with the status under `## Status`, or MADR 2's `* Status:` line — is
+still counted, but it is reported as a `missing_frontmatter` warning and contributes no edges. On
+such a corpus `validate` passes and `query --binding` lists nothing.
+
+Add a block at the top of each record. The body can stay as it is:
+
+```markdown
+---
+title: Use MADR
+status: accepted
+supersedes: ["0001"]
+---
+
+# 2. Use MADR
+
+Date: 2026-02-01
+
+## Status
+
+Accepted
+```
+
+To keep a gate from passing on records it cannot read, turn the warning into an error in
+`docdag.yaml`:
+
+```yaml
+structural: {missing_frontmatter: error}
+```
 
 ## How it works
 
@@ -585,6 +644,17 @@ The field names and YAML tags of `config.Config` are the contract;
 - [docs/ADR/](docs/ADR/) — the decision records behind the design.
 - [CHANGELOG.md](CHANGELOG.md) — what each release changed, with migration steps for the breaking
   ones (v0.5.0 and v0.7.0).
+- [Introduction in Japanese (Zenn)](https://zenn.dev/e_kaikei/articles/e8285ce4006eda) — why
+  DocDag exists, and what it found in a corpus of over 1,000 ADRs.
+
+## Status and support
+
+DocDag is pre-1.0 and in daily use. Until 1.0, a minor release may break things; every breaking
+change is marked in [CHANGELOG.md](CHANGELOG.md), with migration steps. Pin a version in CI
+(`Kaikei-e/DocDag@v0.7.0`, `go install …@v0.7.0`) and upgrade on purpose.
+
+If DocDag misreads your records, please open an issue. The most useful report is a minimal corpus:
+two or three records, the command you ran, and what you expected. Issues are read once a week.
 
 ## License
 
