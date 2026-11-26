@@ -43,14 +43,14 @@ one CI line.
 With Go:
 
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.7.0
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.8.0
 ```
 
 Without Go, on Linux or macOS — download the release binary and verify it against the release's
 checksums:
 
 ```sh
-VERSION=0.7.0
+VERSION=0.8.0
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 curl -fsSLO "https://github.com/Kaikei-e/DocDag/releases/download/v${VERSION}/docdag_${VERSION}_${OS}_${ARCH}.tar.gz"
@@ -302,16 +302,16 @@ jobs:
           fetch-depth: 0   # --immutable-since and diff read history
 
       - name: Records are consistent, and accepted ones were not rewritten
-        uses: Kaikei-e/DocDag@v0.7.0
+        uses: Kaikei-e/DocDag@v0.8.0
         with:
-          version: v0.7.0
+          version: v0.8.0
           args: validate --format github --immutable-since origin/${{ github.base_ref || github.event.repository.default_branch }}
 
       - name: Show what the change does to the graph
         if: github.event_name == 'pull_request'
-        uses: Kaikei-e/DocDag@v0.7.0
+        uses: Kaikei-e/DocDag@v0.8.0
         with:
-          version: v0.7.0
+          version: v0.8.0
           args: diff origin/${{ github.base_ref }} --format github
 ```
 
@@ -330,7 +330,7 @@ The simplest possible gate is two lines in an existing job:
 
 ```yaml
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.7.0
+      - uses: Kaikei-e/DocDag@v0.8.0
 ```
 
 Prefer to catch it before the push? Add the [pre-commit](https://pre-commit.com) hooks:
@@ -338,7 +338,7 @@ Prefer to catch it before the push? Add the [pre-commit](https://pre-commit.com)
 ```yaml
 repos:
   - repo: https://github.com/Kaikei-e/DocDag
-    rev: v0.7.0
+    rev: v0.8.0
     hooks:
       - id: docdag-validate      # any .md or docdag.yaml edit: the invariants
       - id: docdag-lint          # a docdag.yaml edit: the rules themselves
@@ -565,7 +565,7 @@ The `config`, `model` and `lint` packages are public, for a program that wants t
 configuration, validate it and write `docdag.yaml` without shelling out:
 
 ```sh
-go get github.com/Kaikei-e/DocDag@v0.7.0
+go get github.com/Kaikei-e/DocDag@v0.8.0
 ```
 
 ```go

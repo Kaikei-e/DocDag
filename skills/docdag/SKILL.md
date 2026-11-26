@@ -71,7 +71,7 @@ docs/decisions/0001-serve-images.md:3: ERROR status_drift 0001: has inbound supe
 
 ## Setup
 
-Install `docdag` (`go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.7.0`) and allow it in `.claude/settings.json`:
+Install `docdag` (`go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.8.0`) and allow it in `.claude/settings.json`:
 
 ```json
 {
