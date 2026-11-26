@@ -207,7 +207,7 @@ func decodeJSON[T any](t *testing.T, payload string) T {
 func TestRootWithoutArgumentsPrintsHelp(t *testing.T) {
 	got := run(t)
 	assertExit(t, got, 0)
-	for _, name := range []string{"docdag", "validate", "resolve", "query", "context", "export", "stats", "diff", "new"} {
+	for _, name := range []string{"docdag", "validate", "resolve", "query", "context", "prime", "export", "stats", "diff", "new"} {
 		if !strings.Contains(got.stdout, name) {
 			t.Errorf("help output does not mention %q: %q", name, got.stdout)
 		}
@@ -296,7 +296,7 @@ func TestConfigFileOverridesThePreset(t *testing.T) {
 }
 
 func TestTheCommandSetIsExactlyTheDocumentedOne(t *testing.T) {
-	want := []string{"validate", "lint", "resolve", "query", "context", "export", "stats", "diff", "new", "help"}
+	want := []string{"validate", "lint", "resolve", "query", "context", "prime", "export", "stats", "diff", "new", "help"}
 
 	// The help command is registered lazily, so ask for it before counting.
 	root := newRootCmd()
@@ -373,6 +373,7 @@ func TestEmptyCorpusFailsReadingCommandsAndAllowsNew(t *testing.T) {
 		{"validate"},
 		{"stats"},
 		{"export"},
+		{"prime"},
 		{"query", "1"},
 		{"context", "1"},
 		{"resolve", "1"},

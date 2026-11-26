@@ -54,7 +54,8 @@ jobs:
           0006
           0007
           0008
-          0009'
+          0009
+          0010'
           actual="$(go run ./cmd/docdag query --binding)"
           test "$actual" = "$expected"
       - name: Lint the self-corpus configuration
@@ -102,6 +103,6 @@ jobs:
           args: validate --dir testdata/fixtures/ok-madr
       - name: Plugin manifests parse as JSON
         run: |
-          for file in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json; do
+          for file in .claude-plugin/plugin.json .claude-plugin/marketplace.json hooks/hooks.json .antigravity-plugin/plugin.json hooks.json; do
             jq empty "$file"
           done

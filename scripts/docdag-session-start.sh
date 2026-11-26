@@ -1,7 +1,7 @@
 #!/bin/sh
-# SessionStart hook: summarize the decision graph state at session start.
-# Silent when the project has no corpus, prints at most two lines to stdout so
-# only a compact summary enters the agent's context, and always exits 0.
+# SessionStart hook: orient the agent with docdag prime at session start, or
+# fall back to a compact validation summary on older docdag binaries.
+# Silent when the project has no corpus, and always exits 0.
 set -u
 
 root=${CLAUDE_PROJECT_DIR:-$PWD}
@@ -27,6 +27,41 @@ fi
 
 err_file=$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/docdag-session-start-$$.err")
 trap 'rm -f "$err_file"' EXIT INT HUP TERM
+
+print_exit_err() {
+    first_err=""
+    if [ -s "$2" ]; then
+        first_err=$(head -n 1 "$2")
+    fi
+    if [ -n "$first_err" ]; then
+        printf 'docdag validate: exited %d: %s\n' "$1" "$first_err"
+    else
+        printf 'docdag validate: exited %d\n' "$1"
+    fi
+}
+
+report=$(docdag prime 2>"$err_file")
+status=$?
+
+case $status in
+    0)
+        if [ -n "$report" ]; then
+            printf '%s\n' "$report"
+        fi
+        exit 0
+        ;;
+    2)
+        if ! grep -q 'unknown command "prime"' "$err_file" 2>/dev/null; then
+            print_exit_err "$status" "$err_file"
+            exit 0
+        fi
+        # Older docdag binaries lack prime; fall back to validate summary.
+        ;;
+    *)
+        print_exit_err "$status" "$err_file"
+        exit 0
+        ;;
+esac
 
 report=$(docdag validate 2>"$err_file")
 status=$?
@@ -67,15 +102,7 @@ case $status in
         printf 'run docdag validate to see the findings\n'
         ;;
     *)
-        first_err=""
-        if [ -s "$err_file" ]; then
-            first_err=$(head -n 1 "$err_file")
-        fi
-        if [ -n "$first_err" ]; then
-            printf 'docdag validate: exited %d: %s\n' "$status" "$first_err"
-        else
-            printf 'docdag validate: exited %d\n' "$status"
-        fi
+        print_exit_err "$status" "$err_file"
         ;;
 esac
 

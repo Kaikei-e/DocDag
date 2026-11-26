@@ -20,8 +20,14 @@ func newExportCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "export",
 		Short: "Render the typed graph as mermaid, DOT or node-link JSON",
-		Args:  cobra.NoArgs,
-		RunE:  runExport,
+		Long: "Render the typed document graph as Mermaid (default), Graphviz DOT, or\n" +
+			"node-link JSON, optionally filtering to connected nodes, specific edge\n" +
+			"types, or overlaying reference-layer links.",
+		Example: "  docdag export\n" +
+			"  docdag export --connected --edge supersedes --format dot\n" +
+			"  docdag export --format json --include-refs --out graph.json",
+		Args: cobra.NoArgs,
+		RunE: runExport,
 	}
 	cmd.Flags().String(flagFormat, formatMermaid, "output format: mermaid|dot|json")
 	cmd.Flags().Bool(flagIncludeRefs, false, "include the reference layer")
@@ -64,7 +70,7 @@ func runExport(cmd *cobra.Command, _ []string) error {
 	g, cfg := c.graph, c.cfg
 	for _, name := range edges {
 		if _, ok := cfg.Edge(model.EdgeType(name)); !ok {
-			return usageErr("unknown edge type %q", name)
+			return unknownEdgeErr(cfg, name)
 		}
 		opts.Edges = append(opts.Edges, model.EdgeType(name))
 	}

@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Nine records stand behind the design DocDag ships. They are the reasoning;
+Ten records stand behind the design DocDag ships. They are the reasoning;
 [configuration.md](../configuration.md) and [checks.md](../checks.md) are what the binary does, so a
 record is read for *why* a key exists and the reference pages for what it accepts today. The records
 are written in Japanese, the language they were argued in.
@@ -11,7 +11,9 @@ read in any order, or singly, when a particular check needs an explanation. **00
 for importing the configuration from Go: what is stable, how YAML round-trips, and which kinds
 `--immutable-since` may read. **0007** through **0009** came out of one release: they make DocDag fail
 when a check could not actually run, let a corpus require body sections, and stop `resolve` at a
-successor that is not binding yet.
+successor that is not binding yet. **0010** establishes the agent-facing routing layer: `docdag prime`,
+`context` excerpt fallbacks and path resolution, and dual-native plugins for Claude Code and
+Antigravity.
 
 Every record is **Accepted**, and the four that were implemented after acceptance carry their
 departures inline rather than in a superseding record: 0002 under 実装時の注記 and 0005 under 実装時の逸脱. A
@@ -20,7 +22,7 @@ has found the record has found the only place the difference matters.
 
 [`../../docdag.yaml`](../../docdag.yaml) adopts the `adr` preset for this directory, requires
 frontmatter, and requires the body sections every record carries (0008). The `depends-on` edges
-record which decision each one rests on. CI validates the records, checks that these nine records
+record which decision each one rests on. CI validates the records, checks that these ten records
 are the binding set, and lints
 the configuration. Run the same checks locally with `go run ./cmd/docdag validate`,
 `go run ./cmd/docdag query --binding`, and `go run ./cmd/docdag lint` from the repository root.
@@ -125,3 +127,13 @@ regular expressions, and judging whether a section is empty.
 accepted successor that is in force, and report the rest as pending. It declines a warning-only
 answer and an opt-in flag. It notes as open work that the condition is not yet shared with the
 `binding:` projection.
+
+## [0010 — agent routing, `docdag prime`, and dual-native plugins](0010-agent-routing-prime-and-dual-native-plugins.md)
+
+Coding agents fell back to `Read`/`Glob`/`Grep` instead of `docdag context` because the on-demand
+skill did not always fire, `SessionStart` gave no command routing, Antigravity had no native plugin
+or hook contract, and `context` returned empty excerpts for non-English headings, H3-split sections,
+and H1-only `spec` clauses. The record adds `docdag prime` (including `--if-present` and `--hint`),
+backwards-compatible `context` excerpt fallbacks and path reference resolution, non-blocking read
+advisory hooks, and dual-native plugin support for Claude Code and Antigravity. It declines adding
+an MCP server, blocking `Read`/`Glob`, or introducing a new `docdag.yaml` key for context sections.

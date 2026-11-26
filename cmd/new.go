@@ -29,6 +29,15 @@ func newNewCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "new <title>",
 		Short: "Create the next document and mark the ones it supersedes",
+		Long: "Create a new managed document with the next available identifier (or --id),\n" +
+			"populate its frontmatter template, and update superseded predecessors.\n\n" +
+			"On a multi-kind corpus, pass --kind (and --id when the kind uses a custom\n" +
+			"ID pattern). Pass --fixture <rule> instead of a title to scaffold lint test\n" +
+			"fixtures for a configured rule.",
+		Example: "  docdag new \"Use connection pooling\"\n" +
+			"  docdag new \"Move thumbnails to object storage\" --supersedes 0002 --depends-on 0001\n" +
+			"  docdag new \"Every claim carries evidence\" --kind clause --id UZ-V-007 --dry-run\n" +
+			"  docdag new --fixture orphan_must",
 		// A title is what a document is created from, and --fixture creates a
 		// rule's fixture instead, whose documents are named after the rule.
 		Args: cobra.MaximumNArgs(1),

@@ -50,11 +50,12 @@ type Options struct {
 }
 
 // Entry is one document in a brief. Excerpt is the first paragraph of the
-// requested section, empty when the document has no such section or when the
-// budget left no room for it. Relation names why a document is in the brief and
-// is written only in the related group, where the walk that found it is not the
-// answer: a clause and its exception are one hop apart the same way a clause
-// and its subject are, and which of the two a reader is looking at matters.
+// requested section (or DefaultExcerpt when Section is empty), empty when the
+// document has no matching content or when the budget left no room for it.
+// Relation names why a document is in the brief and is written only in the
+// related group, where the walk that found it is not the answer: a clause and
+// its exception are one hop apart the same way a clause and its subject are,
+// and which of the two a reader is looking at matters.
 type Entry struct {
 	ID       model.ID `json:"id"`
 	Title    string   `json:"title"`
@@ -144,9 +145,6 @@ func (b *Brief) entries() []*Entry {
 func Build(g *model.Graph, cfg config.Config, id model.ID, opts Options) (*Brief, error) {
 	if _, ok := g.Node(id); !ok {
 		return nil, fmt.Errorf("context of %s: %w", id, model.ErrUnknownID)
-	}
-	if opts.Section == "" {
-		opts.Section = DefaultSection
 	}
 
 	b := &Brief{
@@ -267,7 +265,13 @@ func entry(g *model.Graph, section string, id model.ID) (Entry, error) {
 		return Entry{}, fmt.Errorf("read document %s: %w", n.Path, err)
 	}
 	_, body, _ := parse.SplitFrontmatter(src)
-	return Entry{ID: n.ID, Title: n.Title, Status: n.Status, Path: n.Path, Excerpt: Section(string(body), section)}, nil
+	excerpt := ""
+	if section == "" {
+		excerpt = DefaultExcerpt(string(body))
+	} else {
+		excerpt = Section(string(body), section)
+	}
+	return Entry{ID: n.ID, Title: n.Title, Status: n.Status, Path: n.Path, Excerpt: excerpt}, nil
 }
 
 // applyBudget charges every one-line entry, then buys excerpts in reading order

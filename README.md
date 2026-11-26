@@ -52,14 +52,14 @@ one CI line. It is tested on real corpora as well as fixtures: it checks the dec
 With Go:
 
 ```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.7.0
+go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.8.0
 ```
 
 Without Go, on Linux or macOS — download the release binary and verify it against the release's
 checksums:
 
 ```sh
-VERSION=0.7.0
+VERSION=0.8.0
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
 curl -fsSLO "https://github.com/Kaikei-e/DocDag/releases/download/v${VERSION}/docdag_${VERSION}_${OS}_${ARCH}.tar.gz"
@@ -251,6 +251,7 @@ graph LR
 | What does decision 12 build on? | `docdag query 0012 --edge depends-on` |
 | What would break if decision 12 changed? | `docdag query 0012 --ancestors --edge depends-on` |
 | Everything about decision 12, briefly | `docdag context 0012 --budget 400` |
+| Orient a coding agent on this corpus | `docdag prime` |
 | What does this branch change? | `docdag diff origin/main` |
 | What can this one edit break? | `docdag validate --touching docs/adr/0012-some-title.md` |
 | What would `new` write? | `docdag new "Some title" --supersedes 0012 --dry-run` |
@@ -315,16 +316,16 @@ jobs:
           fetch-depth: 0   # --immutable-since and diff read history
 
       - name: Records are consistent, and accepted ones were not rewritten
-        uses: Kaikei-e/DocDag@v0.7.0
+        uses: Kaikei-e/DocDag@v0.8.0
         with:
-          version: v0.7.0
+          version: v0.8.0
           args: validate --format github --immutable-since origin/${{ github.base_ref || github.event.repository.default_branch }}
 
       - name: Show what the change does to the graph
         if: github.event_name == 'pull_request'
-        uses: Kaikei-e/DocDag@v0.7.0
+        uses: Kaikei-e/DocDag@v0.8.0
         with:
-          version: v0.7.0
+          version: v0.8.0
           args: diff origin/${{ github.base_ref }} --format github
 ```
 
@@ -343,7 +344,7 @@ The simplest possible gate is two lines in an existing job:
 
 ```yaml
       - uses: actions/checkout@v4
-      - uses: Kaikei-e/DocDag@v0.7.0
+      - uses: Kaikei-e/DocDag@v0.8.0
 ```
 
 Prefer to catch it before the push? Add the [pre-commit](https://pre-commit.com) hooks:
@@ -351,7 +352,7 @@ Prefer to catch it before the push? Add the [pre-commit](https://pre-commit.com)
 ```yaml
 repos:
   - repo: https://github.com/Kaikei-e/DocDag
-    rev: v0.7.0
+    rev: v0.8.0
     hooks:
       - id: docdag-validate      # any .md or docdag.yaml edit: the invariants
       - id: docdag-lint          # a docdag.yaml edit: the rules themselves
@@ -474,7 +475,10 @@ An agent that reads forty ADR files to answer "what is in force?" spends its con
 thing. One command replaces the fan-out:
 
 ```sh
-# A record, what it resolves to and its neighbourhood, capped at 400 tokens
+# Orient on corpus health, dirs/kinds, declared fields and tailored commands
+docdag prime
+
+# A record (by ID or file path), what it resolves to and its neighbourhood, capped at 400 tokens
 docdag context 0012 --budget 400 --format md
 
 # The decisions in force that touch one service (needs affected_services declared under fields:)
@@ -484,17 +488,22 @@ docdag query --binding --where affected_services=contains:billing --fields id,ti
 docdag validate --touching docs/adr/0012-some-title.md
 ```
 
-This repository is also a Claude Code plugin. It installs a skill and a hook that validates a
-decision record as it is written:
+This repository ships as a dual-native plugin for both **Claude Code** and **Antigravity (`agy`)**.
+It installs a shared skill, a `SessionStart` hook running `docdag prime`, non-blocking
+read guidance on managed paths, and edit-time validation (`validate --touching` / `lint`):
 
 ```sh
+# Claude Code
 claude plugin marketplace add Kaikei-e/DocDag
 claude plugin install docdag@docdag
+
+# Antigravity CLI (agy)
+agy plugin install https://github.com/Kaikei-e/DocDag
 ```
 
-Inside a session the same two steps are `/plugin marketplace add Kaikei-e/DocDag` and then
+Inside a Claude Code session the two steps are `/plugin marketplace add Kaikei-e/DocDag` and then
 `/plugin install docdag@docdag`, entered as separate prompts. [docs/agents.md](docs/agents.md)
-covers the flags, the output shapes and what the hook requires.
+covers `prime`, `context`, `--fields`, `--where`, `--touching`, and both plugin integrations.
 
 Any other agent that can run a shell gets the same answers. A few lines in `AGENTS.md` (or
 `CLAUDE.md`) are enough to make it ask the graph instead of reading the directory:
@@ -615,7 +624,7 @@ The `config`, `model` and `lint` packages are public, for a program that wants t
 configuration, validate it and write `docdag.yaml` without shelling out:
 
 ```sh
-go get github.com/Kaikei-e/DocDag@v0.7.0
+go get github.com/Kaikei-e/DocDag@v0.8.0
 ```
 
 ```go
@@ -633,7 +642,7 @@ The field names and YAML tags of `config.Config` are the contract;
 ## Documentation
 
 - [docs/commands.md](docs/commands.md) — every command (`validate`, `lint`, `resolve`, `query`,
-  `context`, `export`, `stats`, `diff`, `new`), its flags, exit codes and output formats.
+  `context`, `prime`, `export`, `stats`, `diff`, `new`), its flags, exit codes and output formats.
 - [docs/configuration.md](docs/configuration.md) — the `docdag.yaml` reference and both presets in
   full.
 - [docs/checks.md](docs/checks.md) — one entry per finding: what triggers it and what clears it.

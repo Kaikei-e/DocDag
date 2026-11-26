@@ -11,8 +11,13 @@ func newDiffCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "diff <rev>",
 		Short: "Compare the typed graph at a base revision against the working tree",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runDiff,
+		Long: "Compare the documents, typed edges, and binding set between git revision\n" +
+			"<rev> and the working tree (or --at <rev>).",
+		Example: "  docdag diff main\n" +
+			"  docdag diff HEAD~1 --format json\n" +
+			"  docdag diff v1.0.0 --format github",
+		Args: cobra.ExactArgs(1),
+		RunE: runDiff,
 	}
 	addAsOfFlag(cmd, "today")
 	addAtFlag(cmd)

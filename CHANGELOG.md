@@ -6,6 +6,66 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-26
+
+v0.8.0 makes coding agents — both Claude Code and Antigravity (`agy`) — actually reach for DocDag
+instead of falling back to `Read`, `Glob`, and `Grep` over ADR and specification directories.
+Empirical testing against this repository and the `spec` vault surfaced four gaps: an on-demand
+skill alone did not always trigger while `SessionStart` gave no command routing; Antigravity had no
+native plugin manifest, rules, or hook contract; `docdag context` returned empty excerpts on
+non-English headings (`## 決定`), H3-split sections (`### D1.`), and H1-only `spec` clauses, and
+rejected file paths under `PatternNormalizer`; and CLI `--help` output and errors lacked examples
+and next-step hints. ADR 0010 records the design. There are no breaking changes and no new
+dependencies.
+
+### Added
+
+- `docdag prime` prints a compact, corpus-adaptive brief for coding agents (~10–14 lines in text,
+  or versioned JSON with `schema_version: 1` under `--format json`) summarizing validation health,
+  managed directories or kinds, declared edges/fields/required sections, and tailored commands with
+  a real sample reference. It exits `0` whenever the corpus loads (even when validation reports
+  errors, printing `docdag validate: FAILED: …` at the top) and fails closed with exit `3` on
+  invalid configuration or an empty corpus.
+  - `--if-present` exits `0` silently when no corpus is discovered (`ErrNoDocuments`) while keeping
+    broken `docdag.yaml` and empty configured directories fail-closed (exit `3`).
+  - `--hint <path>` resolves configuration only (without parsing documents) and emits a 1–2 line
+    command tip when `<path>` or a glob touches a managed directory, ignoring repository root `.`
+    and conventional exempt files (`README.md`, `index.md`, `template.md`, `_`/`.` prefixes).
+- Claude Code `PreToolUse` advisory hook (`scripts/docdag-pre-read.sh`, matcher `Read|Glob|Grep`)
+  injects non-blocking `hookSpecificOutput.additionalContext` (omitting `permissionDecision`) via
+  `docdag prime --if-present --hint` when reading, globbing, or grepping managed paths.
+- Native Antigravity (`agy`) plugin support alongside `.claude-plugin/`:
+  `.antigravity-plugin/plugin.json`, root `hooks.json` (`SessionStart`, `PostToolUse`,
+  `PostInvocation`), always-on `rules/AGENTS.md`, and `scripts/agy-session-start.sh`,
+  `scripts/agy-post-tool.sh`, and `scripts/agy-post-invocation.sh` (validating edits and queuing a
+  one-time per-conversation read hint drained via `PostInvocation` `injectSteps`).
+- Managed file-path resolution in `normalize`: `docdag context`, `docdag resolve`, and
+  `docdag query` now accept relative or absolute paths to managed documents in both single-kind and
+  multi-kind (`preset: spec`) corpora.
+- Executable `Example:` blocks and workflow guidance across `--help` for root and all subcommands,
+  plus actionable hints on `unknown edge type` (listing allowed edge names) and `unknown document` /
+  `unrecognized reference` errors.
+
+### Changed
+
+- `docdag context` excerpt extraction when `--section` is omitted now falls back cleanly after
+  `Decision` (`Decision Outcome` preferred): localized decision/summary headings (`決定`, `結論`,
+  `Summary`, `概要`), child subheadings (such as `### D1.` immediately under `## 決定`), the opening
+  body paragraph for H1-only documents such as `spec` clauses, and finally the first substantive
+  non-metadata section. Explicit `--section <heading>` remains strict with no fallback.
+- `scripts/docdag-session-start.sh` now runs `docdag prime` when a corpus marker is present
+  (falling back to the legacy `docdag validate` summary on older `docdag` binaries that lack
+  `prime`, and preserving exit-3 notices on empty well-known ADR directories or broken config).
+- `skills/docdag/SKILL.md` is restructured with an inverted-pyramid layout, stronger trigger
+  `description`, top-level command routing table using `--fields id,title,status`, and coverage of
+  `docdag prime`, file-path refs, and Antigravity support.
+
+### Fixed
+
+- `brief.Section` no longer returns an empty excerpt when a matched H2 section is immediately
+  followed by a deeper child subheading (`### ...`), while continuing to treat a sibling heading
+  (`## ...`) as an empty section.
+
 ## [0.7.0] - 2026-11-17
 
 v0.7.0 comes out of an audit of a 1009-record ADR corpus in which every structural check passed
@@ -590,6 +650,7 @@ unless the flag is given.
 
 First release. See the [GitHub release](https://github.com/Kaikei-e/DocDag/releases/tag/v0.1.0).
 
+[0.8.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.8.0
 [0.7.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Kaikei-e/DocDag/releases/tag/v0.5.0

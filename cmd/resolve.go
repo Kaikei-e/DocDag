@@ -20,7 +20,15 @@ func newResolveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "resolve <ref>",
 		Short: "Print the documents that currently supersede a reference",
-		Args:  cobra.ExactArgs(1),
+		Long: "Follow supersedes edges forward from <ref> to the currently binding leaf\n" +
+			"documents that stand in for it.\n\n" +
+			"<ref> accepts a document ID, filename, or managed file path. Non-binding\n" +
+			"successors along the chain are reported as pending rather than resolved.",
+		Example: "  docdag resolve 0002\n" +
+			"  docdag resolve 0002 --fields id,status,title\n" +
+			"  docdag resolve docs/adr/0002-store-thumbnails-on-disk.md --format json\n" +
+			"  docdag resolve 0002 --as-of 2027-01-01",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			format, err := outputFormat(cmd, formatText, formatJSON)
 			if err != nil {
