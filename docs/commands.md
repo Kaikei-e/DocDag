@@ -32,14 +32,15 @@ first that exists and holds a file named `NNNN.md` or `NNNN-kebab-title.md`, 3 t
 | `docdag resolve <ref> [--as-of <day>] [--at <rev>] [--fields <list>]` | the current successor(s) of a reference, one per line, or the document itself when nothing supersedes it — stops at successors that are not binding (e.g. proposed) and reports them on stderr (or under `pending` in JSON) | exit 1 on an unknown reference or a supersedes cycle |
 | `docdag query <ref> [--ancestors\|--descendants] [--edge <type>] [--include-refs] [--where <key>=<op>:<value>]... [--as-of <day>] [--at <rev>] [--fields <list>]` | the reachable set over typed edges, descendants by default; reference-layer hits are suffixed ` (reference)` | exit 1 unknown reference, exit 2 unknown edge type, invalid `--where`, or conflicting flags |
 | `docdag query --binding [--where <key>=<op>:<value>]... [--as-of <day>] [--at <rev>] [--fields <list>]` | every document binding on the day asked about, with its `modality` beside it where the configuration declares one | exit 2 if invalid `--where` or combined with `--ancestors`, `--descendants`, `--edge` or `--include-refs` |
-| `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all] [--as-of <day>] [--at <rev>]` | the document, what it resolves to, its neighbourhood (each quoting one section) and any active `retracts:` entries touching it | exit 1 unknown reference, exit 2 unknown edge type |
+| `docdag context <ref> [--depth N] [--edge <type>]... [--section <heading>] [--budget N] [--all] [--as-of <day>] [--at <rev>]` | the document (by ID or managed file path), what it resolves to, its neighbourhood (each quoting one section, with automatic fallback when `--section` is omitted) and any active `retracts:` entries touching it | exit 1 unknown reference, exit 2 unknown edge type |
+| `docdag prime [--if-present] [--hint <path>] [--as-of <day>] [--at <rev>] [--format text\|json]` | a compact, corpus-adaptive brief for coding agents (health, dirs/kinds, declared edges/fields/sections, and tailored commands), or with `--hint` a 1–2 line tip when `<path>` touches a managed directory | exit 0 even when validation reports errors (reported in output); exit 3 on invalid config or empty corpus (`--if-present` silences `ErrNoDocuments` only) |
 | `docdag export [--format mermaid\|dot\|json] [--include-refs] [--connected] [--edge <type>]... [--at <rev>] [--out PATH]` | the typed graph; mermaid on stdout by default, `-` also means stdout | exit 2 on an unknown edge type, exit 3 if the output file cannot be written |
 | `docdag stats [--fields] [--as-of <day>] [--at <rev>]` | the day the counts are about where some kind declares a `period:`, then document count, binding count, orphan rate, edge count per type, supersedes chain-depth distribution, top-10 reference in-degree, and — where the configuration declares them — the modality distribution, the clauses per topic and the suppressed-conflict count; with `--fields`, the frontmatter fields instead | exit 3 without `--fields` if the configuration declares no `supersedes` edge |
 | `docdag diff <rev> [--as-of <day>] [--at <rev>] [--format text\|json\|github]` | typed edges added and removed, status transitions, documents added and removed, and the binding-set delta between `<rev>` and the working tree (or `--at <rev>`) | exit 3 on an unknown revision, outside a git repository, or when either side holds no managed documents |
 | `docdag new <title> [--kind <name>] [--id <ref>] [--supersedes <ref>]... [--depends-on <ref>]... [--dry-run]` | the path of the created document, or the plan under `--dry-run` | exit 1 on an unknown reference, a claimed identifier or a `--kind` the corpus cannot answer, exit 3 on a write error |
 | `docdag new --fixture <rule> [--fixtures <dir>]` | the files of the rule's generated `ruleid/` and `ok/` fixture, one path per line | exit 1 if no such rule is configured or it can never fire, exit 3 on a write error |
 
-`docdag context` and `--fields` are covered in [agents.md](agents.md), along with
+`docdag prime`, `docdag context`, and `--fields` are covered in [agents.md](agents.md), along with
 `validate --touching`.
 
 ## Exit codes
@@ -528,16 +529,17 @@ running it again fills in what a first run could not and leaves hand-written fix
 
 ## JSON headers
 
-Four JSON reports are headed by a version — `validate --format json`, `context --format json`,
-`lint --format json` and `diff --format json` — a `schema_version` and, where the configuration names
-one, a `preset_version`. The first two are at `schema_version: 2`; `lint` and `diff` are at
-`schema_version: 1`, and `lint` names itself in a `kind` field of its own. `stats --format json` is
-an object as well but carries no version, being a report of counts rather than of findings. The
-listings are arrays of records rather than objects (`query`, `query --fields`, `resolve`), so they
-carry no header either; `preset_version` is read from `validate` beside them. The text, `md`,
-`github` and `rdjson` formats are unversioned: a header is a JSON affair.
+Five JSON reports are headed by a version — `validate --format json`, `context --format json`,
+`lint --format json`, `diff --format json`, and `prime --format json` — a `schema_version` and,
+where the configuration names one, a `preset_version`. The first two are at `schema_version: 2`;
+`lint`, `diff`, and `prime` are at `schema_version: 1`, and `lint` names itself in a `kind` field
+of its own. `stats --format json` is an object as well but carries no version, being a report of
+counts rather than of findings. The listings are arrays of records rather than objects (`query`,
+`query --fields`, `resolve`), so they carry no header either; `preset_version` is read from
+`validate` beside them. The text, `md`, `github` and `rdjson` formats are unversioned: a header is
+a JSON affair.
 
-Those four and `stats --format json` also carry `as_of`, the day the run was about, and `at`, the
+Those five and `stats --format json` also carry `as_of`, the day the run was about, and `at`, the
 revision the documents were read from where one was named. They are what makes a report
 reproducible: the same documents, read at the same revision, asked about the same day, answer the
 same way.

@@ -28,7 +28,17 @@ func newValidateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Run the structural checks and the configured rules",
-		Args:  cobra.NoArgs,
+		Long: "Parse the managed document corpus, verify structural invariants (cycles,\n" +
+			"dangling references, cardinalities, target conditions, periods, sections),\n" +
+			"and evaluate all configured rules.\n\n" +
+			"Use --touching to narrow reported findings to edited files without skipping\n" +
+			"corpus-wide validation; combine with --if-managed for hooks or pre-commit.",
+		Example: "  docdag validate\n" +
+			"  docdag validate --touching docs/adr/0003-example.md\n" +
+			"  docdag validate --touching README.md --if-managed\n" +
+			"  docdag validate --format json --as-of 2026-09-01\n" +
+			"  docdag validate --immutable-since main",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			format, err := outputFormat(cmd, formatText, formatJSON, formatGitHub, formatRDJSON)
 			if err != nil {

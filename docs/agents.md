@@ -5,11 +5,45 @@ reads, and every answer carries the identity, the status and the position of the
 See [commands.md](commands.md) for the full command surface and [checks.md](checks.md) for the
 findings an agent has to read.
 
+## prime
+
+`docdag prime` is the session-start orientation command. It inspects the corpus and configuration
+and prints a compact (~10–14 line) brief naming the validation status, managed directories or kinds,
+declared edges/fields/required sections, and corpus-tailored `docdag` commands with a real sample
+reference from the vault:
+
+```console
+$ docdag prime
+docdag validate: OK: 10 docs, 10 typed edges, no cycles
+corpus: docs/ADR (preset: adr, 10 docs, 10 binding)
+edges: depends-on, supersedes
+required sections: コンテキスト, 決定, 検討した代替案|代替案と棄却理由, 影響とトレードオフ|帰結
+Prefer docdag over Glob/Grep/Read on managed docs (one call replaces reading the directory):
+  docdag context <ref> (e.g. docdag context 0001)
+  docdag query --binding --fields id,title,status
+  docdag resolve <ref> --fields id,title,status
+  docdag query <ref> --ancestors --fields id,title,status  # impact
+  docdag new "<title>" [--supersedes <ref>]
+  docdag validate --touching <path>
+  docdag diff origin/main
+```
+
+`prime` is a report rather than a gate: it exits `0` whenever the corpus loads (reporting
+`docdag validate: FAILED: …` on line 1 when there are errors), and fails closed with exit `3` on
+invalid configuration or an empty corpus. `--if-present` exits `0` silently when no corpus is
+discovered (while still failing closed on broken `docdag.yaml`). `--hint <path>` resolves only the
+configuration (without parsing any documents) and prints a short 1–2 line tip when `<path>` or a
+glob touches a managed directory, which hooks use to steer `Read`/`Glob`/`Grep` calls toward
+`docdag context` and `docdag query --binding`. `--format json` emits a versioned JSON object
+(`schema_version: 1`).
+
 ## context
 
-`docdag context <ref>` is the entry point. It prints the document, the successor it resolves to if it
-is superseded, and its neighbourhood over typed edges, each entry followed by the first paragraph of
-its `Decision` section, verbatim and unsummarised:
+`docdag context <ref>` is the single-record entry point. `<ref>` accepts an identifier (`0002`,
+`ADR-2`, `UZ-V-006`), a filename, or a managed file path (`docs/ADR/0002-….md`,
+`spec/clauses/UZ-V-006.md`). It prints the document, the successor it resolves to if it is
+superseded, and its neighbourhood over typed edges, each entry followed by a verbatim, unsummarised
+excerpt:
 
 ```console
 $ docdag context 0002
@@ -26,8 +60,12 @@ resolves to (0002 is superseded)
 
 `--depth N` widens the walk from its default of one hop, `--edge <type>` narrows it to one relation
 and repeats, and `--all` adds the documents that are not binding, which are left out by default.
-`--section <heading>` quotes a different section: the value matches an H2 or H3 whose text starts
-with it, so `Decision` finds MADR's `Decision Outcome` in preference to its `Decision Drivers`.
+Without `--section`, `context` quotes the first paragraph under `Decision` (preferring MADR's
+`Decision Outcome` over `Decision Drivers`), and falls back cleanly for other layouts: localized
+decision/summary headings (`決定`, `結論`, `Summary`, `概要`), child subheadings (such as `### D1.`
+immediately under `## 決定`), the opening body paragraph for H1-only documents such as `spec`
+clauses, or the first substantive section. Passing `--section <heading>` matches strictly that H2
+or H3 heading prefix without falling back.
 `--budget N` caps the prose at roughly N tokens, counted as four characters each and defaulting to
 2000; entries the budget cannot afford degrade to their one-line form rather than being cut
 mid-sentence, and the report ends with a line counting them. `--format md` answers with a Markdown
@@ -49,11 +87,21 @@ under `suppressed`:
 $ docdag context UZ-V-006
 ref
   UZ-V-006  A grader may reason before it scores  [accepted]  spec/clauses/UZ-V-006.md
+    The explicit permission: an option a standard states rather than leaves out.
+    It stands beside the clause that says graders should not reason, because the
+    excepts edge below records the case the permission is for — and it names the
+    MUST clause a repository without the option still interoperates through.
 
 related
   topic/inferential-grader  Grading by inference  []  spec/topics/inferential-grader.md  (about)
+    Whether a grader may reason its way to a score rather than match a fixed
+    pattern. The subject two clauses of this vault disagree about, on purpose.
   UZ-V-008  A grader should not reason about the answer it grades  [accepted]  spec/clauses/UZ-V-008.md  (excepts)
+    The general clause: an inferential grader is one more thing that can be wrong.
+    UZ-V-006 is the recorded exception to it, which is what keeps the pair from
+    being reported as a conflict every day.
   UZ-V-001  Every claim carries evidence  [accepted]  spec/clauses/UZ-V-001.md  (interop)
+    A report states what it measured and how, so a reader can repeat the run.
 
 suppressed
   suppressed by excepts UZ-V-006 -> UZ-V-008 (scope: only where the run also records a calibration measure)
@@ -155,15 +203,13 @@ intent of a rule readable after the rule is rewritten — see
 status in a single pass — see [commands.md](commands.md#new) for the plan, `--dry-run` and the
 identifier rules.
 
-## The plugin
+## The plugin (Claude Code and Antigravity)
 
-This repository is a Claude Code plugin. It installs a skill teaching the vocabulary above and which
-command answers which question, a `SessionStart` hook that injects a one- or two-line
-`docdag validate` summary at session start, and a `PostToolUse` hook that runs
-`docdag validate --touching <file> --if-managed` on every Markdown file edited
-under any configured or discovered document directory (including `preset: spec`
-and per-kind `dir:` directories) and reports back when that document is what
-broke:
+This repository is a dual-native plugin for both **Claude Code** (`.claude-plugin/plugin.json`,
+`hooks/hooks.json`) and **Antigravity (`agy`)** (`.antigravity-plugin/plugin.json`, root
+`hooks.json`, `rules/AGENTS.md`), sharing one Agent Skill ([`skills/docdag/SKILL.md`](../skills/docdag/SKILL.md)).
+
+### Claude Code
 
 ```sh
 claude plugin marketplace add Kaikei-e/DocDag
@@ -174,29 +220,32 @@ Inside a session the same two steps are `/plugin marketplace add Kaikei-e/DocDag
 `/plugin install docdag@docdag`, entered as separate prompts: pasted together, they arrive as one
 command and the marketplace source is rejected.
 
-The `SessionStart` hook (`scripts/docdag-session-start.sh`, no matcher) stays silent when the project
-has neither a root `docdag.yaml` nor a well-known documents directory (`docs/adr`, `doc/adr`,
-`docs/decisions`, `docs/ADR`, `adr`). When a corpus is present, it prints at most two lines to
-stdout and always exits 0: `docdag: not on PATH, enforcement is OFF` if `docdag` is missing; exit 0
-prints `docdag validate: <validate's OK summary line>`; exit 1 prints
-`docdag validate: FAILED: <N> error(s)[, <M> warning(s)]` and then
-`run docdag validate to see the findings`; and any other exit prints
-`docdag validate: exited <N>: <first line of stderr>`.
+The Claude Code plugin installs three hooks:
 
-The `PostToolUse` hook reads what was edited: a Markdown file is passed to
-`docdag validate --touching <file> --if-managed`, which validates when the file sits directly in a
-configured or discovered document directory (including `preset: spec` and per-kind `dir:`
-directories) and exits 0 silently otherwise; `docdag.yaml` itself is linted — `docdag lint --config
-<the file that was edited>` at layer 1, which reads no documents and costs milliseconds — so a rule
-that contradicts itself is reported in the same turn it was written. The edited file is named
-explicitly, so a nested configuration is linted rather than the project root's. An edit that leaves
-it unreadable at all says so on stderr instead of passing quietly. On unexpected docdag exit codes
-(such as exit 3 on configuration or I/O failure), the hook fails closed with exit code 2 and outputs
-docdag's stderr.
+- **`SessionStart`** (`scripts/docdag-session-start.sh`, no matcher): silent when the project has
+  neither a root `docdag.yaml` nor a well-known documents directory (`docs/adr`, `doc/adr`,
+  `docs/decisions`, `docs/ADR`, `adr`). When a corpus marker is present, it runs `docdag prime`
+  (falling back to a one- or two-line `docdag validate` summary on older `docdag` binaries) and
+  always exits `0`. If `docdag` is missing it prints `docdag: not on PATH, enforcement is OFF`;
+  on unexpected exits (such as an empty well-known ADR directory or invalid config) it prints
+  `docdag validate: exited <N>: <first line of stderr>`.
+- **`PreToolUse`** (`scripts/docdag-pre-read.sh`, matcher `Read|Glob|Grep`): non-blocking advisory
+  hook (always exits `0` and omits `permissionDecision` so existing permission rules stay intact).
+  When a read, glob, or grep targets a managed document or directory, it runs
+  `docdag prime --if-present --hint <target>` (config-only, no document parsing) and injects a
+  short `hookSpecificOutput.additionalContext` tip pointing to `docdag context` and
+  `docdag query --binding --fields id,title,status`. Outside managed paths it stays silent.
+- **`PostToolUse`** (`scripts/docdag-validate.sh`, matcher `Edit|Write`): a Markdown file is passed
+  to `docdag validate --touching <file> --if-managed`, which validates when the file sits directly
+  in a configured or discovered document directory (including `preset: spec` and per-kind `dir:`
+  directories) and exits `0` silently otherwise; `docdag.yaml` itself is linted with
+  `docdag lint --config <edited file>` at layer 1. On findings or unexpected `docdag` exit codes
+  (such as exit `3` on configuration or I/O failure), the hook fails closed with exit code `2` and
+  outputs diagnostics on stderr.
 
-The `PostToolUse` hook needs `docdag` and `jq` on `PATH`. If either tool is missing (or `docdag`
-predates `--if-managed`), it emits a non-blocking stderr notice that enforcement is OFF and exits
-0. Allow the commands once with
+The `PreToolUse` and `PostToolUse` hooks need `docdag` and `jq` on `PATH`. If either tool is
+missing (or `docdag` predates `--if-managed`), `PostToolUse` emits a non-blocking stderr notice
+that enforcement is OFF and exits `0`, and `PreToolUse` stays silent. Allow the commands once with
 `"permissions": {"allow": ["Bash(docdag *)"]}` in `.claude/settings.json`:
 
 ```json
@@ -206,3 +255,28 @@ predates `--if-managed`), it emits a non-blocking stderr notice that enforcement
   }
 }
 ```
+
+### Antigravity (`agy`)
+
+Install the plugin directly from the repository (or a local checkout):
+
+```sh
+agy plugin install https://github.com/Kaikei-e/DocDag
+# or from a local clone:
+agy plugin install /path/to/DocDag
+```
+
+The Antigravity plugin bundles:
+
+- **Always-on rule** (`rules/AGENTS.md`): compact routing rules merged automatically whenever the
+  plugin is enabled, directing the agent to `docdag prime`, `context`, `query --binding --fields`,
+  `resolve`, `new`, `validate --touching`, and `lint` whenever a workspace has a DocDag corpus.
+- **Shared skill** (`skills/docdag/SKILL.md`): full workflow reference loaded on demand.
+- **Native hooks** (root `hooks.json`):
+  - `SessionStart` (`scripts/agy-session-start.sh`): runs `docdag prime` when a corpus marker is
+    present and injects the brief via `injectSteps` (`systemMessage`).
+  - `PostToolUse` (`scripts/agy-post-tool.sh`) + `PostInvocation` (`scripts/agy-post-invocation.sh`):
+    validates managed `.md` edits (`validate --touching --if-managed`), lints `docdag.yaml` edits
+    (`lint --config`), and queues a one-time-per-conversation `docdag prime --hint` tip on managed
+    reads/searches, draining queued messages as `injectSteps` on the immediately following
+    `PostInvocation`.

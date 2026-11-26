@@ -23,9 +23,19 @@ const (
 func newQueryCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "query [ref]",
-		Short: "List the documents reachable from a reference over typed edges",
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  runQuery,
+		Short: "List binding documents or walk documents reachable over typed edges",
+		Long: "List every currently binding document with --binding, or walk the typed graph\n" +
+			"from <ref> over --descendants (default) or --ancestors.\n\n" +
+			"<ref> accepts a document ID, filename, or managed file path. Use --fields\n" +
+			"to include titles, statuses, paths, declared fields, or projections in text\n" +
+			"output, --where to filter results, and --format json for full records.",
+		Example: "  docdag query --binding --fields id,title,status\n" +
+			"  docdag query --binding --where status=eq:accepted --format json\n" +
+			"  docdag query 0001 --ancestors --fields id,title\n" +
+			"  docdag query 0004 --descendants --edge depends-on\n" +
+			"  docdag query spec/clauses/UZ-V-001.md --ancestors",
+		Args: cobra.MaximumNArgs(1),
+		RunE: runQuery,
 	}
 	cmd.Flags().Bool(flagAncestors, false, "walk typed edges backwards")
 	cmd.Flags().Bool(flagDescendants, false, "walk typed edges forwards (default)")
@@ -139,7 +149,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 	if edge != "" {
 		if _, ok := cfg.Edge(model.EdgeType(edge)); !ok {
-			return usageErr("unknown edge type %q", edge)
+			return unknownEdgeErr(cfg, edge)
 		}
 		opts.Types = []model.EdgeType{model.EdgeType(edge)}
 	}

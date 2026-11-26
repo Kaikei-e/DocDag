@@ -19,13 +19,25 @@ func newContextCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "context <ref>",
 		Short: "Print a document, where it resolves to and its typed-edge neighbourhood",
-		Args:  cobra.ExactArgs(1),
-		RunE:  runContext,
+		Long: "Assemble a reading brief for one document within a token budget.\n\n" +
+			"<ref> accepts a document ID, filename, or managed file path. Instead of\n" +
+			"reading multiple files manually, context returns the document itself, where\n" +
+			"it resolves to over supersedes, its normative or typed-edge neighbours, and\n" +
+			"an excerpt from each document.\n\n" +
+			"By default, excerpts quote Decision (preferring Decision Outcome), falling\n" +
+			"back to common decision/summary headings, the first non-metadata section, or\n" +
+			"the lead paragraph. Pass --section to quote one specific heading strictly.",
+		Example: "  docdag context 0002\n" +
+			"  docdag context docs/adr/0002-store-thumbnails-on-disk.md --budget 600 --format md\n" +
+			"  docdag context 0001 --depth 2 --all\n" +
+			"  docdag context 0001 --section Consequences",
+		Args: cobra.ExactArgs(1),
+		RunE: runContext,
 	}
 	cmd.Flags().Int(flagDepth, brief.DefaultDepth, "how many typed edges to walk in each direction")
 	cmd.Flags().StringArray(flagEdge, nil, "restrict the walk to an edge type (repeatable)")
 	cmd.Flags().Int(flagBudget, brief.DefaultBudget, "token budget for the excerpts; 0 is unbounded")
-	cmd.Flags().String(flagSection, brief.DefaultSection, "heading whose first paragraph is quoted")
+	cmd.Flags().String(flagSection, "", "heading whose first paragraph is quoted (default: Decision, with fallback)")
 	cmd.Flags().Bool(flagAll, false, "include documents that are not binding")
 	addAsOfFlag(cmd, "today")
 	addAtFlag(cmd)
@@ -45,8 +57,10 @@ func runContext(cmd *cobra.Command, args []string) error {
 	if opts.Budget, err = flags.GetInt(flagBudget); err != nil {
 		return usageErr("%v", err)
 	}
-	if opts.Section, err = flags.GetString(flagSection); err != nil {
-		return usageErr("%v", err)
+	if flags.Changed(flagSection) {
+		if opts.Section, err = flags.GetString(flagSection); err != nil {
+			return usageErr("%v", err)
+		}
 	}
 	if opts.All, err = flags.GetBool(flagAll); err != nil {
 		return usageErr("%v", err)
@@ -68,7 +82,7 @@ func runContext(cmd *cobra.Command, args []string) error {
 	opts.At = c.at
 	for _, edge := range edges {
 		if _, ok := cfg.Edge(model.EdgeType(edge)); !ok {
-			return usageErr("unknown edge type %q", edge)
+			return unknownEdgeErr(cfg, edge)
 		}
 		opts.Types = append(opts.Types, model.EdgeType(edge))
 	}

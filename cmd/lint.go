@@ -44,6 +44,10 @@ func newLintCmd() *cobra.Command {
 			"cannot fire, that fire everywhere, that say what another rule already says,\n" +
 			"and — with --corpus and --fixtures — the ones the vault never fires and the\n" +
 			"ones whose own fixtures disagree with them.",
+		Example: "  docdag lint\n" +
+			"  docdag lint --corpus\n" +
+			"  docdag lint --fixtures lint/ --strict\n" +
+			"  docdag lint --all --since main --format json",
 		Args: cobra.NoArgs,
 		RunE: runLint,
 	}

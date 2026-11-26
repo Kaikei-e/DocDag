@@ -1,115 +1,60 @@
 ---
 name: docdag
-description: Read, query and validate a repository's decision records or normative clauses as a typed graph with the docdag CLI. Use it before writing or changing an ADR or a spec clause, when asked what is in force, what a document replaced, what rests on it, or why a document fails validation.
+description: "Read, query, search, create, supersede, or validate ADRs, architecture decision records, decision logs, or normative spec clauses (docs/adr/, docs/ADR/, docs/decisions/, spec/, docdag.yaml). Use instead of globbing, grepping, or reading ADR/spec directories directly: what decisions are in force/binding, what replaced/superseded an ADR, what depends/rests on a decision, context for ADR/clause, branch diff of decisions, or why validation failed."
 ---
 
 # docdag
 
-`docdag` treats a directory of Markdown documents with YAML frontmatter as a
-typed directed graph and answers questions about it. Prefer it over reading the
-whole directory: one command replaces a fan-out of file reads.
+Do NOT `Glob`, `Grep`, or `Read` across managed ADR or spec directories (`docs/adr/`, `docs/ADR/`, `docs/decisions/`, `spec/`) to find active decisions or follow links — one `docdag` command replaces a fan-out of file reads. Start with `docdag prime` to inspect corpus layout, declared fields, and health, or run `docdag context <ref>` / `docdag query --binding --fields id,title,status`.
 
-Two presets ship. `adr` is the default and manages one directory of decision
-records. `spec` manages a normative standard — clauses, the conformance tests
-that enforce them, deviations, premises, topics — as eight kinds in eight
-directories; a corpus is under it when `docdag.yaml` says `preset: spec`. Every
-command below answers for either.
+`docdag` treats Markdown documents with YAML frontmatter as a typed directed graph across both the `adr` preset (single directory) and `preset: spec` (multi-kind normative corpora).
 
-## Vocabulary
+## Command routing
 
-- **ref** — any way of naming a document: `339`, `0339`, `ADR-339`,
-  `0339-use-postgres.md`. A document's identity is its digit run, so they all
-  name the same node, and output is zero-padded to the configured width. Where a
-  kind declares a pattern the identifier is that spelling exactly — `UZ-V-001`,
-  never padded or folded.
-- **binding** — the document is `accepted`, in force, and no `accepted`,
-  in-force or `superseded` document supersedes it. This is what "in force right
-  now" means. A `proposed`, `withdrawn`, or `superseded` document is not
-  binding, whatever it says, and a `proposed` or `withdrawn` successor does not
-  un-bind an `accepted` one. `docdag.yaml` may name a different projection under
-  `binding:`; the `spec` preset does, adding the clause's strength.
-- **kind** — where `docdag.yaml` declares `kinds:`, the directory a document
-  sits in decides what it is and which identity pattern it answers to, so
-  `spec/clauses/UZ-V-001.md` is a clause. Single-kind corpora have no kinds.
-- **modality** — a clause's strength, one of `MUST`, `MUST_NOT`, `SHOULD`,
-  `SHOULD_NOT`, `MAY`. `query --binding` prints it beside the identifier
-  wherever the configuration declares it, because a set holding both a
-  permission and a prohibition cannot be read without it.
-- **as-of** — where `docdag.yaml` declares a `period:`, a document is in force
-  between the two days it writes, so what binds is an answer about a day.
-  `--as-of YYYY-MM-DD` asks about another one; `--at <rev>` reads the documents
-  from a revision instead of the working tree. Without a `period:` neither
-  changes anything.
-- **resolve** — walk the `supersedes` chain forward to the documents that stand
-  in for a ref today (stops at non-binding successors such as proposed ones and
-  reports them). A document nothing supersedes resolves to itself.
-- **typed edge** — a relation declared in frontmatter (`supersedes:`,
-  `depends-on:`) or derived from a field value (`status: superseded by 0003`).
-  Only typed edges carry invariants.
-- **reference layer** — plain body links (`[[0042]]`, `[0042](0042-x.md)`).
-  Never a constraint, and unvalidated unless `docdag.yaml` sets
-  `references.dangling`. Surfaced with `--include-refs`.
-- **finding** — one validation result, located at `<path>:<line>`, sometimes
-  carrying a one-line `fix:` suggestion.
-
-## Which command to run
-
-| Question | Command |
+| Question or task | Command |
 | --- | --- |
-| What am I working with here? | `docdag context <ref>` |
-| What is in force right now? | `docdag query --binding` |
-| What will be in force on a day? | `docdag query --binding --as-of 2027-04-01` |
-| What replaced this decision? | `docdag resolve <ref>` |
-| What rests on this decision? | `docdag query <ref> --ancestors` |
-| What does this decision rest on? | `docdag query <ref> --descendants` |
-| What did the standard say then? | `docdag query --binding --at v1.2.0` |
-| Is the corpus sound? | `docdag validate` |
-| Did my edit break anything? | `docdag validate --touching <path>` |
-| Why is a conflict not reported? | `docdag validate --show-suppressed` |
-| Are the rules themselves sound? | `docdag lint` |
-| Shape of the corpus | `docdag stats` |
-| Which frontmatter keys does it write? | `docdag stats --fields` |
-| What changed in the graph since a revision? | `docdag diff origin/main` |
+| Orient on corpus layout, fields, sections & health | `docdag prime` |
+| Read a record + resolved successor + neighbors + excerpt | `docdag context <ref>` (ID or managed file path) |
+| List what is in force right now (with titles) | `docdag query --binding --fields id,title,status` |
+| Filter binding records by a declared field | `docdag query --binding --where <key>=contains:<val> --fields id,title` |
+| What will be in force on a day / at a tag | `docdag query --binding --as-of YYYY-MM-DD` / `--at v1.2.0` |
+| What replaced this decision | `docdag resolve <ref> --fields id,title,status` |
+| What rests on / depends on this decision (impact) | `docdag query <ref> --ancestors --fields id,title,status` |
+| What does this decision rest on | `docdag query <ref> --descendants --fields id,title,status` |
+| Create or supersede a record | `docdag new "<title>" [--supersedes <ref>]` (or `--kind <kind> --id <id>`) |
+| Check corpus / check only your edit | `docdag validate` / `docdag validate --touching <path>` |
+| Why a conflict is suppressed | `docdag validate --show-suppressed` |
+| Graph & binding delta on a branch | `docdag diff origin/main` |
+| Lint `docdag.yaml` rules | `docdag lint` |
+| Corpus shape / frontmatter keys | `docdag stats` / `docdag stats --fields` |
 
-Start with `docdag context <ref>`. It prints the document, the successor it
-resolves to if it is superseded, and its neighbourhood over typed edges, each
-entry quoting the first paragraph of its Decision section. `--depth 2` widens
-the walk, `--all` includes documents that are not binding, `--budget N` caps the
-prose at roughly N tokens, `--format md` gives a document to paste.
+## Context & query usage
 
-Take the columns needed rather than the whole record:
-`docdag query --binding --fields id,title,status` prints tab-separated columns
-in the order asked for (list fields print comma-joined without spaces, unwritten
-keys print `-`). `--format json` answers with an array of objects carrying
-every configured projection and declared field (`null` when unwritten, array of
-strings for lists). Use `--where <key>=<op>:<value>` (repeatable, ANDed; ops
-`eq`, `not`, `contains`, `not_contains`, `subset_of`) on `docdag query` to
-filter results by status, declared fields, projections or `in_force`.
+`docdag context <ref>` accepts either an ID (`0001`, `ADR-1`, `UZ-V-001`) or a managed file path (`docs/adr/0001-use-postgres.md`, `spec/clauses/UZ-V-001.md`). It prints the record, any resolved successor, normative neighbors, suppressed conflicts, retractions, and typed-edge neighbors with automatic excerpt extraction (falling back across `Decision`, localized headings, and lead paragraphs for spec clauses). Useful flags: `--depth 2`, `--edge <type>`, `--all` (include non-binding nodes), `--budget 600`, `--section <heading>`, `--format md|json`.
 
-A finding an exception already answers is suppressed — computed, then left out
-of the report and out of the exit code. `--show-suppressed` prints it with the
-`excepts` edge that answers it on the same line, which is the reading to check
-before declaring a conflict unreported.
+`docdag query` accepts `--fields <cols>` for tab-separated columns (`-` for unwritten keys, comma-joined lists), `--format json` for all projections and declared fields, and repeatable `--where <key>=<op>:<value>` filters (ANDed; ops `eq`, `not`, `contains`, `not_contains`, `subset_of`).
 
 ## Before writing or changing a document
 
-1. `docdag query --binding` — do not contradict a binding document without
-   superseding it.
-2. `docdag context <ref>` for every document about to be touched.
-3. Write the document. A new one supersedes an old one by declaring
-   `supersedes: [<id>]` in its own frontmatter, and the superseded document's
-   `status:` becomes `superseded`. `docdag new "<title>" --supersedes <ref>`
-   does both. On a corpus with kinds, `docdag new --kind clause --id UZ-V-007
-   "<title>"` is the form: the kind chooses the directory, the template and the
-   identity rules, and `--id` is required wherever the kind declares a pattern.
-   What comes back is a stub whose required keys are commented placeholders, so
-   its first `validate` reports what only the author can fill in.
-4. `docdag validate --touching <path>` — and read the `fix:` line, which names
-   what to type.
+1. Run `docdag query --binding --fields id,title,status` — do not contradict a binding document without superseding it.
+2. Run `docdag context <ref>` for every document about to be touched or superseded.
+3. Write the record: `docdag new "<title>" --supersedes <ref>` sets `supersedes: [<id>]` in the new frontmatter and sets `status: superseded` on the target. On multi-kind corpora, pass `--kind <kind>` (and `--id <id>` when the kind declares a pattern), then fill commented placeholder keys.
+4. Run `docdag validate --touching <path>` and follow any `fix:` suggestion.
 
-Never edit a document's identifier, and never renumber. Identity is the file's
-digit run, or the pattern its kind declares, so renaming silently rewrites the
-graph.
+Never edit a document's identifier or renumber files: identity comes from the file's digit run or kind pattern, so renaming silently rewrites the graph.
+
+## Vocabulary
+
+- **ref**: any identifier (`339`, `0339`, `ADR-339`) or managed file path (`docs/adr/0339-use-postgres.md`); digit-run IDs zero-pad to configured width, while patterned kinds (`UZ-V-001`) match verbatim.
+- **binding**: `accepted` and in force with no `accepted` or `superseded` successor (`proposed` or `withdrawn` never un-binds an `accepted` record); `spec` projects `modality` alongside `id`.
+- **kind**: under `kinds:` in `docdag.yaml`, directory determines document kind and ID rules (`spec/clauses/UZ-V-001.md` is a `clause`).
+- **modality**: clause strength (`MUST`, `MUST_NOT`, `SHOULD`, `SHOULD_NOT`, `MAY`), printed by `query --binding` when declared.
+- **as-of**: under `period:`, `--as-of YYYY-MM-DD` evaluates active dates on that day; `--at <rev>` reads from git revision `<rev>`.
+- **resolve**: walks `supersedes` forward to standing successors (and reports non-binding pending successors).
+- **typed edge**: relation in frontmatter (`supersedes:`, `depends-on:`) or derived (`status: superseded by 0003`) that carries DAG invariants.
+- **reference layer**: plain body links (`[[0042]]`, `[0042](0042-x.md)`); unvalidated unless `references.dangling` is set, surfaced via `--include-refs`.
+- **retracts**: frontmatter list of `{from, edge, to}` mappings on an `accepted` (or `superseded`) record that removes an earlier typed edge without mutating closed history.
+- **finding**: `<path>:<line>: <SEVERITY> <rule> ...`, often with a `fix:` line; `--show-suppressed` prints conflicts defeated by an `excepts` edge.
 
 ## Reading a finding
 
@@ -118,24 +63,15 @@ docs/decisions/0001-serve-images.md:3: ERROR status_drift 0001: has inbound supe
   fix: set status: superseded in docs/decisions/0001-serve-images.md
 ```
 
-`<path>:<line>` is where to look, the rule name is what is wrong, and `fix:` is
-what to do about it. `validate` exits 1 when any finding is an error, 2 on a
-usage mistake and 3 when the configuration or the documents directory cannot be
-read (including when 0 managed documents match, or a configured directory case mismatches).
-Validation fails closed: unknown config fields fail closed with line numbers, and stray .md files
-are reported as `unmanaged_file`. Opt-in `sections:` config enforces required body headings
-(`missing_section`, `section_order`).
+`validate` exits `1` on errors, `2` on usage mistakes, and `3` when config/directories cannot be read (including 0 matched docs or directory case mismatches). Validation fails closed: unknown config keys fail with line numbers, stray `.md` files report `unmanaged_file`, and opt-in `sections:` checks `missing_section` / `section_order`.
+
+## Changing docdag.yaml
+
+`validate` never lints rules; run `docdag lint` after editing `docdag.yaml` (layer 1 reads config only), `docdag lint --corpus` to test rules against the vault, or `docdag lint --fixtures lint/` (`--all` runs all three; `docdag new --fixture <rule>` scaffolds `ruleid/` and `ok/` fixtures). `lint` exits `1` on errors, `2` on warnings alone, `3` on invalid config.
 
 ## Setup
 
-`docdag` must be on `PATH`:
-
-```sh
-go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.7.0
-```
-
-Add this to the project's `.claude/settings.json` so the commands run without a
-prompt each time:
+Install `docdag` (`go install github.com/Kaikei-e/DocDag/cmd/docdag@v0.7.0`) and allow it in `.claude/settings.json`:
 
 ```json
 {
@@ -145,36 +81,4 @@ prompt each time:
 }
 ```
 
-This plugin also installs a `SessionStart` hook that prints a one- or two-line
-`docdag validate` summary at session start when a corpus is present (or notices
-that `docdag` is not on `PATH`), and a `PostToolUse` hook that runs
-`docdag validate --touching <file> --if-managed` after every `Edit` or `Write`
-on a Markdown file, validating whenever the file sits in any configured or
-discovered document directory (including `preset: spec` and per-kind `dir:`
-directories) and exiting 0 silently otherwise. An edit to `docdag.yaml` is
-linted instead, with `docdag lint`: what breaks when the configuration changes
-is the rules, not the documents. The `PostToolUse` hook reads its payload with
-`jq`; without `jq` or `docdag` on `PATH` (or with an older `docdag` that lacks
-`--if-managed`) it emits a non-blocking notice that enforcement is OFF. On
-unexpected docdag exits, it fails closed with exit 2.
-
-## Changing docdag.yaml
-
-`docdag lint` answers about the rules rather than about the documents, and
-`validate` never runs it. It has three layers, and which one to run follows from
-what changed:
-
-- `docdag lint` alone — after any edit to `docdag.yaml`. It reads no documents,
-  costs milliseconds, and reports a rule that can never fire, one that fires on
-  every document, and one that says what another rule already says.
-- `docdag lint --corpus` — when the question is whether a rule is doing anything
-  here. It evaluates every rule and projection against the vault, so it reads
-  the whole corpus.
-- `docdag lint --fixtures lint/` — after adding or rewriting a rule. It runs each
-  rule's own `ruleid/` and `ok/` corpora. `--all` is the three together.
-
-Write a fixture with every rule added: `docdag new --fixture <rule>` generates
-both corpora from the rule's own condition, and a generated document carries a
-`<!-- TODO: … -->` wherever the condition is satisfiable in more ways than a
-generator should choose between. `lint` exits 1 on an error, 2 on warnings
-alone, 3 on a configuration that does not validate.
+This plugin supports both Claude Code and Antigravity (`agy`). In Claude Code it registers three hooks: `SessionStart` (`docdag prime`, falling back to `docdag validate` on older binaries), `PreToolUse` on `Read|Glob|Grep` (`docdag prime --if-present --hint <target>`, non-blocking advisory context), and `PostToolUse` on `Edit|Write` (`docdag validate --touching <file> --if-managed` for managed `.md` files and `docdag lint --config <file>` for `docdag.yaml`, failing closed with exit `2` on findings).

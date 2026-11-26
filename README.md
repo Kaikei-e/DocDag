@@ -237,6 +237,7 @@ graph LR
 | What does decision 12 build on? | `docdag query 0012 --edge depends-on` |
 | What would break if decision 12 changed? | `docdag query 0012 --ancestors --edge depends-on` |
 | Everything about decision 12, briefly | `docdag context 0012 --budget 400` |
+| Orient a coding agent on this corpus | `docdag prime` |
 | What does this branch change? | `docdag diff origin/main` |
 | What can this one edit break? | `docdag validate --touching docs/adr/0012-some-title.md` |
 | What would `new` write? | `docdag new "Some title" --supersedes 0012 --dry-run` |
@@ -460,7 +461,10 @@ An agent that reads forty ADR files to answer "what is in force?" spends its con
 thing. One command replaces the fan-out:
 
 ```sh
-# A record, what it resolves to and its neighbourhood, capped at 400 tokens
+# Orient on corpus health, dirs/kinds, declared fields and tailored commands
+docdag prime
+
+# A record (by ID or file path), what it resolves to and its neighbourhood, capped at 400 tokens
 docdag context 0012 --budget 400 --format md
 
 # The decisions in force that touch one service (needs affected_services declared under fields:)
@@ -470,17 +474,22 @@ docdag query --binding --where affected_services=contains:billing --fields id,ti
 docdag validate --touching docs/adr/0012-some-title.md
 ```
 
-This repository is also a Claude Code plugin. It installs a skill and a hook that validates a
-decision record as it is written:
+This repository ships as a dual-native plugin for both **Claude Code** and **Antigravity (`agy`)**.
+It installs a shared skill, a `SessionStart` hook running `docdag prime`, non-blocking
+read guidance on managed paths, and edit-time validation (`validate --touching` / `lint`):
 
 ```sh
+# Claude Code
 claude plugin marketplace add Kaikei-e/DocDag
 claude plugin install docdag@docdag
+
+# Antigravity CLI (agy)
+agy plugin install https://github.com/Kaikei-e/DocDag
 ```
 
-Inside a session the same two steps are `/plugin marketplace add Kaikei-e/DocDag` and then
+Inside a Claude Code session the two steps are `/plugin marketplace add Kaikei-e/DocDag` and then
 `/plugin install docdag@docdag`, entered as separate prompts. [docs/agents.md](docs/agents.md)
-covers the flags, the output shapes and what the hook requires.
+covers `prime`, `context`, `--fields`, `--where`, `--touching`, and both plugin integrations.
 
 ## Beyond ADRs: a specification as a graph
 
@@ -574,7 +583,7 @@ The field names and YAML tags of `config.Config` are the contract;
 ## Documentation
 
 - [docs/commands.md](docs/commands.md) — every command (`validate`, `lint`, `resolve`, `query`,
-  `context`, `export`, `stats`, `diff`, `new`), its flags, exit codes and output formats.
+  `context`, `prime`, `export`, `stats`, `diff`, `new`), its flags, exit codes and output formats.
 - [docs/configuration.md](docs/configuration.md) — the `docdag.yaml` reference and both presets in
   full.
 - [docs/checks.md](docs/checks.md) — one entry per finding: what triggers it and what clears it.

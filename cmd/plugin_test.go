@@ -70,22 +70,18 @@ func TestPluginMarketplaceListsThePluginAtTheRepositoryRoot(t *testing.T) {
 }
 
 func TestPluginHookRunsTheScriptAfterAnEditOrAWrite(t *testing.T) {
+	type hookGroup struct {
+		Matcher string `json:"matcher"`
+		Hooks   []struct {
+			Type    string `json:"type"`
+			Command string `json:"command"`
+		} `json:"hooks"`
+	}
 	hooks := decodeJSON[struct {
 		Hooks struct {
-			SessionStart []struct {
-				Matcher string `json:"matcher"`
-				Hooks   []struct {
-					Type    string `json:"type"`
-					Command string `json:"command"`
-				} `json:"hooks"`
-			} `json:"SessionStart"`
-			PostToolUse []struct {
-				Matcher string `json:"matcher"`
-				Hooks   []struct {
-					Type    string `json:"type"`
-					Command string `json:"command"`
-				} `json:"hooks"`
-			} `json:"PostToolUse"`
+			SessionStart []hookGroup `json:"SessionStart"`
+			PreToolUse   []hookGroup `json:"PreToolUse"`
+			PostToolUse  []hookGroup `json:"PostToolUse"`
 		} `json:"hooks"`
 	}](t, string(readPluginFile(t, "hooks", "hooks.json")))
 
@@ -106,6 +102,27 @@ func TestPluginHookRunsTheScriptAfterAnEditOrAWrite(t *testing.T) {
 	startScript := strings.ReplaceAll(strings.ReplaceAll(startCmd, `"${CLAUDE_PLUGIN_ROOT}"`, repoRoot(t)), "/", string(filepath.Separator))
 	if _, err := os.Stat(startScript); err != nil {
 		t.Errorf("SessionStart hook script: %v", err)
+	}
+
+	if len(hooks.Hooks.PreToolUse) != 1 {
+		t.Fatalf("PreToolUse = %+v, want one matcher group", hooks.Hooks.PreToolUse)
+	}
+	preGroup := hooks.Hooks.PreToolUse[0]
+	for _, tool := range []string{"Read", "Glob", "Grep"} {
+		if !strings.Contains(preGroup.Matcher, tool) {
+			t.Errorf("PreToolUse matcher = %q, want it to match %s", preGroup.Matcher, tool)
+		}
+	}
+	if len(preGroup.Hooks) != 1 || preGroup.Hooks[0].Type != "command" {
+		t.Fatalf("PreToolUse hooks = %+v, want one command hook", preGroup.Hooks)
+	}
+	preCmd := preGroup.Hooks[0].Command
+	if !strings.Contains(preCmd, "${CLAUDE_PLUGIN_ROOT}") {
+		t.Errorf("PreToolUse command = %q, want it rooted at the plugin directory", preCmd)
+	}
+	preScript := strings.ReplaceAll(strings.ReplaceAll(preCmd, `"${CLAUDE_PLUGIN_ROOT}"`, repoRoot(t)), "/", string(filepath.Separator))
+	if _, err := os.Stat(preScript); err != nil {
+		t.Errorf("PreToolUse hook script: %v", err)
 	}
 
 	if len(hooks.Hooks.PostToolUse) != 1 {
@@ -459,7 +476,7 @@ func TestPluginSessionStartHookBehaviours(t *testing.T) {
 		return append(os.Environ(), "CLAUDE_PROJECT_DIR="+project, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	}
 
-	t.Run("passing corpus prints one summary line", func(t *testing.T) {
+	t.Run("passing corpus prints prime brief starting with validate OK", func(t *testing.T) {
 		project := writeDocs(t, map[string]string{
 			"docs/adr/0001-first.md": "---\ntitle: First\nstatus: accepted\ndate: 2025-01-01\n---\n\n# First\n",
 		})
@@ -470,12 +487,18 @@ func TestPluginSessionStartHookBehaviours(t *testing.T) {
 		if err != nil {
 			t.Fatalf("hook failed: %v", err)
 		}
-		assertLines(t, "session-start passing", lines(string(out)), []string{
-			"docdag validate: OK: 1 docs, 0 typed edges, no cycles",
-		})
+		got := lines(string(out))
+		if len(got) < 3 || got[0] != "docdag validate: OK: 1 docs, 0 typed edges, no cycles" {
+			t.Fatalf("stdout lines = %q, want prime brief starting with OK summary", got)
+		}
+		for _, want := range []string{"docdag context", "docdag query --binding --fields id,title,status"} {
+			if !strings.Contains(string(out), want) {
+				t.Errorf("stdout = %q, want %q", out, want)
+			}
+		}
 	})
 
-	t.Run("failing corpus prints summary and follow-up line and exits 0", func(t *testing.T) {
+	t.Run("failing corpus prints FAILED, follow-up, and prime brief and exits 0", func(t *testing.T) {
 		project := writeDocs(t, map[string]string{
 			"docs/adr/0001-first.md":  "---\ntitle: First\nstatus: accepted\ndate: 2025-01-01\n---\n\n# First\n",
 			"docs/adr/0002-second.md": "---\ntitle: Second\nstatus: accepted\nsupersedes:\n  - 0001\ndate: 2025-01-02\n---\n\n# Second\n",
@@ -487,9 +510,36 @@ func TestPluginSessionStartHookBehaviours(t *testing.T) {
 		if err != nil {
 			t.Fatalf("hook failed: %v", err)
 		}
-		assertLines(t, "session-start failing", lines(string(out)), []string{
-			"docdag validate: FAILED: 1 error",
-			"run docdag validate to see the findings",
+		got := lines(string(out))
+		if len(got) < 3 || got[0] != "docdag validate: FAILED: 1 error" || got[1] != "run docdag validate to see the findings" {
+			t.Fatalf("stdout lines = %q, want FAILED header + follow-up + prime brief", got)
+		}
+		if !strings.Contains(string(out), "docdag context") {
+			t.Errorf("stdout = %q, want docdag context guidance", out)
+		}
+	})
+
+	t.Run("older docdag without prime falls back to validate summary", func(t *testing.T) {
+		project := writeDocs(t, map[string]string{
+			"docs/adr/0001-first.md": "---\ntitle: First\nstatus: accepted\ndate: 2025-01-01\n---\n\n# First\n",
+		})
+		oldBin := filepath.Join(t.TempDir(), "bin")
+		if err := os.MkdirAll(oldBin, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		stub := "#!/bin/sh\ncase \"$1\" in\n  prime) echo 'Error: unknown command \"prime\" for \"docdag\"' >&2; exit 2 ;;\n  validate) echo 'OK: 1 docs, 0 typed edges, no cycles'; exit 0 ;;\nesac\nexit 0\n"
+		if err := os.WriteFile(filepath.Join(oldBin, "docdag"), []byte(stub), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command("sh", script)
+		cmd.Dir = project
+		cmd.Env = append(os.Environ(), "CLAUDE_PROJECT_DIR="+project, "PATH="+oldBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("hook failed: %v", err)
+		}
+		assertLines(t, "fallback validate", lines(string(out)), []string{
+			"docdag validate: OK: 1 docs, 0 typed edges, no cycles",
 		})
 	})
 
@@ -734,6 +784,242 @@ edges:
 		}
 		if !strings.Contains(stderr, "ERROR dangling_ref") {
 			t.Errorf("stderr = %q, want dangling_ref for path with spaces", stderr)
+		}
+	})
+}
+
+func TestPluginPreReadHookAdvisesWithoutBlocking(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the hook is a POSIX shell script")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("the hook reads its payload with jq")
+	}
+	script := filepath.Join(repoRoot(t), "scripts", "docdag-pre-read.sh")
+	if info, err := os.Stat(script); err != nil {
+		t.Fatalf("hook script: %v", err)
+	} else if info.Mode().Perm()&0o100 == 0 {
+		t.Errorf("hook script mode = %v, want it executable", info.Mode().Perm())
+	}
+
+	bin := buildTestDocdag(t)
+	project := writeDocs(t, map[string]string{
+		"docs/adr/0001-first.md": "---\ntitle: First\nstatus: accepted\ndate: 2025-01-01\n---\n\n# First\n",
+		"docs/adr/README.md":     "# ADRs\n",
+		"README.md":              "# Root\n",
+	})
+	env := append(os.Environ(), "CLAUDE_PROJECT_DIR="+project, "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	runPre := func(t *testing.T, payload string) string {
+		t.Helper()
+		cmd := exec.Command("sh", script)
+		cmd.Stdin = strings.NewReader(payload)
+		cmd.Dir = project
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("hook failed on %s: %v (output=%q)", payload, err, out)
+		}
+		return string(out)
+	}
+
+	t.Run("managed Read emits non-blocking additionalContext without permissionDecision", func(t *testing.T) {
+		doc := filepath.Join(project, "docs", "adr", "0001-first.md")
+		out := runPre(t, `{"tool_name":"Read","tool_input":{"file_path":"`+doc+`"}}`)
+		if strings.Contains(out, "permissionDecision") {
+			t.Errorf("output = %q, must omit permissionDecision", out)
+		}
+		resp := decodeJSON[struct {
+			HookSpecificOutput struct {
+				HookEventName     string `json:"hookEventName"`
+				AdditionalContext string `json:"additionalContext"`
+			} `json:"hookSpecificOutput"`
+		}](t, out)
+		if resp.HookSpecificOutput.HookEventName != "PreToolUse" {
+			t.Errorf("hookEventName = %q, want PreToolUse", resp.HookSpecificOutput.HookEventName)
+		}
+		if !strings.Contains(resp.HookSpecificOutput.AdditionalContext, "docdag context") {
+			t.Errorf("additionalContext = %q, want docdag context tip", resp.HookSpecificOutput.AdditionalContext)
+		}
+	})
+
+	t.Run("managed Glob emits additionalContext", func(t *testing.T) {
+		out := runPre(t, `{"tool_name":"Glob","tool_input":{"path":"docs/adr","pattern":"*.md"}}`)
+		if !strings.Contains(out, "docdag query --binding") {
+			t.Errorf("output = %q, want docdag query --binding tip", out)
+		}
+	})
+
+	t.Run("unrelated or exempt paths stay silent", func(t *testing.T) {
+		for _, payload := range []string{
+			`{"tool_name":"Read","tool_input":{"file_path":"` + filepath.Join(project, "README.md") + `"}}`,
+			`{"tool_name":"Read","tool_input":{"file_path":"` + filepath.Join(project, "docs", "adr", "README.md") + `"}}`,
+			`{"tool_name":"Grep","tool_input":{"pattern":"foo"}}`,
+		} {
+			if out := runPre(t, payload); out != "" {
+				t.Errorf("payload %s produced %q, want silence", payload, out)
+			}
+		}
+	})
+}
+
+func TestAntigravityPluginManifestHooksAndRules(t *testing.T) {
+	claudeManifest := decodeJSON[struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}](t, string(readPluginFile(t, ".claude-plugin", "plugin.json")))
+
+	agyManifest := decodeJSON[struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Version     string `json:"version"`
+	}](t, string(readPluginFile(t, ".antigravity-plugin", "plugin.json")))
+
+	if agyManifest.Name != claudeManifest.Name || agyManifest.Version != claudeManifest.Version {
+		t.Errorf("agy manifest = %+v, want name=%q version=%q matching Claude plugin", agyManifest, claudeManifest.Name, claudeManifest.Version)
+	}
+	if agyManifest.Description == "" {
+		t.Error("agy manifest description is empty")
+	}
+
+	rules := string(readPluginFile(t, "rules", "AGENTS.md"))
+	for _, want := range []string{"docdag prime", "docdag context", "docdag query --binding", "docdag validate --touching"} {
+		if !strings.Contains(rules, want) {
+			t.Errorf("rules/AGENTS.md does not mention %q", want)
+		}
+	}
+
+	agyHooks := decodeJSON[map[string]struct {
+		SessionStart []struct {
+			Type    string `json:"type"`
+			Command string `json:"command"`
+		} `json:"SessionStart"`
+		PostToolUse []struct {
+			Matcher string `json:"matcher"`
+			Hooks   []struct {
+				Type    string `json:"type"`
+				Command string `json:"command"`
+			} `json:"hooks"`
+		} `json:"PostToolUse"`
+		PostInvocation []struct {
+			Type    string `json:"type"`
+			Command string `json:"command"`
+		} `json:"PostInvocation"`
+	}](t, string(readPluginFile(t, "hooks.json")))
+
+	hook, ok := agyHooks["docdag"]
+	if !ok {
+		t.Fatalf("hooks.json missing top-level \"docdag\" entry: %+v", agyHooks)
+	}
+	if len(hook.SessionStart) != 1 || len(hook.PostToolUse) != 2 || len(hook.PostInvocation) != 1 {
+		t.Fatalf("unexpected agy hook counts: %+v", hook)
+	}
+	for _, rel := range []string{
+		hook.SessionStart[0].Command,
+		hook.PostToolUse[0].Hooks[0].Command,
+		hook.PostToolUse[1].Hooks[0].Command,
+		hook.PostInvocation[0].Command,
+	} {
+		path := filepath.Join(repoRoot(t), filepath.FromSlash(strings.TrimPrefix(rel, "./")))
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Errorf("hook command %q: %v", rel, err)
+			continue
+		}
+		if runtime.GOOS != "windows" && info.Mode().Perm()&0o100 == 0 {
+			t.Errorf("hook script %s is not executable", path)
+		}
+	}
+}
+
+func TestAntigravityHooksRoundTrip(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the hook is a POSIX shell script")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("the hooks read payloads with jq")
+	}
+
+	bin := buildTestDocdag(t)
+	startScript := filepath.Join(repoRoot(t), "scripts", "agy-session-start.sh")
+	postToolScript := filepath.Join(repoRoot(t), "scripts", "agy-post-tool.sh")
+	postInvScript := filepath.Join(repoRoot(t), "scripts", "agy-post-invocation.sh")
+	stateDir := t.TempDir()
+
+	project := writeDocs(t, map[string]string{
+		"docs/adr/0001-first.md": "---\ntitle: First\nstatus: accepted\ndate: 2025-01-01\n---\n\n# First\n",
+		"docs/adr/0002-bad.md":   "---\ntitle: Bad\nstatus: accepted\nsupersedes:\n  - 0099\ndate: 2025-01-02\n---\n\n# Bad\n",
+	})
+	env := append(os.Environ(),
+		"PLUGIN_DATA="+stateDir,
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+	)
+
+	runAgy := func(t *testing.T, script, payload string) string {
+		t.Helper()
+		cmd := exec.Command("sh", script)
+		cmd.Stdin = strings.NewReader(payload)
+		cmd.Dir = repoRoot(t)
+		cmd.Env = env
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("%s failed: %v (output=%q)", filepath.Base(script), err, out)
+		}
+		return string(out)
+	}
+
+	type injectResp struct {
+		InjectSteps []struct {
+			SystemMessage struct {
+				SystemMessage string `json:"systemMessage"`
+			} `json:"systemMessage"`
+		} `json:"injectSteps"`
+	}
+
+	t.Run("SessionStart injects prime brief as systemMessage", func(t *testing.T) {
+		out := runAgy(t, startScript, `{"cwd":"`+project+`","workspacePaths":["`+project+`"]}`)
+		resp := decodeJSON[injectResp](t, out)
+		if len(resp.InjectSteps) != 1 {
+			t.Fatalf("injectSteps = %+v, want 1", resp.InjectSteps)
+		}
+		msg := resp.InjectSteps[0].SystemMessage.SystemMessage
+		if !strings.Contains(msg, "docdag validate: FAILED:") || !strings.Contains(msg, "docdag context") {
+			t.Errorf("systemMessage = %q, want prime brief", msg)
+		}
+	})
+
+	t.Run("PostToolUse queues validation findings and PostInvocation drains once", func(t *testing.T) {
+		bad := filepath.Join(project, "docs", "adr", "0002-bad.md")
+		toolOut := strings.TrimSpace(runAgy(t, postToolScript,
+			`{"conversationId":"conv-edit-1","cwd":"`+project+`","toolCall":{"name":"edit_file","args":{"Path":"`+bad+`"}}}`))
+		if toolOut != "{}" {
+			t.Errorf("PostToolUse stdout = %q, want {}", toolOut)
+		}
+		invOut := runAgy(t, postInvScript, `{"conversationId":"conv-edit-1"}`)
+		resp := decodeJSON[injectResp](t, invOut)
+		if len(resp.InjectSteps) != 1 || !strings.Contains(resp.InjectSteps[0].SystemMessage.SystemMessage, "ERROR dangling_ref") {
+			t.Fatalf("PostInvocation = %q, want dangling_ref systemMessage", invOut)
+		}
+		if again := strings.TrimSpace(runAgy(t, postInvScript, `{"conversationId":"conv-edit-1"}`)); again != "{}" {
+			t.Errorf("second PostInvocation = %q, want {}", again)
+		}
+	})
+
+	t.Run("PostToolUse read hint fires once per conversation", func(t *testing.T) {
+		first := filepath.Join(project, "docs", "adr", "0001-first.md")
+		payload := `{"conversationId":"conv-read-1","cwd":"` + project + `","toolCall":{"name":"read_file","args":{"Path":"` + first + `"}}}`
+		if out := strings.TrimSpace(runAgy(t, postToolScript, payload)); out != "{}" {
+			t.Errorf("PostToolUse stdout = %q, want {}", out)
+		}
+		invOut := runAgy(t, postInvScript, `{"conversationId":"conv-read-1"}`)
+		resp := decodeJSON[injectResp](t, invOut)
+		if len(resp.InjectSteps) != 1 || !strings.Contains(resp.InjectSteps[0].SystemMessage.SystemMessage, "docdag context") {
+			t.Fatalf("first read PostInvocation = %q, want docdag context hint", invOut)
+		}
+		// Second read in the same conversation must be deduplicated.
+		_ = runAgy(t, postToolScript, payload)
+		if again := strings.TrimSpace(runAgy(t, postInvScript, `{"conversationId":"conv-read-1"}`)); again != "{}" {
+			t.Errorf("second read PostInvocation = %q, want {} (deduplicated)", again)
 		}
 	})
 }

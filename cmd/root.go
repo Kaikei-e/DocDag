@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -220,13 +222,48 @@ func requireSupersedes(cfg config.Config) error {
 // normalize maps a raw reference onto a node identifier that exists.
 func normalize(g *model.Graph, cfg config.Config, ref string) (model.ID, error) {
 	id, ok := cfg.Normalizer().Normalize(ref)
-	if !ok {
-		return "", domainErr("unrecognized reference %q", ref)
+	if ok {
+		if _, exists := g.Node(id); exists {
+			return id, nil
+		}
 	}
-	if _, ok := g.Node(id); !ok {
-		return "", domainErr("unknown document %s", id)
+	if byPath, matched := resolveByPath(g, ref); matched {
+		return byPath, nil
 	}
-	return id, nil
+	if ok {
+		return "", domainErr("unknown document %s (run 'docdag query --binding --fields id,title' to list active documents)", id)
+	}
+	return "", domainErr("unrecognized reference %q (pass a document ID or managed file path; run 'docdag query --binding --fields id,title' to list active documents)", ref)
+}
+
+func resolveByPath(g *model.Graph, ref string) (model.ID, bool) {
+	if strings.TrimSpace(ref) == "" {
+		return "", false
+	}
+	cleanRef := filepath.ToSlash(filepath.Clean(ref))
+	absRef := normalizeDir(ref)
+	for _, id := range slices.Sorted(maps.Keys(g.Nodes)) {
+		p := g.Nodes[id].Path
+		if p == "" {
+			continue
+		}
+		if filepath.ToSlash(filepath.Clean(p)) == cleanRef || normalizeDir(p) == absRef {
+			return id, true
+		}
+	}
+	return "", false
+}
+
+func unknownEdgeErr(cfg config.Config, edge string) error {
+	names := make([]string, 0, len(cfg.Edges))
+	for _, spec := range cfg.Edges {
+		names = append(names, spec.Name)
+	}
+	slices.Sort(names)
+	if len(names) == 0 {
+		return usageErr("unknown edge type %q (no edges configured)", edge)
+	}
+	return usageErr("unknown edge type %q (allowed: %s)", edge, strings.Join(names, ", "))
 }
 
 // version is stamped by the release build via -ldflags "-X ...cmd.version=".
@@ -235,9 +272,24 @@ var version = "dev"
 // newRootCmd builds a fresh command tree, so every test gets an isolated one.
 func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:           "docdag",
-		Short:         "Extract, validate and query a typed graph of Markdown documents",
-		Long:          "docdag builds a typed directed graph from Markdown documents with YAML\nfrontmatter, enforces DAG invariants on it and answers graph queries.",
+		Use:   "docdag",
+		Short: "Extract, validate and query a typed graph of Markdown documents",
+		Long: "docdag builds a typed directed graph from Markdown documents with YAML\n" +
+			"frontmatter, enforces DAG invariants on it and answers graph queries.\n\n" +
+			"Typical workflow:\n" +
+			"  1. Orient on corpus & health:  docdag prime\n" +
+			"  2. List active records:        docdag query --binding --fields id,title,status\n" +
+			"  3. Read a record + neighbours: docdag context <ref>\n" +
+			"  4. Follow supersession chains: docdag resolve <ref>\n" +
+			"  5. Validate edited files:      docdag validate --touching <file>\n" +
+			"  6. Create or compare records:  docdag new <title> / docdag diff <rev>",
+		Example: "  docdag prime\n" +
+			"  docdag query --binding --fields id,title,status\n" +
+			"  docdag context 0001\n" +
+			"  docdag resolve 0002\n" +
+			"  docdag validate --touching docs/adr/0001.md\n" +
+			"  docdag new \"Use connection pooling\" --supersedes 0001\n" +
+			"  docdag diff main",
 		Version:       version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -254,6 +306,7 @@ func newRootCmd() *cobra.Command {
 		newResolveCmd(),
 		newQueryCmd(),
 		newContextCmd(),
+		newPrimeCmd(),
 		newExportCmd(),
 		newStatsCmd(),
 		newDiffCmd(),

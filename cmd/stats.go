@@ -14,7 +14,13 @@ func newStatsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "stats",
 		Short: "Report degree-based statistics for the document corpus",
-		Args:  cobra.NoArgs,
+		Long: "Summarize document counts, binding counts, degree distributions, and\n" +
+			"supersedes chain depths, or frontmatter field usage when --fields is set.",
+		Example: "  docdag stats\n" +
+			"  docdag stats --format json\n" +
+			"  docdag stats --fields\n" +
+			"  docdag stats --as-of 2026-10-01",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			format, err := outputFormat(cmd, formatText, formatJSON)
 			if err != nil {

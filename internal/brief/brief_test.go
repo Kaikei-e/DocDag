@@ -1,10 +1,14 @@
 package brief
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/Kaikei-e/DocDag/config"
+	"github.com/Kaikei-e/DocDag/internal/graph"
+	"github.com/Kaikei-e/DocDag/internal/parse"
 	"github.com/Kaikei-e/DocDag/model"
 )
 
@@ -75,6 +79,42 @@ func TestSectionTakesTheFirstParagraphUnderTheHeading(t *testing.T) {
 			section: "Decision",
 			want:    "",
 		},
+		{
+			name:    "a child heading followed by a fenced code block returns the child heading text",
+			body:    "## 決定\n\n### D1. 辺仕様に target を追加する\n\n```yaml\nedges:\n  - name: enforces\n```\n\n- prose after block\n",
+			section: "決定",
+			want:    "D1. 辺仕様に target を追加する",
+		},
+		{
+			name:    "a child heading followed by prose returns heading and first paragraph",
+			body:    "## 決定\n\n### D1. 辺仕様に target を追加する\n\n対象文書に対する条件を宣言する。\n次の行。\n\n二段落目。\n",
+			section: "決定",
+			want:    "D1. 辺仕様に target を追加する\n対象文書に対する条件を宣言する。\n次の行。",
+		},
+		{
+			name:    "a child heading followed by another heading returns only the child heading",
+			body:    "## 決定\n\n### D1. First ###\n\n### D2. Second\n\nBody.\n",
+			section: "決定",
+			want:    "D1. First",
+		},
+		{
+			name:    "a child heading followed by tilde fence stops before fence and ignores headings inside fence",
+			body:    "## 決定\n\n### D1. Tilde fence\n\n~~~md\n# fake\n~~~\n",
+			section: "決定",
+			want:    "D1. Tilde fence",
+		},
+		{
+			name:    "an H3 section returns H4 child heading and prose",
+			body:    "### Decision\n\n#### Option A\n\nUse Option A.\n",
+			section: "Decision",
+			want:    "Option A\nUse Option A.",
+		},
+		{
+			name:    "an H3 section stops empty before a sibling H3 or parent H2",
+			body:    "### Decision\n\n## Consequences\n\nLater.\n",
+			section: "Decision",
+			want:    "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -82,6 +122,104 @@ func TestSectionTakesTheFirstParagraphUnderTheHeading(t *testing.T) {
 				t.Errorf("Section = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDefaultExcerptFallbacks(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "English MADR prefers Decision Outcome",
+			body: "# Title\n\n## Decision Drivers\n\n- cost\n\n## Decision Outcome\n\nChosen option: S3.\n",
+			want: "Chosen option: S3.",
+		},
+		{
+			name: "Japanese decision section with child heading and code block",
+			body: "# 0002\n\n## ステータス\n\nAccepted\n\n## コンテキスト\n\n背景。\n\n## 決定\n\n### D1. 辺仕様に target を追加する\n\n```yaml\nedges: []\n```\n",
+			want: "D1. 辺仕様に target を追加する",
+		},
+		{
+			name: "Japanese summary fallback headings",
+			body: "# 0001\n\n## 結論\n\n結論の段落。\n",
+			want: "結論の段落。",
+		},
+		{
+			name: "English Summary heading fallback",
+			body: "# Note\n\n## Summary\n\nShort summary.\n",
+			want: "Short summary.",
+		},
+		{
+			name: "spec clause without H2 returns lead paragraph",
+			body: "# Every claim carries evidence\n\nA report states what it measured and how.\n\nSecond paragraph.\n",
+			want: "A report states what it measured and how.",
+		},
+		{
+			name: "lead paragraph skips fenced code blocks",
+			body: "# Title\n\n```yaml\n# fake heading\nkey: val\n```\n\nActual lead paragraph.\n",
+			want: "Actual lead paragraph.",
+		},
+		{
+			name: "custom H2 fallback skips metadata headings",
+			body: "# Title\n\n## Status\n\nAccepted\n\n## Date\n\n2026-01-01\n\n## ステータス\n\nAccepted\n\n## Rationale\n\nBecause latency matters.\n",
+			want: "Because latency matters.",
+		},
+		{
+			name: "lead paragraph before metadata-only headings",
+			body: "# Title\n\nIntro summary.\n\n## Status\n\nAccepted\n",
+			want: "Intro summary.",
+		},
+		{
+			name: "only metadata headings returns empty instead of status value",
+			body: "# Title\n\n## Status\n\nAccepted\n\n## Metadata\n\nOwner: team\n",
+			want: "",
+		},
+		{
+			name: "empty body with only title returns empty",
+			body: "# Title\n",
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := DefaultExcerpt(tt.body); got != tt.want {
+				t.Errorf("DefaultExcerpt = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildExplicitSectionIsStrictWhileEmptyUsesDefaultExcerpt(t *testing.T) {
+	dir := t.TempDir()
+	docPath := filepath.Join(dir, "0001-japanese.md")
+	content := "---\ntitle: Japanese decision\nstatus: accepted\ndate: 2026-09-01\n---\n\n# 0001\n\n## 決定\n\n### D1. 決定の内容\n\n```yaml\nkey: value\n```\n"
+	if err := os.WriteFile(docPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write doc: %v", err)
+	}
+	cfg := config.ADRPreset()
+	cfg.Dir = dir
+	docs, err := parse.Dir(dir, cfg)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	g := graph.Build(docs, cfg)
+
+	fallback, err := Build(g, cfg, "0001", Options{Depth: 1})
+	if err != nil {
+		t.Fatalf("Build default: %v", err)
+	}
+	if fallback.Ref.Excerpt != "D1. 決定の内容" {
+		t.Errorf("default excerpt = %q, want %q", fallback.Ref.Excerpt, "D1. 決定の内容")
+	}
+
+	strict, err := Build(g, cfg, "0001", Options{Depth: 1, Section: "Nonexistent"})
+	if err != nil {
+		t.Fatalf("Build strict: %v", err)
+	}
+	if strict.Ref.Excerpt != "" {
+		t.Errorf("strict excerpt = %q, want empty when explicit section is absent", strict.Ref.Excerpt)
 	}
 }
 
